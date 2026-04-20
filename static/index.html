@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>OpenTeddy Dashboard</title>
+  <style>
+    :root {
+      --bg: #0f1117;
+      --surface: #1a1d27;
+      --border: #2d3148;
+      --accent: #7c6af7;
+      --accent-dim: #4b3fc4;
+      --text: #e8eaf6;
+      --muted: #8888aa;
+      --success: #4caf8a;
+      --warning: #f0b429;
+      --error: #f56565;
+      --escalated: #a78bfa;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      min-height: 100vh;
+    }
+    header {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 1rem 2rem;
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+    }
+    header h1 { font-size: 1.5rem; font-weight: 700; }
+    header span.badge {
+      background: var(--accent-dim);
+      color: #fff;
+      border-radius: 999px;
+      padding: 0.15rem 0.65rem;
+      font-size: 0.72rem;
+      font-weight: 600;
+    }
+    .container { max-width: 960px; margin: 2rem auto; padding: 0 1rem; }
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.5rem;
+      margin-bottom: 1.5rem;
+    }
+    .card h2 { font-size: 1.1rem; margin-bottom: 1rem; color: var(--accent); }
+    textarea, input[type=text], input[type=number] {
+      width: 100%;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text);
+      padding: 0.7rem 1rem;
+      font-size: 0.95rem;
+      outline: none;
+      transition: border 0.2s;
+    }
+    textarea:focus, input:focus { border-color: var(--accent); }
+    textarea { resize: vertical; min-height: 80px; }
+    .row { display: flex; gap: 1rem; align-items: flex-end; flex-wrap: wrap; }
+    .field { flex: 1; min-width: 180px; }
+    .field label { display: block; font-size: 0.8rem; color: var(--muted); margin-bottom: 0.4rem; }
+    button {
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      padding: 0.65rem 1.4rem;
+      font-size: 0.95rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s;
+      white-space: nowrap;
+    }
+    button:hover { background: var(--accent-dim); }
+    button:disabled { opacity: 0.45; cursor: not-allowed; }
+    .status-badge {
+      display: inline-block;
+      border-radius: 999px;
+      padding: 0.15rem 0.6rem;
+      font-size: 0.75rem;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+    .status-pending   { background: #2d3148; color: var(--muted); }
+    .status-running   { background: #1e3a5f; color: #60a5fa; }
+    .status-completed { background: #1a3d2e; color: var(--success); }
+    .status-failed    { background: #3d1a1a; color: var(--error); }
+    .status-escalated { background: #2d1a4d; color: var(--escalated); }
+    .result-box {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1rem;
+      margin-top: 0.75rem;
+      font-size: 0.9rem;
+      white-space: pre-wrap;
+      word-break: break-word;
+      max-height: 300px;
+      overflow-y: auto;
+    }
+    .subtask-list { list-style: none; }
+    .subtask-list li {
+      border-bottom: 1px solid var(--border);
+      padding: 0.6rem 0;
+      display: flex;
+      align-items: flex-start;
+      gap: 0.75rem;
+      font-size: 0.88rem;
+    }
+    .subtask-list li:last-child { border-bottom: none; }
+    .subtask-desc { flex: 1; color: var(--text); }
+    .subtask-conf { color: var(--muted); font-size: 0.78rem; }
+    .skills-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+      gap: 0.75rem;
+    }
+    .skill-card {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.85rem;
+    }
+    .skill-card .skill-name { font-weight: 700; font-size: 0.9rem; margin-bottom: 0.3rem; }
+    .skill-card .skill-desc { font-size: 0.78rem; color: var(--muted); }
+    .skill-card .skill-stats { margin-top: 0.5rem; font-size: 0.75rem; color: var(--success); }
+    #toast {
+      position: fixed;
+      bottom: 1.5rem;
+      right: 1.5rem;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 0.75rem 1.25rem;
+      font-size: 0.9rem;
+      opacity: 0;
+      transition: opacity 0.3s;
+      pointer-events: none;
+    }
+    #toast.show { opacity: 1; }
+    .loader {
+      display: inline-block;
+      width: 16px; height: 16px;
+      border: 2px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+      vertical-align: middle;
+      margin-right: 6px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>🐻 OpenTeddy</h1>
+    <span class="badge">Multi-Agent System</span>
+  </header>
+
+  <div class="container">
+    <!-- Run Task -->
+    <div class="card">
+      <h2>▶ Run a Task</h2>
+      <div class="field" style="margin-bottom:0.85rem">
+        <label>Goal (natural language)</label>
+        <textarea id="goal" placeholder="e.g. Research the latest news on quantum computing and summarise the top 3 breakthroughs"></textarea>
+      </div>
+      <div class="row">
+        <div class="field">
+          <label>Priority (1–10)</label>
+          <input type="number" id="priority" value="5" min="1" max="10" />
+        </div>
+        <button id="runBtn" onclick="runTask()">Run Task</button>
+      </div>
+    </div>
+
+    <!-- Result -->
+    <div class="card" id="resultCard" style="display:none">
+      <h2>📋 Result</h2>
+      <div style="display:flex;gap:0.75rem;align-items:center;margin-bottom:0.5rem">
+        <span id="resultStatus" class="status-badge"></span>
+        <code style="font-size:0.78rem;color:var(--muted)" id="resultTaskId"></code>
+      </div>
+      <div class="result-box" id="resultSummary"></div>
+      <div id="subtaskSection" style="margin-top:1rem;display:none">
+        <div style="font-size:0.85rem;color:var(--muted);margin-bottom:0.5rem">Sub-tasks</div>
+        <ul class="subtask-list" id="subtaskList"></ul>
+      </div>
+    </div>
+
+    <!-- Skills -->
+    <div class="card">
+      <h2>⚙️ Skills Library</h2>
+      <div style="margin-bottom:1rem">
+        <button onclick="loadSkills()" style="background:transparent;border:1px solid var(--border);color:var(--text)">
+          Refresh Skills
+        </button>
+      </div>
+      <div class="skills-grid" id="skillsGrid">
+        <div style="color:var(--muted);font-size:0.88rem">No skills loaded yet — run a task to discover skills.</div>
+      </div>
+    </div>
+
+    <!-- Generate Skill -->
+    <div class="card">
+      <h2>🔧 Generate Skill Manually</h2>
+      <div class="row">
+        <div class="field">
+          <label>Skill name (snake_case)</label>
+          <input type="text" id="skillName" placeholder="e.g. web_search" />
+        </div>
+        <div class="field" style="flex:2">
+          <label>Description</label>
+          <input type="text" id="skillDesc" placeholder="Searches the web and returns a summary" />
+        </div>
+        <button onclick="generateSkill()">Generate</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast"></div>
+
+  <script>
+    const API = '';  // same origin
+
+    async function runTask() {
+      const goal = document.getElementById('goal').value.trim();
+      if (!goal) { toast('Please enter a goal.'); return; }
+      const priority = parseInt(document.getElementById('priority').value) || 5;
+
+      const btn = document.getElementById('runBtn');
+      btn.disabled = true;
+      btn.innerHTML = '<span class="loader"></span>Running…';
+
+      try {
+        const res = await fetch(`${API}/run`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ goal, priority, context: {} }),
+        });
+        const data = await res.json();
+        showResult(data);
+        // Fetch full status for subtasks
+        await loadTaskStatus(data.task_id);
+      } catch (e) {
+        toast('Error: ' + e.message, true);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Run Task';
+      }
+    }
+
+    function showResult(data) {
+      const card = document.getElementById('resultCard');
+      card.style.display = 'block';
+      document.getElementById('resultTaskId').textContent = data.task_id;
+      const statusEl = document.getElementById('resultStatus');
+      statusEl.textContent = data.status;
+      statusEl.className = 'status-badge status-' + data.status;
+      document.getElementById('resultSummary').textContent = data.message || '(processing…)';
+    }
+
+    async function loadTaskStatus(taskId) {
+      try {
+        const res = await fetch(`${API}/tasks/${taskId}`);
+        const data = await res.json();
+        const statusEl = document.getElementById('resultStatus');
+        statusEl.textContent = data.status;
+        statusEl.className = 'status-badge status-' + data.status;
+        if (data.summary) {
+          document.getElementById('resultSummary').textContent = data.summary;
+        }
+        if (data.subtasks && data.subtasks.length) {
+          const section = document.getElementById('subtaskSection');
+          section.style.display = 'block';
+          const list = document.getElementById('subtaskList');
+          list.innerHTML = data.subtasks.map(st => `
+            <li>
+              <span class="status-badge status-${st.status}" style="flex-shrink:0">${st.status}</span>
+              <span class="subtask-desc">${escHtml(st.description)}</span>
+              <span class="subtask-conf">${(st.confidence * 100).toFixed(0)}%</span>
+            </li>
+          `).join('');
+        }
+      } catch (e) { /* silently ignore status fetch errors */ }
+    }
+
+    async function loadSkills() {
+      try {
+        const res = await fetch(`${API}/skills`);
+        const data = await res.json();
+        const grid = document.getElementById('skillsGrid');
+        if (!data.skills || !data.skills.length) {
+          grid.innerHTML = '<div style="color:var(--muted);font-size:0.88rem">No skills yet.</div>';
+          return;
+        }
+        grid.innerHTML = data.skills.map(s => `
+          <div class="skill-card">
+            <div class="skill-name">${escHtml(s.name)}</div>
+            <div class="skill-desc">${escHtml(s.description)}</div>
+            <div class="skill-stats">✓ ${s.success_count}  ✗ ${s.failure_count}  · ${s.status}</div>
+          </div>
+        `).join('');
+      } catch (e) {
+        toast('Could not load skills: ' + e.message, true);
+      }
+    }
+
+    async function generateSkill() {
+      const name = document.getElementById('skillName').value.trim();
+      const desc = document.getElementById('skillDesc').value.trim();
+      if (!name || !desc) { toast('Skill name and description required.'); return; }
+      try {
+        const res = await fetch(`${API}/skills/generate?name=${encodeURIComponent(name)}&description=${encodeURIComponent(desc)}`, {
+          method: 'POST',
+        });
+        const data = await res.json();
+        toast(data.message || 'Skill generated!');
+        await loadSkills();
+      } catch (e) {
+        toast('Error: ' + e.message, true);
+      }
+    }
+
+    function toast(msg, isError = false) {
+      const el = document.getElementById('toast');
+      el.textContent = msg;
+      el.style.borderColor = isError ? 'var(--error)' : 'var(--border)';
+      el.classList.add('show');
+      setTimeout(() => el.classList.remove('show'), 3000);
+    }
+
+    function escHtml(s) {
+      return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    }
+
+    // Auto-load skills on page load
+    window.onload = loadSkills;
+  </script>
+</body>
+</html>
