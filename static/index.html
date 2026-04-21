@@ -17,6 +17,8 @@
       --warning: #f0b429;
       --error: #f56565;
       --escalated: #a78bfa;
+      --orange: #f97316;
+      --orange-dim: #c2510e;
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -81,6 +83,16 @@
     }
     button:hover { background: var(--accent-dim); }
     button:disabled { opacity: 0.45; cursor: not-allowed; }
+    .btn-approve {
+      background: #166534;
+      color: #bbf7d0;
+    }
+    .btn-approve:hover { background: #15803d; }
+    .btn-reject {
+      background: #7f1d1d;
+      color: #fecaca;
+    }
+    .btn-reject:hover { background: #991b1b; }
     .status-badge {
       display: inline-block;
       border-radius: 999px;
@@ -132,6 +144,8 @@
     .skill-card .skill-name { font-weight: 700; font-size: 0.9rem; margin-bottom: 0.3rem; }
     .skill-card .skill-desc { font-size: 0.78rem; color: var(--muted); }
     .skill-card .skill-stats { margin-top: 0.5rem; font-size: 0.75rem; color: var(--success); }
+
+    /* ── Toast ──────────────────────────────────────────────────────────── */
     #toast {
       position: fixed;
       bottom: 1.5rem;
@@ -144,8 +158,120 @@
       opacity: 0;
       transition: opacity 0.3s;
       pointer-events: none;
+      z-index: 900;
     }
     #toast.show { opacity: 1; }
+
+    /* ── Approval FAB (floating action button) ──────────────────────────── */
+    #approvalFab {
+      position: fixed;
+      bottom: 1.5rem;
+      right: 1.5rem;
+      background: var(--orange);
+      color: #fff;
+      border: none;
+      border-radius: 999px;
+      padding: 0.75rem 1.2rem;
+      font-size: 0.95rem;
+      font-weight: 700;
+      cursor: pointer;
+      display: none;
+      align-items: center;
+      gap: 0.5rem;
+      box-shadow: 0 4px 16px rgba(249,115,22,0.4);
+      z-index: 800;
+      transition: background 0.2s, transform 0.1s;
+    }
+    #approvalFab:hover { background: var(--orange-dim); transform: scale(1.04); }
+    #approvalFab .fab-badge {
+      background: #fff;
+      color: var(--orange);
+      border-radius: 999px;
+      font-size: 0.75rem;
+      font-weight: 800;
+      padding: 0.05rem 0.5rem;
+      min-width: 1.4rem;
+      text-align: center;
+    }
+
+    /* ── Approval Modal ─────────────────────────────────────────────────── */
+    #approvalOverlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.65);
+      z-index: 1000;
+      align-items: center;
+      justify-content: center;
+    }
+    #approvalOverlay.open { display: flex; }
+    #approvalModal {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 1.75rem;
+      width: min(680px, 92vw);
+      max-height: 80vh;
+      overflow-y: auto;
+    }
+    #approvalModal h3 {
+      font-size: 1.15rem;
+      color: var(--orange);
+      margin-bottom: 1rem;
+    }
+    .approval-item {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1rem;
+      margin-bottom: 0.85rem;
+    }
+    .approval-item .tool-name {
+      font-weight: 700;
+      font-size: 0.95rem;
+      color: var(--warning);
+      margin-bottom: 0.4rem;
+    }
+    .approval-item .tool-args {
+      font-family: 'Courier New', monospace;
+      font-size: 0.82rem;
+      color: var(--muted);
+      white-space: pre-wrap;
+      word-break: break-all;
+      margin-bottom: 0.75rem;
+      max-height: 140px;
+      overflow-y: auto;
+    }
+    .approval-item .approval-meta {
+      font-size: 0.76rem;
+      color: var(--muted);
+      margin-bottom: 0.75rem;
+    }
+    .approval-actions {
+      display: flex;
+      gap: 0.6rem;
+    }
+    .approval-actions button {
+      padding: 0.45rem 1rem;
+      font-size: 0.85rem;
+    }
+    .modal-close {
+      float: right;
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--muted);
+      padding: 0.35rem 0.85rem;
+      font-size: 0.82rem;
+      margin-bottom: 0.5rem;
+    }
+    .modal-close:hover { background: var(--border); }
+    .empty-approvals {
+      color: var(--muted);
+      font-size: 0.9rem;
+      text-align: center;
+      padding: 1.5rem 0;
+    }
+
     .loader {
       display: inline-block;
       width: 16px; height: 16px;
@@ -157,6 +283,23 @@
       margin-right: 6px;
     }
     @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Tools panel ────────────────────────────────────────────────────── */
+    .tools-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+      gap: 0.65rem;
+    }
+    .tool-card {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.75rem;
+    }
+    .tool-card .tool-name { font-weight: 700; font-size: 0.88rem; margin-bottom: 0.25rem; }
+    .tool-card .tool-desc { font-size: 0.76rem; color: var(--muted); }
+    .risk-low  { color: var(--success); font-size: 0.7rem; font-weight: 700; margin-top: 0.3rem; }
+    .risk-high { color: var(--warning); font-size: 0.7rem; font-weight: 700; margin-top: 0.3rem; }
   </style>
 </head>
 <body>
@@ -224,12 +367,44 @@
         <button onclick="generateSkill()">Generate</button>
       </div>
     </div>
+
+    <!-- Tools Panel -->
+    <div class="card">
+      <h2>🛠 Registered Tools</h2>
+      <div style="margin-bottom:1rem">
+        <button onclick="loadTools()" style="background:transparent;border:1px solid var(--border);color:var(--text)">
+          Refresh Tools
+        </button>
+      </div>
+      <div class="tools-grid" id="toolsGrid">
+        <div style="color:var(--muted);font-size:0.88rem">Loading tools…</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Approval FAB -->
+  <button id="approvalFab" onclick="openApprovalModal()">
+    ⚠️ Approvals needed
+    <span class="fab-badge" id="approvalCount">0</span>
+  </button>
+
+  <!-- Approval Modal -->
+  <div id="approvalOverlay" onclick="maybeCloseModal(event)">
+    <div id="approvalModal">
+      <button class="modal-close" onclick="closeApprovalModal()">✕ Close</button>
+      <h3>⚠️ High-Risk Tool Approvals</h3>
+      <div id="approvalList">
+        <div class="empty-approvals">No pending approvals.</div>
+      </div>
+    </div>
   </div>
 
   <div id="toast"></div>
 
   <script>
-    const API = '';  // same origin
+    const API = '';
+
+    // ── Task execution ─────────────────────────────────────────────────────
 
     async function runTask() {
       const goal = document.getElementById('goal').value.trim();
@@ -248,7 +423,6 @@
         });
         const data = await res.json();
         showResult(data);
-        // Fetch full status for subtasks
         await loadTaskStatus(data.task_id);
       } catch (e) {
         toast('Error: ' + e.message, true);
@@ -290,8 +464,10 @@
             </li>
           `).join('');
         }
-      } catch (e) { /* silently ignore status fetch errors */ }
+      } catch (e) { /* silently ignore */ }
     }
+
+    // ── Skills ─────────────────────────────────────────────────────────────
 
     async function loadSkills() {
       try {
@@ -330,20 +506,153 @@
       }
     }
 
+    // ── Tools ──────────────────────────────────────────────────────────────
+
+    async function loadTools() {
+      try {
+        const res = await fetch(`${API}/tools`);
+        const data = await res.json();
+        const grid = document.getElementById('toolsGrid');
+        if (!data.tools || !data.tools.length) {
+          grid.innerHTML = '<div style="color:var(--muted);font-size:0.88rem">No tools registered.</div>';
+          return;
+        }
+        grid.innerHTML = data.tools.map(t => `
+          <div class="tool-card">
+            <div class="tool-name">${escHtml(t.name)}</div>
+            <div class="tool-desc">${escHtml(t.description)}</div>
+            <div class="risk-${t.risk_level}">${t.risk_level === 'high' ? '⚠️ HIGH RISK' : '✅ low risk'}</div>
+          </div>
+        `).join('');
+      } catch (e) {
+        toast('Could not load tools: ' + e.message, true);
+      }
+    }
+
+    // ── Approvals ──────────────────────────────────────────────────────────
+
+    let _approvalPollTimer = null;
+
+    async function pollApprovals() {
+      try {
+        const res = await fetch(`${API}/approvals`);
+        const data = await res.json();
+        const count = (data.approvals || []).length;
+        const fab = document.getElementById('approvalFab');
+        const badge = document.getElementById('approvalCount');
+        badge.textContent = count;
+        fab.style.display = count > 0 ? 'flex' : 'none';
+
+        // If modal is open, refresh its contents
+        if (document.getElementById('approvalOverlay').classList.contains('open')) {
+          renderApprovals(data.approvals || []);
+        }
+      } catch (e) { /* silently ignore poll errors */ }
+    }
+
+    function openApprovalModal() {
+      document.getElementById('approvalOverlay').classList.add('open');
+      refreshApprovals();
+    }
+
+    function closeApprovalModal() {
+      document.getElementById('approvalOverlay').classList.remove('open');
+    }
+
+    function maybeCloseModal(e) {
+      if (e.target === document.getElementById('approvalOverlay')) {
+        closeApprovalModal();
+      }
+    }
+
+    async function refreshApprovals() {
+      try {
+        const res = await fetch(`${API}/approvals`);
+        const data = await res.json();
+        renderApprovals(data.approvals || []);
+      } catch (e) {
+        toast('Could not load approvals: ' + e.message, true);
+      }
+    }
+
+    function renderApprovals(approvals) {
+      const list = document.getElementById('approvalList');
+      if (!approvals.length) {
+        list.innerHTML = '<div class="empty-approvals">✅ No pending approvals.</div>';
+        return;
+      }
+      list.innerHTML = approvals.map(a => `
+        <div class="approval-item" id="approval-${escHtml(a.id)}">
+          <div class="tool-name">🔧 ${escHtml(a.tool_name)}</div>
+          <div class="approval-meta">
+            Task: <code>${escHtml(a.task_id)}</code> &nbsp;·&nbsp;
+            ${new Date(a.created_at).toLocaleTimeString()}
+          </div>
+          <div class="tool-args">${escHtml(JSON.stringify(a.args, null, 2))}</div>
+          <div class="approval-actions">
+            <button class="btn-approve" onclick="resolveApproval('${escHtml(a.id)}', true)">
+              ✅ 批准
+            </button>
+            <button class="btn-reject" onclick="resolveApproval('${escHtml(a.id)}', false)">
+              ❌ 拒絕
+            </button>
+          </div>
+        </div>
+      `).join('');
+    }
+
+    async function resolveApproval(approvalId, approved) {
+      const action = approved ? 'approve' : 'reject';
+      try {
+        const res = await fetch(`${API}/approvals/${approvalId}/${action}`, {
+          method: 'POST',
+        });
+        if (!res.ok) {
+          const err = await res.json();
+          toast(err.detail || 'Failed to resolve approval', true);
+          return;
+        }
+        // Animate removal
+        const el = document.getElementById(`approval-${approvalId}`);
+        if (el) {
+          el.style.opacity = '0.4';
+          el.style.transition = 'opacity 0.3s';
+          setTimeout(() => el.remove(), 350);
+        }
+        toast(approved ? '✅ 已批准，任務繼續執行' : '❌ 已拒絕，Agent 將嘗試替代方案');
+        setTimeout(refreshApprovals, 400);
+      } catch (e) {
+        toast('Error: ' + e.message, true);
+      }
+    }
+
+    // ── Toast ──────────────────────────────────────────────────────────────
+
     function toast(msg, isError = false) {
-      const el = document.getElementById('toast');
-      el.textContent = msg;
-      el.style.borderColor = isError ? 'var(--error)' : 'var(--border)';
-      el.classList.add('show');
-      setTimeout(() => el.classList.remove('show'), 3000);
+      // Don't overlap with FAB
+      const fab = document.getElementById('approvalFab');
+      const toastEl = document.getElementById('toast');
+      const fabVisible = fab.style.display !== 'none';
+      toastEl.style.bottom = fabVisible ? '4.5rem' : '1.5rem';
+      toastEl.textContent = msg;
+      toastEl.style.borderColor = isError ? 'var(--error)' : 'var(--border)';
+      toastEl.classList.add('show');
+      setTimeout(() => toastEl.classList.remove('show'), 3000);
     }
 
     function escHtml(s) {
       return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
     }
 
-    // Auto-load skills on page load
-    window.onload = loadSkills;
+    // ── Init ───────────────────────────────────────────────────────────────
+
+    window.onload = () => {
+      loadSkills();
+      loadTools();
+      // Poll for pending approvals every 3 seconds
+      pollApprovals();
+      setInterval(pollApprovals, 3000);
+    };
   </script>
 </body>
 </html>

@@ -16,6 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from approval_store import approval_store
 from config import config
 from escalation import EscalationAgent
 from executor import Executor
@@ -29,6 +30,7 @@ from models import (
 )
 from orchestrator import Orchestrator
 from skill_factory import SkillFactory
+from tool_registry import tool_registry
 from tracker import Tracker
 
 # ── Logging ───────────────────────────────────────────────────────────────────
@@ -51,25 +53,29 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:  # type: ignore[type-arg]
     """Open / close shared resources around the app's lifetime."""
     global tracker, skill_factory, executor, escalation_agent, orchestrator
 
-    # Validate required config
     try:
         config.validate()
     except ValueError as exc:
         logger.warning("Config warning: %s", exc)
 
-    # Initialise components
+    # Auto-register all tools
+    try:
+        tool_registry.auto_register_all()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Tool auto-registration warning: %s", exc)
+
     tracker = Tracker()
     await tracker.open()
 
     skill_factory = SkillFactory(tracker)
-    executor = Executor(tracker, skill_factory)
+    executor = Executor(tracker, skill_factory, registry=tool_registry)
     escalation_agent = EscalationAgent(tracker)
     orchestrator = Orchestrator(tracker, executor, escalation_agent, skill_factory)
 
-    logger.info("OpenTeddy is ready 🐻")
+    logger.info("OpenTeddy is ready 🐻  (%d tools registered)",
+                len(tool_registry.list_tools()))
     yield
 
-    # Teardown
     await executor.close()
     await orchestrator.close()
     await tracker.close()
@@ -80,7 +86,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:  # type: ignore[type-arg]
 app = FastAPI(
     title="OpenTeddy",
     description="Self-growing multi-agent system: Gemma Orchestrator + Qwen Executor + Claude Escalation",
-    version="0.1.0",
+    version="0.2.0",
     lifespan=lifespan,
 )
 
@@ -91,7 +97,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Serve static UI
 _static_dir = os.path.join(os.path.dirname(__file__), "static")
 if os.path.isdir(_static_dir):
     app.mount("/static", StaticFiles(directory=_static_dir), name="static")
@@ -101,25 +106,19 @@ if os.path.isdir(_static_dir):
 
 @app.get("/", include_in_schema=False)
 async def root() -> FileResponse:
-    """Serve the dashboard."""
     index = os.path.join(_static_dir, "index.html")
     if os.path.exists(index):
         return FileResponse(index)
-    return FileResponse(__file__)  # fallback
+    return FileResponse(__file__)
 
 
 @app.get("/health")
 async def health() -> dict:
-    return {"status": "ok", "version": "0.1.0"}
+    return {"status": "ok", "version": "0.2.0"}
 
 
 @app.post("/run", response_model=RunResponse, status_code=202)
 async def run_task(body: RunRequest) -> RunResponse:
-    """
-    Submit a new task to OpenTeddy.
-    The task is executed synchronously (for simplicity); use background tasks
-    for fire-and-forget production use.
-    """
     req = TaskRequest(goal=body.goal, context=body.context, priority=body.priority)
     result = await orchestrator.run(req)
     return RunResponse(
@@ -131,7 +130,6 @@ async def run_task(body: RunRequest) -> RunResponse:
 
 @app.get("/tasks/{task_id}", response_model=StatusResponse)
 async def get_task_status(task_id: str) -> StatusResponse:
-    """Get the status and subtask breakdown for a task."""
     task = await tracker.get_task(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
@@ -146,23 +144,17 @@ async def get_task_status(task_id: str) -> StatusResponse:
 
 @app.get("/tasks", response_model=list)
 async def list_tasks(limit: int = 20) -> list:
-    """List recent tasks."""
     return await tracker.list_tasks(limit=limit)
 
 
 @app.get("/skills", response_model=SkillListResponse)
 async def list_skills() -> SkillListResponse:
-    """List all known skills."""
     skills = await skill_factory.list_all_skills()
     return SkillListResponse(skills=skills)
 
 
 @app.post("/skills/generate")
 async def generate_skill(name: str, description: str) -> dict:
-    """
-    Manually trigger skill generation via Claude.
-    Useful for bootstrapping the skill library.
-    """
     try:
         skill = await skill_factory.generate_skill(name, description)
         return {
@@ -174,6 +166,47 @@ async def generate_skill(name: str, description: str) -> dict:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+# ── Tool endpoints ────────────────────────────────────────────────────────────
+
+@app.get("/tools")
+async def list_tools() -> dict:
+    """List all registered tools with their risk level and parameter schemas."""
+    return {"tools": tool_registry.list_tools()}
+
+
+# ── Approval endpoints ────────────────────────────────────────────────────────
+
+@app.get("/approvals")
+async def list_approvals() -> dict:
+    """Return all pending tool approvals awaiting human review."""
+    pending = await approval_store.get_pending()
+    return {"approvals": [a.to_dict() for a in pending]}
+
+
+@app.post("/approvals/{approval_id}/approve")
+async def approve_tool(approval_id: str) -> dict:
+    """Approve a pending high-risk tool call. The waiting task will resume."""
+    resolved = await approval_store.resolve(approval_id, approved=True)
+    if not resolved:
+        raise HTTPException(
+            status_code=404,
+            detail="Approval not found or already resolved.",
+        )
+    return {"status": "approved", "approval_id": approval_id}
+
+
+@app.post("/approvals/{approval_id}/reject")
+async def reject_tool(approval_id: str) -> dict:
+    """Reject a pending high-risk tool call. The agent will receive an error and try an alternative."""
+    resolved = await approval_store.resolve(approval_id, approved=False)
+    if not resolved:
+        raise HTTPException(
+            status_code=404,
+            detail="Approval not found or already resolved.",
+        )
+    return {"status": "rejected", "approval_id": approval_id}
 
 
 # ── CLI entry point ───────────────────────────────────────────────────────────
