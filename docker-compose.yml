@@ -1,0 +1,26 @@
+version: "3.9"
+
+services:
+  openteddy:
+    build: .
+    container_name: openteddy
+    ports:
+      - "8000:8000"
+    environment:
+      - OLLAMA_URL=http://host-gateway:11434
+      - ORCHESTRATOR_MODEL=${ORCHESTRATOR_MODEL:-gemma3:27b}
+      - EXECUTOR_MODEL=${EXECUTOR_MODEL:-qwen3:8b}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - ESCALATION_THRESHOLD=${ESCALATION_THRESHOLD:-3}
+      - SKILL_MATCH_THRESHOLD=${SKILL_MATCH_THRESHOLD:-0.4}
+      - MAX_SUBTASKS=${MAX_SUBTASKS:-10}
+      - LOG_DB=/app/data/openclaw_usage.db
+      - SKILLS_DIR=/app/data/skills
+    volumes:
+      - openteddy_data:/app/data
+    extra_hosts:
+      - "host-gateway:host-gateway"
+    restart: unless-stopped
+
+volumes:
+  openteddy_data:

@@ -144,6 +144,22 @@ curl -X POST http://localhost:8000/run \
 | `ESCALATION_FAILURE_LIMIT` | `3` | Max consecutive failures before abort |
 | `SKILL_PROMOTION_THRESHOLD` | `5` | Successes needed to promote a skill |
 
+## Docker 部署
+
+### 快速啟動
+```bash
+cp .env.example .env
+# 填入 ANTHROPIC_API_KEY
+docker compose up -d
+# 開瀏覽器 http://localhost:8000
+```
+
+### 重要說明
+- Ollama 需要在 host 上運行（`ollama serve`）
+- Docker 容器透過 `host-gateway` 自動連接到 host 的 Ollama
+- Skills 庫和使用量資料庫持久化在 Docker volume `openteddy_data`
+- 重建映像：`docker compose up -d --build`
+
 ## License
 
 MIT
