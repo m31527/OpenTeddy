@@ -1,14 +1,16 @@
 """
 OpenTeddy Tracker
-Async SQLite persistence layer for tasks, subtasks, skills, and invocations.
+Async SQLite persistence layer for tasks, subtasks, skills, invocations,
+and commercial API usage records.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import uuid
 from datetime import datetime
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 import aiosqlite
 
@@ -27,6 +29,23 @@ from models import (
 
 logger = logging.getLogger(__name__)
 
+# ── Claude pricing table ──────────────────────────────────────────────────────
+# (input_price_per_token, output_price_per_token) in USD
+_CLAUDE_PRICING: dict[str, tuple[float, float]] = {
+    "claude-opus":   (15.0  / 1_000_000, 75.0 / 1_000_000),
+    "claude-sonnet": (3.0   / 1_000_000, 15.0 / 1_000_000),
+    "claude-haiku":  (0.80  / 1_000_000, 4.0  / 1_000_000),
+}
+
+
+def _estimate_cost(model: str, tokens_in: int, tokens_out: int) -> float:
+    """Return an estimated USD cost for a model call."""
+    model_lower = model.lower()
+    for prefix, (p_in, p_out) in _CLAUDE_PRICING.items():
+        if prefix in model_lower:
+            return round(tokens_in * p_in + tokens_out * p_out, 8)
+    return 0.0  # Ollama / unknown — local, no cost
+
 
 class Tracker:
     """Async SQLite tracker.  Use as an async context manager or call open()/close()."""
@@ -42,7 +61,25 @@ class Tracker:
         self._db.row_factory = aiosqlite.Row
         await self._db.executescript(SCHEMA_SQL)
         await self._db.commit()
+        # Migrate existing DBs that pre-date the usage_records columns
+        await self._migrate_usage_columns()
         logger.info("Tracker opened: %s", self.db_path)
+
+    async def _migrate_usage_columns(self) -> None:
+        """Add new columns to usage_records for pre-existing databases."""
+        # SQLite does not support ADD COLUMN IF NOT EXISTS directly,
+        # so we catch the OperationalError if the column already exists.
+        migrations = [
+            "ALTER TABLE usage_records ADD COLUMN session_id TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE usage_records ADD COLUMN model_provider TEXT NOT NULL DEFAULT 'ollama'",
+            "ALTER TABLE usage_records ADD COLUMN task_description TEXT DEFAULT ''",
+        ]
+        for sql in migrations:
+            try:
+                await self.db.execute(sql)
+                await self.db.commit()
+            except Exception:  # noqa: BLE001
+                pass  # Column already exists — safe to ignore
 
     async def close(self) -> None:
         if self._db:
@@ -290,3 +327,168 @@ class Tracker:
             logger.info("Skill '%s' promoted to ACTIVE.", skill_name)
             return True
         return False
+
+    # ── Usage records ─────────────────────────────────────────────────────────
+
+    async def record_usage(
+        self,
+        task_id: str,
+        model: str,
+        model_provider: str,
+        tokens_in: int = 0,
+        tokens_out: int = 0,
+        task_description: str = "",
+        session_id: str = "",
+        cost_usd: Optional[float] = None,
+    ) -> None:
+        """
+        Persist a single API call record to usage_records.
+        If *cost_usd* is None the cost is estimated from the model pricing table.
+        """
+        if cost_usd is None:
+            cost_usd = _estimate_cost(model, tokens_in, tokens_out)
+
+        record_id   = str(uuid.uuid4())
+        created_at  = datetime.utcnow().isoformat()
+
+        try:
+            await self.db.execute(
+                "INSERT INTO usage_records "
+                "(id, task_id, session_id, model, model_provider, "
+                "tokens_in, tokens_out, cost_usd, task_description, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    record_id,
+                    task_id,
+                    session_id,
+                    model,
+                    model_provider,
+                    tokens_in,
+                    tokens_out,
+                    cost_usd,
+                    task_description[:500] if task_description else "",
+                    created_at,
+                ),
+            )
+            await self.db.commit()
+        except Exception as exc:  # noqa: BLE001
+            logger.error("record_usage failed: %s", exc)
+
+    async def get_usage_paginated(
+        self,
+        page: int = 1,
+        page_size: int = 20,
+        provider_filter: Optional[str] = None,
+        date_from: Optional[str] = None,
+        date_to: Optional[str] = None,
+    ) -> Dict:
+        """
+        Paginated usage records, newest first.
+
+        Returns:
+          {items, total, page, page_size, total_pages}
+        """
+        conditions: list[str] = []
+        params: list  = []
+
+        if provider_filter:
+            conditions.append("model_provider = ?")
+            params.append(provider_filter)
+        if date_from:
+            conditions.append("created_at >= ?")
+            params.append(date_from)
+        if date_to:
+            conditions.append("created_at <= ?")
+            params.append(date_to + "T23:59:59")
+
+        where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+
+        # Total count
+        async with self.db.execute(
+            f"SELECT COUNT(*) FROM usage_records {where}", params
+        ) as cur:
+            row = await cur.fetchone()
+            total = row[0] if row else 0
+
+        total_pages = max(1, (total + page_size - 1) // page_size)
+        offset      = (page - 1) * page_size
+
+        async with self.db.execute(
+            f"SELECT * FROM usage_records {where} "
+            "ORDER BY created_at DESC LIMIT ? OFFSET ?",
+            params + [page_size, offset],
+        ) as cur:
+            rows = await cur.fetchall()
+
+        items = [dict(r) for r in rows]
+        return {
+            "items":       items,
+            "total":       total,
+            "page":        page,
+            "page_size":   page_size,
+            "total_pages": total_pages,
+        }
+
+    async def get_usage_summary(self) -> Dict:
+        """
+        Aggregate usage statistics across all records.
+
+        Returns:
+          {
+            total_calls, commercial_calls,
+            total_tokens_in, total_tokens_out,
+            total_cost_usd, commercial_cost_usd,
+            cost_by_model, cost_by_day,   # last 30 days
+            escalation_count
+          }
+        """
+        # ── Totals ────────────────────────────────────────────────────────────
+        async with self.db.execute(
+            "SELECT COUNT(*) as total_calls, "
+            "SUM(tokens_in) as total_in, SUM(tokens_out) as total_out, "
+            "SUM(cost_usd) as total_cost "
+            "FROM usage_records"
+        ) as cur:
+            totals = dict(await cur.fetchone() or {})
+
+        # ── Anthropic only ────────────────────────────────────────────────────
+        async with self.db.execute(
+            "SELECT COUNT(*) as comm_calls, SUM(cost_usd) as comm_cost "
+            "FROM usage_records WHERE model_provider = 'anthropic'"
+        ) as cur:
+            commercial = dict(await cur.fetchone() or {})
+
+        # ── Escalation count (usage records from anthropic == escalations) ────
+        escalation_count = commercial.get("comm_calls") or 0
+
+        # ── Cost by model ─────────────────────────────────────────────────────
+        async with self.db.execute(
+            "SELECT model, SUM(cost_usd) as cost FROM usage_records GROUP BY model"
+        ) as cur:
+            rows = await cur.fetchall()
+        cost_by_model = {r["model"]: round(r["cost"] or 0.0, 6) for r in rows}
+
+        # ── Cost by day (last 30 days) ────────────────────────────────────────
+        async with self.db.execute(
+            "SELECT substr(created_at, 1, 10) as day, SUM(cost_usd) as cost "
+            "FROM usage_records "
+            "WHERE created_at >= datetime('now', '-30 days') "
+            "GROUP BY day ORDER BY day ASC"
+        ) as cur:
+            rows = await cur.fetchall()
+        cost_by_day = [
+            {"date": r["day"], "cost": round(r["cost"] or 0.0, 6)}
+            for r in rows
+        ]
+
+        return {
+            "total_calls":        totals.get("total_calls") or 0,
+            "commercial_calls":   commercial.get("comm_calls") or 0,
+            "total_tokens_in":    totals.get("total_in") or 0,
+            "total_tokens_out":   totals.get("total_out") or 0,
+            "total_cost_usd":     round(totals.get("total_cost") or 0.0, 6),
+            "commercial_cost_usd": round(commercial.get("comm_cost") or 0.0, 6),
+            "cost_by_model":      cost_by_model,
+            "cost_by_day":        cost_by_day,
+            "escalation_count":   escalation_count,
+        }

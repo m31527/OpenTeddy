@@ -2,6 +2,7 @@
 OpenTeddy Escalation Agent
 When Qwen's confidence is too low or repeated failures occur,
 this agent calls Claude to resolve the subtask.
+All Anthropic API calls are recorded to the usage_records table.
 """
 
 from __future__ import annotations
@@ -38,6 +39,7 @@ class EscalationAgent:
         """
         Use Claude to resolve a failed/low-confidence subtask.
         Updates and returns the subtask.
+        Records token usage to usage_records.
         """
         logger.info(
             "Escalating subtask %s to Claude (confidence was %.2f)",
@@ -66,6 +68,18 @@ class EscalationAgent:
             subtask.result = result_text
             subtask.confidence = 1.0
             subtask.status = TaskStatus.COMPLETED
+
+            # ── Record usage ─────────────────────────────────────────────────
+            usage = response.usage
+            await self.tracker.record_usage(
+                task_id=subtask.parent_task_id,
+                model=config.claude_model,
+                model_provider="anthropic",
+                tokens_in=usage.input_tokens,
+                tokens_out=usage.output_tokens,
+                task_description=subtask.description[:300],
+            )
+
         except anthropic.APIError as exc:
             logger.error("Claude escalation failed: %s", exc)
             subtask.error = f"Escalation error: {exc}"
@@ -79,9 +93,11 @@ class EscalationAgent:
         self,
         goal: str,
         subtask_results: list[str],
+        task_id: str = "",
     ) -> str:
         """
         Ask Claude to write a final coherent summary from all subtask outputs.
+        Records token usage to usage_records.
         """
         numbered = "\n".join(
             f"{i+1}. {r}" for i, r in enumerate(subtask_results)
@@ -98,7 +114,21 @@ class EscalationAgent:
                 max_tokens=1024,
                 messages=[{"role": "user", "content": prompt}],
             )
-            return response.content[0].text.strip()
+            summary = response.content[0].text.strip()
+
+            # ── Record usage ─────────────────────────────────────────────────
+            usage = response.usage
+            await self.tracker.record_usage(
+                task_id=task_id,
+                model=config.claude_model,
+                model_provider="anthropic",
+                tokens_in=usage.input_tokens,
+                tokens_out=usage.output_tokens,
+                task_description=f"[summary] {goal[:250]}",
+            )
+
+            return summary
+
         except anthropic.APIError as exc:
             logger.error("Summary synthesis failed: %s", exc)
             return f"(Summary unavailable: {exc})\n\nRaw results:\n{numbered}"

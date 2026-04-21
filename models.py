@@ -195,4 +195,22 @@ CREATE TABLE IF NOT EXISTS skill_invocations (
     duration_ms INTEGER DEFAULT 0,
     invoked_at  TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS usage_records (
+    id               TEXT PRIMARY KEY,
+    task_id          TEXT NOT NULL DEFAULT '',
+    session_id       TEXT NOT NULL DEFAULT '',
+    model            TEXT NOT NULL DEFAULT '',
+    model_provider   TEXT NOT NULL DEFAULT 'ollama',
+    tokens_in        INTEGER DEFAULT 0,
+    tokens_out       INTEGER DEFAULT 0,
+    cost_usd         REAL DEFAULT 0.0,
+    task_description TEXT DEFAULT '',
+    created_at       TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_usage_created_at
+    ON usage_records(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_usage_provider
+    ON usage_records(model_provider);
 """

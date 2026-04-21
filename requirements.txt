@@ -7,6 +7,9 @@ pydantic-settings>=2.0.0
 python-dotenv>=1.0.0
 anthropic>=0.25.0
 
+# ── Long-term Memory (ChromaDB local vector DB) ────────────────────────────────
+chromadb>=0.5.0
+
 # ── Tool System ────────────────────────────────────────────────────────────────
 # DB tool (SQLAlchemy async)
 sqlalchemy[asyncio]>=2.0.0

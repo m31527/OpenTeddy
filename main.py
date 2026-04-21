@@ -9,9 +9,9 @@ from __future__ import annotations
 import logging
 import os
 from contextlib import asynccontextmanager
-from typing import AsyncGenerator
+from typing import AsyncGenerator, Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -20,6 +20,7 @@ from approval_store import approval_store
 from config import config
 from escalation import EscalationAgent
 from executor import Executor
+from memory import MemoryManager
 from models import (
     RunRequest,
     RunResponse,
@@ -41,17 +42,18 @@ logging.basicConfig(
 logger = logging.getLogger("openteddy")
 
 # ── Application state ─────────────────────────────────────────────────────────
-tracker: Tracker
-skill_factory: SkillFactory
-executor: Executor
+tracker:          Tracker
+skill_factory:    SkillFactory
+executor:         Executor
 escalation_agent: EscalationAgent
-orchestrator: Orchestrator
+orchestrator:     Orchestrator
+memory_manager:   MemoryManager
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator:  # type: ignore[type-arg]
     """Open / close shared resources around the app's lifetime."""
-    global tracker, skill_factory, executor, escalation_agent, orchestrator
+    global tracker, skill_factory, executor, escalation_agent, orchestrator, memory_manager
 
     try:
         config.validate()
@@ -67,17 +69,28 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:  # type: ignore[type-arg]
     tracker = Tracker()
     await tracker.open()
 
-    skill_factory = SkillFactory(tracker)
-    executor = Executor(tracker, skill_factory, registry=tool_registry)
-    escalation_agent = EscalationAgent(tracker)
-    orchestrator = Orchestrator(tracker, executor, escalation_agent, skill_factory)
+    # Long-term memory (ChromaDB — gracefully degrades if not installed)
+    memory_manager = MemoryManager(db_path=config.memory_db_path)
+    await memory_manager.open()
 
-    logger.info("OpenTeddy is ready 🐻  (%d tools registered)",
-                len(tool_registry.list_tools()))
+    skill_factory    = SkillFactory(tracker)
+    executor         = Executor(tracker, skill_factory, registry=tool_registry)
+    escalation_agent = EscalationAgent(tracker)
+    orchestrator     = Orchestrator(
+        tracker, executor, escalation_agent, skill_factory,
+        memory=memory_manager,
+    )
+
+    logger.info(
+        "OpenTeddy is ready 🐻  (%d tools registered, memory=%s)",
+        len(tool_registry.list_tools()),
+        "enabled" if memory_manager.is_available else "disabled",
+    )
     yield
 
     await executor.close()
     await orchestrator.close()
+    await memory_manager.close()
     await tracker.close()
     logger.info("OpenTeddy shut down cleanly.")
 
@@ -86,7 +99,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:  # type: ignore[type-arg]
 app = FastAPI(
     title="OpenTeddy",
     description="Self-growing multi-agent system: Gemma Orchestrator + Qwen Executor + Claude Escalation",
-    version="0.2.0",
+    version="0.3.0",
     lifespan=lifespan,
 )
 
@@ -114,12 +127,16 @@ async def root() -> FileResponse:
 
 @app.get("/health")
 async def health() -> dict:
-    return {"status": "ok", "version": "0.2.0"}
+    return {
+        "status":  "ok",
+        "version": "0.3.0",
+        "memory":  memory_manager.is_available,
+    }
 
 
 @app.post("/run", response_model=RunResponse, status_code=202)
 async def run_task(body: RunRequest) -> RunResponse:
-    req = TaskRequest(goal=body.goal, context=body.context, priority=body.priority)
+    req    = TaskRequest(goal=body.goal, context=body.context, priority=body.priority)
     result = await orchestrator.run(req)
     return RunResponse(
         task_id=result.task_id,
@@ -158,8 +175,8 @@ async def generate_skill(name: str, description: str) -> dict:
     try:
         skill = await skill_factory.generate_skill(name, description)
         return {
-            "name": skill.name,
-            "status": skill.status,
+            "name":    skill.name,
+            "status":  skill.status,
             "message": f"Skill '{name}' generated and saved.",
         }
     except ValueError as exc:
@@ -207,6 +224,62 @@ async def reject_tool(approval_id: str) -> dict:
             detail="Approval not found or already resolved.",
         )
     return {"status": "rejected", "approval_id": approval_id}
+
+
+# ── Memory endpoints ──────────────────────────────────────────────────────────
+
+@app.get("/memory")
+async def list_memory(
+    page:      int = Query(default=1,  ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+) -> dict:
+    """Paginated list of long-term memories."""
+    return await memory_manager.list_memories(page=page, page_size=page_size)
+
+
+@app.delete("/memory/{memory_id}")
+async def delete_memory(memory_id: str) -> dict:
+    """Delete a single memory entry by ID."""
+    success = await memory_manager.delete_memory(memory_id)
+    if not success:
+        raise HTTPException(
+            status_code=404,
+            detail="Memory not found or could not be deleted.",
+        )
+    return {"status": "deleted", "id": memory_id}
+
+
+@app.delete("/memory")
+async def clear_memory() -> dict:
+    """Delete ALL memories. This action is irreversible."""
+    deleted = await memory_manager.clear_all()
+    return {"status": "cleared", "deleted_count": deleted}
+
+
+# ── Usage endpoints ───────────────────────────────────────────────────────────
+
+@app.get("/usage")
+async def get_usage(
+    page:          int           = Query(default=1,    ge=1),
+    page_size:     int           = Query(default=20,   ge=1, le=100),
+    provider:      Optional[str] = Query(default=None),
+    date_from:     Optional[str] = Query(default=None, description="YYYY-MM-DD"),
+    date_to:       Optional[str] = Query(default=None, description="YYYY-MM-DD"),
+) -> dict:
+    """Paginated API usage records with optional filters."""
+    return await tracker.get_usage_paginated(
+        page=page,
+        page_size=page_size,
+        provider_filter=provider,
+        date_from=date_from,
+        date_to=date_to,
+    )
+
+
+@app.get("/usage/summary")
+async def get_usage_summary() -> dict:
+    """Aggregated usage statistics (totals, cost by model, cost by day)."""
+    return await tracker.get_usage_summary()
 
 
 # ── CLI entry point ───────────────────────────────────────────────────────────

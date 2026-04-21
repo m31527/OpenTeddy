@@ -19,6 +19,8 @@
       --escalated: #a78bfa;
       --orange: #f97316;
       --orange-dim: #c2510e;
+      --memory: #06b6d4;
+      --memory-dim: #0891b2;
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -44,6 +46,36 @@
       font-size: 0.72rem;
       font-weight: 600;
     }
+
+    /* ── Tab Navigation ──────────────────────────────────────────────────── */
+    .tab-bar {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 0 2rem;
+      display: flex;
+      gap: 0;
+    }
+    .tab-btn {
+      background: transparent;
+      border: none;
+      border-bottom: 3px solid transparent;
+      color: var(--muted);
+      padding: 0.75rem 1.2rem;
+      font-size: 0.9rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: color 0.2s, border-color 0.2s;
+      border-radius: 0;
+      white-space: nowrap;
+    }
+    .tab-btn:hover { color: var(--text); background: transparent; }
+    .tab-btn.active {
+      color: var(--accent);
+      border-bottom-color: var(--accent);
+    }
+    .tab-panel { display: none; }
+    .tab-panel.active { display: block; }
+
     .container { max-width: 960px; margin: 2rem auto; padding: 0 1rem; }
     .card {
       background: var(--surface);
@@ -53,7 +85,7 @@
       margin-bottom: 1.5rem;
     }
     .card h2 { font-size: 1.1rem; margin-bottom: 1rem; color: var(--accent); }
-    textarea, input[type=text], input[type=number] {
+    textarea, input[type=text], input[type=number], input[type=date], select {
       width: 100%;
       background: var(--bg);
       border: 1px solid var(--border);
@@ -64,7 +96,7 @@
       outline: none;
       transition: border 0.2s;
     }
-    textarea:focus, input:focus { border-color: var(--accent); }
+    textarea:focus, input:focus, select:focus { border-color: var(--accent); }
     textarea { resize: vertical; min-height: 80px; }
     .row { display: flex; gap: 1rem; align-items: flex-end; flex-wrap: wrap; }
     .field { flex: 1; min-width: 180px; }
@@ -83,16 +115,20 @@
     }
     button:hover { background: var(--accent-dim); }
     button:disabled { opacity: 0.45; cursor: not-allowed; }
-    .btn-approve {
-      background: #166534;
-      color: #bbf7d0;
-    }
+    .btn-approve { background: #166534; color: #bbf7d0; }
     .btn-approve:hover { background: #15803d; }
-    .btn-reject {
-      background: #7f1d1d;
-      color: #fecaca;
-    }
+    .btn-reject { background: #7f1d1d; color: #fecaca; }
     .btn-reject:hover { background: #991b1b; }
+    .btn-danger { background: #7f1d1d; color: #fecaca; }
+    .btn-danger:hover { background: #991b1b; }
+    .btn-ghost {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text);
+    }
+    .btn-ghost:hover { background: var(--border); }
+    .btn-sm { padding: 0.35rem 0.85rem; font-size: 0.82rem; }
+
     .status-badge {
       display: inline-block;
       border-radius: 999px;
@@ -145,7 +181,20 @@
     .skill-card .skill-desc { font-size: 0.78rem; color: var(--muted); }
     .skill-card .skill-stats { margin-top: 0.5rem; font-size: 0.75rem; color: var(--success); }
 
-    /* ── Toast ──────────────────────────────────────────────────────────── */
+    /* ── Loader ────────────────────────────────────────────────────────────── */
+    .loader {
+      display: inline-block;
+      width: 16px; height: 16px;
+      border: 2px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+      vertical-align: middle;
+      margin-right: 6px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Toast ────────────────────────────────────────────────────────────── */
     #toast {
       position: fixed;
       bottom: 1.5rem;
@@ -162,7 +211,7 @@
     }
     #toast.show { opacity: 1; }
 
-    /* ── Approval FAB (floating action button) ──────────────────────────── */
+    /* ── Approval FAB ─────────────────────────────────────────────────────── */
     #approvalFab {
       position: fixed;
       bottom: 1.5rem;
@@ -194,7 +243,7 @@
       text-align: center;
     }
 
-    /* ── Approval Modal ─────────────────────────────────────────────────── */
+    /* ── Approval Modal ───────────────────────────────────────────────────── */
     #approvalOverlay {
       display: none;
       position: fixed;
@@ -214,11 +263,7 @@
       max-height: 80vh;
       overflow-y: auto;
     }
-    #approvalModal h3 {
-      font-size: 1.15rem;
-      color: var(--orange);
-      margin-bottom: 1rem;
-    }
+    #approvalModal h3 { font-size: 1.15rem; color: var(--orange); margin-bottom: 1rem; }
     .approval-item {
       background: var(--bg);
       border: 1px solid var(--border);
@@ -226,12 +271,7 @@
       padding: 1rem;
       margin-bottom: 0.85rem;
     }
-    .approval-item .tool-name {
-      font-weight: 700;
-      font-size: 0.95rem;
-      color: var(--warning);
-      margin-bottom: 0.4rem;
-    }
+    .approval-item .tool-name { font-weight: 700; font-size: 0.95rem; color: var(--warning); margin-bottom: 0.4rem; }
     .approval-item .tool-args {
       font-family: 'Courier New', monospace;
       font-size: 0.82rem;
@@ -242,19 +282,9 @@
       max-height: 140px;
       overflow-y: auto;
     }
-    .approval-item .approval-meta {
-      font-size: 0.76rem;
-      color: var(--muted);
-      margin-bottom: 0.75rem;
-    }
-    .approval-actions {
-      display: flex;
-      gap: 0.6rem;
-    }
-    .approval-actions button {
-      padding: 0.45rem 1rem;
-      font-size: 0.85rem;
-    }
+    .approval-item .approval-meta { font-size: 0.76rem; color: var(--muted); margin-bottom: 0.75rem; }
+    .approval-actions { display: flex; gap: 0.6rem; }
+    .approval-actions button { padding: 0.45rem 1rem; font-size: 0.85rem; }
     .modal-close {
       float: right;
       background: transparent;
@@ -265,26 +295,9 @@
       margin-bottom: 0.5rem;
     }
     .modal-close:hover { background: var(--border); }
-    .empty-approvals {
-      color: var(--muted);
-      font-size: 0.9rem;
-      text-align: center;
-      padding: 1.5rem 0;
-    }
+    .empty-approvals { color: var(--muted); font-size: 0.9rem; text-align: center; padding: 1.5rem 0; }
 
-    .loader {
-      display: inline-block;
-      width: 16px; height: 16px;
-      border: 2px solid var(--border);
-      border-top-color: var(--accent);
-      border-radius: 50%;
-      animation: spin 0.7s linear infinite;
-      vertical-align: middle;
-      margin-right: 6px;
-    }
-    @keyframes spin { to { transform: rotate(360deg); } }
-
-    /* ── Tools panel ────────────────────────────────────────────────────── */
+    /* ── Tools panel ──────────────────────────────────────────────────────── */
     .tools-grid {
       display: grid;
       grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
@@ -300,6 +313,118 @@
     .tool-card .tool-desc { font-size: 0.76rem; color: var(--muted); }
     .risk-low  { color: var(--success); font-size: 0.7rem; font-weight: 700; margin-top: 0.3rem; }
     .risk-high { color: var(--warning); font-size: 0.7rem; font-weight: 700; margin-top: 0.3rem; }
+
+    /* ── Memory panel ─────────────────────────────────────────────────────── */
+    .memory-list { list-style: none; }
+    .memory-item {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.85rem 1rem;
+      margin-bottom: 0.6rem;
+      display: flex;
+      gap: 0.75rem;
+      align-items: flex-start;
+    }
+    .memory-body { flex: 1; min-width: 0; }
+    .memory-meta { display: flex; gap: 0.5rem; align-items: center; margin-bottom: 0.3rem; flex-wrap: wrap; }
+    .memory-type-badge {
+      font-size: 0.68rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      border-radius: 4px;
+      padding: 0.1rem 0.45rem;
+    }
+    .type-task_result    { background: #1a3d2e; color: var(--success); }
+    .type-user_preference { background: #1e3a5f; color: #60a5fa; }
+    .type-system_context { background: #2d1a4d; color: var(--escalated); }
+    .type-conversation   { background: #2d2a1a; color: var(--warning); }
+    .type-unknown        { background: #2d3148; color: var(--muted); }
+    .memory-time { font-size: 0.72rem; color: var(--muted); }
+    .memory-content { font-size: 0.84rem; color: var(--text); line-height: 1.5; word-break: break-word; }
+    .memory-del-btn {
+      background: transparent;
+      border: none;
+      color: var(--muted);
+      font-size: 1rem;
+      cursor: pointer;
+      padding: 0.1rem 0.3rem;
+      border-radius: 4px;
+      flex-shrink: 0;
+      line-height: 1;
+    }
+    .memory-del-btn:hover { color: var(--error); background: #3d1a1a; }
+    .pagination { display: flex; align-items: center; gap: 0.75rem; margin-top: 1rem; }
+    .pagination .page-info { color: var(--muted); font-size: 0.85rem; flex: 1; text-align: center; }
+
+    /* ── Usage panel ──────────────────────────────────────────────────────── */
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+      gap: 0.75rem;
+      margin-bottom: 1.5rem;
+    }
+    .stat-card {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1rem 1.2rem;
+    }
+    .stat-label { font-size: 0.75rem; color: var(--muted); margin-bottom: 0.3rem; text-transform: uppercase; letter-spacing: 0.05em; }
+    .stat-value { font-size: 1.5rem; font-weight: 700; color: var(--text); }
+    .stat-value.green { color: var(--success); }
+    .stat-value.yellow { color: var(--warning); }
+    .stat-value.purple { color: var(--escalated); }
+    .chart-wrapper {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1rem;
+      margin-bottom: 1.5rem;
+    }
+    .chart-wrapper h3 { font-size: 0.85rem; color: var(--muted); margin-bottom: 0.75rem; }
+    #usageChart { width: 100%; height: 160px; display: block; }
+    .usage-filters {
+      display: flex;
+      gap: 0.75rem;
+      flex-wrap: wrap;
+      margin-bottom: 1rem;
+      align-items: flex-end;
+    }
+    .usage-filters .field { min-width: 140px; flex: 1; }
+    .usage-table-wrap { overflow-x: auto; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.82rem;
+    }
+    th {
+      text-align: left;
+      padding: 0.5rem 0.75rem;
+      color: var(--muted);
+      font-weight: 600;
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      border-bottom: 1px solid var(--border);
+    }
+    td {
+      padding: 0.5rem 0.75rem;
+      border-bottom: 1px solid var(--border);
+      color: var(--text);
+      vertical-align: top;
+    }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: rgba(124,106,247,0.04); }
+    .provider-badge {
+      font-size: 0.68rem;
+      font-weight: 700;
+      border-radius: 4px;
+      padding: 0.1rem 0.45rem;
+      text-transform: uppercase;
+    }
+    .provider-anthropic { background: #1e3a5f; color: #60a5fa; }
+    .provider-ollama    { background: #1a3d2e; color: var(--success); }
+    .task-desc-cell { max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
   </style>
 </head>
 <body>
@@ -308,76 +433,192 @@
     <span class="badge">Multi-Agent System</span>
   </header>
 
-  <div class="container">
-    <!-- Run Task -->
-    <div class="card">
-      <h2>▶ Run a Task</h2>
-      <div class="field" style="margin-bottom:0.85rem">
-        <label>Goal (natural language)</label>
-        <textarea id="goal" placeholder="e.g. Research the latest news on quantum computing and summarise the top 3 breakthroughs"></textarea>
-      </div>
-      <div class="row">
-        <div class="field">
-          <label>Priority (1–10)</label>
-          <input type="number" id="priority" value="5" min="1" max="10" />
+  <!-- Tab bar -->
+  <div class="tab-bar">
+    <button class="tab-btn active" onclick="switchTab('tasks')">▶ Tasks</button>
+    <button class="tab-btn" onclick="switchTab('skills')">⚙️ Skills</button>
+    <button class="tab-btn" onclick="switchTab('tools')">🛠 Tools</button>
+    <button class="tab-btn" onclick="switchTab('memory')">🧠 Memory</button>
+    <button class="tab-btn" onclick="switchTab('usage')">📊 Usage</button>
+  </div>
+
+  <!-- ── TASKS TAB ─────────────────────────────────────────────────────────── -->
+  <div id="tab-tasks" class="tab-panel active">
+    <div class="container">
+      <div class="card">
+        <h2>▶ Run a Task</h2>
+        <div class="field" style="margin-bottom:0.85rem">
+          <label>Goal (natural language)</label>
+          <textarea id="goal" placeholder="e.g. Research the latest news on quantum computing and summarise the top 3 breakthroughs"></textarea>
         </div>
-        <button id="runBtn" onclick="runTask()">Run Task</button>
-      </div>
-    </div>
-
-    <!-- Result -->
-    <div class="card" id="resultCard" style="display:none">
-      <h2>📋 Result</h2>
-      <div style="display:flex;gap:0.75rem;align-items:center;margin-bottom:0.5rem">
-        <span id="resultStatus" class="status-badge"></span>
-        <code style="font-size:0.78rem;color:var(--muted)" id="resultTaskId"></code>
-      </div>
-      <div class="result-box" id="resultSummary"></div>
-      <div id="subtaskSection" style="margin-top:1rem;display:none">
-        <div style="font-size:0.85rem;color:var(--muted);margin-bottom:0.5rem">Sub-tasks</div>
-        <ul class="subtask-list" id="subtaskList"></ul>
-      </div>
-    </div>
-
-    <!-- Skills -->
-    <div class="card">
-      <h2>⚙️ Skills Library</h2>
-      <div style="margin-bottom:1rem">
-        <button onclick="loadSkills()" style="background:transparent;border:1px solid var(--border);color:var(--text)">
-          Refresh Skills
-        </button>
-      </div>
-      <div class="skills-grid" id="skillsGrid">
-        <div style="color:var(--muted);font-size:0.88rem">No skills loaded yet — run a task to discover skills.</div>
-      </div>
-    </div>
-
-    <!-- Generate Skill -->
-    <div class="card">
-      <h2>🔧 Generate Skill Manually</h2>
-      <div class="row">
-        <div class="field">
-          <label>Skill name (snake_case)</label>
-          <input type="text" id="skillName" placeholder="e.g. web_search" />
+        <div class="row">
+          <div class="field">
+            <label>Priority (1–10)</label>
+            <input type="number" id="priority" value="5" min="1" max="10" />
+          </div>
+          <button id="runBtn" onclick="runTask()">Run Task</button>
         </div>
-        <div class="field" style="flex:2">
-          <label>Description</label>
-          <input type="text" id="skillDesc" placeholder="Searches the web and returns a summary" />
+      </div>
+
+      <div class="card" id="resultCard" style="display:none">
+        <h2>📋 Result</h2>
+        <div style="display:flex;gap:0.75rem;align-items:center;margin-bottom:0.5rem">
+          <span id="resultStatus" class="status-badge"></span>
+          <code style="font-size:0.78rem;color:var(--muted)" id="resultTaskId"></code>
         </div>
-        <button onclick="generateSkill()">Generate</button>
+        <div class="result-box" id="resultSummary"></div>
+        <div id="subtaskSection" style="margin-top:1rem;display:none">
+          <div style="font-size:0.85rem;color:var(--muted);margin-bottom:0.5rem">Sub-tasks</div>
+          <ul class="subtask-list" id="subtaskList"></ul>
+        </div>
       </div>
     </div>
+  </div>
 
-    <!-- Tools Panel -->
-    <div class="card">
-      <h2>🛠 Registered Tools</h2>
-      <div style="margin-bottom:1rem">
-        <button onclick="loadTools()" style="background:transparent;border:1px solid var(--border);color:var(--text)">
-          Refresh Tools
-        </button>
+  <!-- ── SKILLS TAB ────────────────────────────────────────────────────────── -->
+  <div id="tab-skills" class="tab-panel">
+    <div class="container">
+      <div class="card">
+        <h2>⚙️ Skills Library</h2>
+        <div style="margin-bottom:1rem">
+          <button onclick="loadSkills()" class="btn-ghost">Refresh Skills</button>
+        </div>
+        <div class="skills-grid" id="skillsGrid">
+          <div style="color:var(--muted);font-size:0.88rem">No skills loaded yet.</div>
+        </div>
       </div>
-      <div class="tools-grid" id="toolsGrid">
-        <div style="color:var(--muted);font-size:0.88rem">Loading tools…</div>
+      <div class="card">
+        <h2>🔧 Generate Skill Manually</h2>
+        <div class="row">
+          <div class="field">
+            <label>Skill name (snake_case)</label>
+            <input type="text" id="skillName" placeholder="e.g. web_search" />
+          </div>
+          <div class="field" style="flex:2">
+            <label>Description</label>
+            <input type="text" id="skillDesc" placeholder="Searches the web and returns a summary" />
+          </div>
+          <button onclick="generateSkill()">Generate</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── TOOLS TAB ─────────────────────────────────────────────────────────── -->
+  <div id="tab-tools" class="tab-panel">
+    <div class="container">
+      <div class="card">
+        <h2>🛠 Registered Tools</h2>
+        <div style="margin-bottom:1rem">
+          <button onclick="loadTools()" class="btn-ghost">Refresh Tools</button>
+        </div>
+        <div class="tools-grid" id="toolsGrid">
+          <div style="color:var(--muted);font-size:0.88rem">Loading tools…</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── MEMORY TAB ────────────────────────────────────────────────────────── -->
+  <div id="tab-memory" class="tab-panel">
+    <div class="container">
+      <div class="card">
+        <h2 style="color:var(--memory)">🧠 Long-term Memory</h2>
+        <div style="display:flex;gap:0.75rem;margin-bottom:1rem;align-items:center;flex-wrap:wrap">
+          <button onclick="loadMemory()" class="btn-ghost">Refresh</button>
+          <button onclick="confirmClearMemory()" class="btn-danger btn-sm">🗑 Clear All Memories</button>
+          <span id="memoryStatus" style="color:var(--muted);font-size:0.82rem"></span>
+        </div>
+        <ul class="memory-list" id="memoryList">
+          <li style="color:var(--muted);font-size:0.88rem;padding:1rem 0">No memories yet — run a task to populate memory.</li>
+        </ul>
+        <div class="pagination" id="memoryPagination" style="display:none">
+          <button id="memPrevBtn" onclick="memPage(-1)" class="btn-ghost btn-sm">← Prev</button>
+          <span class="page-info" id="memPageInfo"></span>
+          <button id="memNextBtn" onclick="memPage(1)"  class="btn-ghost btn-sm">Next →</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── USAGE TAB ─────────────────────────────────────────────────────────── -->
+  <div id="tab-usage" class="tab-panel">
+    <div class="container">
+      <!-- Summary stats -->
+      <div class="card">
+        <h2>📊 Usage Overview</h2>
+        <div class="stats-grid" id="statsGrid">
+          <div class="stat-card"><div class="stat-label">Total Calls</div><div class="stat-value" id="statTotalCalls">—</div></div>
+          <div class="stat-card"><div class="stat-label">Commercial (Anthropic)</div><div class="stat-value yellow" id="statCommCalls">—</div></div>
+          <div class="stat-card"><div class="stat-label">Total Cost</div><div class="stat-value green" id="statTotalCost">—</div></div>
+          <div class="stat-card"><div class="stat-label">Commercial Cost</div><div class="stat-value yellow" id="statCommCost">—</div></div>
+          <div class="stat-card"><div class="stat-label">Tokens In</div><div class="stat-value" id="statTokensIn">—</div></div>
+          <div class="stat-card"><div class="stat-label">Tokens Out</div><div class="stat-value" id="statTokensOut">—</div></div>
+          <div class="stat-card"><div class="stat-label">Escalations</div><div class="stat-value purple" id="statEscalations">—</div></div>
+        </div>
+
+        <!-- Cost by day chart (Canvas) -->
+        <div class="chart-wrapper">
+          <h3>Daily Cost (last 30 days) — USD</h3>
+          <canvas id="usageChart"></canvas>
+          <div id="chartEmpty" style="color:var(--muted);font-size:0.84rem;text-align:center;padding:1rem;display:none">
+            No cost data yet.
+          </div>
+        </div>
+
+        <button onclick="loadUsageSummary()" class="btn-ghost btn-sm">Refresh Stats</button>
+      </div>
+
+      <!-- Usage records table -->
+      <div class="card">
+        <h2>📋 Usage Records</h2>
+
+        <!-- Filters -->
+        <div class="usage-filters">
+          <div class="field">
+            <label>Provider</label>
+            <select id="filterProvider">
+              <option value="">All Providers</option>
+              <option value="anthropic">Anthropic</option>
+              <option value="ollama">Ollama</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Date From</label>
+            <input type="date" id="filterDateFrom" />
+          </div>
+          <div class="field">
+            <label>Date To</label>
+            <input type="date" id="filterDateTo" />
+          </div>
+          <button onclick="loadUsageRecords(1)" style="align-self:flex-end">Filter</button>
+          <button onclick="clearUsageFilters()" class="btn-ghost" style="align-self:flex-end">Reset</button>
+        </div>
+
+        <div class="usage-table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Time</th>
+                <th>Model</th>
+                <th>Provider</th>
+                <th>Tokens In</th>
+                <th>Tokens Out</th>
+                <th>Cost (USD)</th>
+                <th>Task</th>
+              </tr>
+            </thead>
+            <tbody id="usageTableBody">
+              <tr><td colspan="7" style="color:var(--muted);text-align:center;padding:1.5rem">No records yet.</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="pagination" id="usagePagination">
+          <button id="usagePrevBtn" onclick="usagePage(-1)" class="btn-ghost btn-sm">← Prev</button>
+          <span class="page-info" id="usagePageInfo"></span>
+          <button id="usageNextBtn" onclick="usagePage(1)"  class="btn-ghost btn-sm">Next →</button>
+        </div>
       </div>
     </div>
   </div>
@@ -403,6 +644,20 @@
 
   <script>
     const API = '';
+
+    // ── Tab navigation ─────────────────────────────────────────────────────
+    function switchTab(name) {
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+      event.currentTarget.classList.add('active');
+      document.getElementById('tab-' + name).classList.add('active');
+
+      // Lazy-load data on first switch
+      if (name === 'skills')  loadSkills();
+      if (name === 'tools')   loadTools();
+      if (name === 'memory')  loadMemory();
+      if (name === 'usage')   { loadUsageSummary(); loadUsageRecords(1); }
+    }
 
     // ── Task execution ─────────────────────────────────────────────────────
 
@@ -449,14 +704,10 @@
         const statusEl = document.getElementById('resultStatus');
         statusEl.textContent = data.status;
         statusEl.className = 'status-badge status-' + data.status;
-        if (data.summary) {
-          document.getElementById('resultSummary').textContent = data.summary;
-        }
+        if (data.summary) document.getElementById('resultSummary').textContent = data.summary;
         if (data.subtasks && data.subtasks.length) {
-          const section = document.getElementById('subtaskSection');
-          section.style.display = 'block';
-          const list = document.getElementById('subtaskList');
-          list.innerHTML = data.subtasks.map(st => `
+          document.getElementById('subtaskSection').style.display = 'block';
+          document.getElementById('subtaskList').innerHTML = data.subtasks.map(st => `
             <li>
               <span class="status-badge status-${st.status}" style="flex-shrink:0">${st.status}</span>
               <span class="subtask-desc">${escHtml(st.description)}</span>
@@ -531,19 +782,14 @@
 
     // ── Approvals ──────────────────────────────────────────────────────────
 
-    let _approvalPollTimer = null;
-
     async function pollApprovals() {
       try {
-        const res = await fetch(`${API}/approvals`);
+        const res  = await fetch(`${API}/approvals`);
         const data = await res.json();
         const count = (data.approvals || []).length;
-        const fab = document.getElementById('approvalFab');
-        const badge = document.getElementById('approvalCount');
-        badge.textContent = count;
+        const fab   = document.getElementById('approvalFab');
+        document.getElementById('approvalCount').textContent = count;
         fab.style.display = count > 0 ? 'flex' : 'none';
-
-        // If modal is open, refresh its contents
         if (document.getElementById('approvalOverlay').classList.contains('open')) {
           renderApprovals(data.approvals || []);
         }
@@ -554,20 +800,16 @@
       document.getElementById('approvalOverlay').classList.add('open');
       refreshApprovals();
     }
-
     function closeApprovalModal() {
       document.getElementById('approvalOverlay').classList.remove('open');
     }
-
     function maybeCloseModal(e) {
-      if (e.target === document.getElementById('approvalOverlay')) {
-        closeApprovalModal();
-      }
+      if (e.target === document.getElementById('approvalOverlay')) closeApprovalModal();
     }
 
     async function refreshApprovals() {
       try {
-        const res = await fetch(`${API}/approvals`);
+        const res  = await fetch(`${API}/approvals`);
         const data = await res.json();
         renderApprovals(data.approvals || []);
       } catch (e) {
@@ -584,18 +826,11 @@
       list.innerHTML = approvals.map(a => `
         <div class="approval-item" id="approval-${escHtml(a.id)}">
           <div class="tool-name">🔧 ${escHtml(a.tool_name)}</div>
-          <div class="approval-meta">
-            Task: <code>${escHtml(a.task_id)}</code> &nbsp;·&nbsp;
-            ${new Date(a.created_at).toLocaleTimeString()}
-          </div>
+          <div class="approval-meta">Task: <code>${escHtml(a.task_id)}</code> &nbsp;·&nbsp; ${new Date(a.created_at).toLocaleTimeString()}</div>
           <div class="tool-args">${escHtml(JSON.stringify(a.args, null, 2))}</div>
           <div class="approval-actions">
-            <button class="btn-approve" onclick="resolveApproval('${escHtml(a.id)}', true)">
-              ✅ 批准
-            </button>
-            <button class="btn-reject" onclick="resolveApproval('${escHtml(a.id)}', false)">
-              ❌ 拒絕
-            </button>
+            <button class="btn-approve" onclick="resolveApproval('${escHtml(a.id)}', true)">✅ 批准</button>
+            <button class="btn-reject"  onclick="resolveApproval('${escHtml(a.id)}', false)">❌ 拒絕</button>
           </div>
         </div>
       `).join('');
@@ -604,37 +839,290 @@
     async function resolveApproval(approvalId, approved) {
       const action = approved ? 'approve' : 'reject';
       try {
-        const res = await fetch(`${API}/approvals/${approvalId}/${action}`, {
-          method: 'POST',
-        });
-        if (!res.ok) {
-          const err = await res.json();
-          toast(err.detail || 'Failed to resolve approval', true);
-          return;
-        }
-        // Animate removal
+        const res = await fetch(`${API}/approvals/${approvalId}/${action}`, { method: 'POST' });
+        if (!res.ok) { const err = await res.json(); toast(err.detail || 'Failed', true); return; }
         const el = document.getElementById(`approval-${approvalId}`);
-        if (el) {
-          el.style.opacity = '0.4';
-          el.style.transition = 'opacity 0.3s';
-          setTimeout(() => el.remove(), 350);
-        }
+        if (el) { el.style.opacity = '0.4'; el.style.transition = 'opacity 0.3s'; setTimeout(() => el.remove(), 350); }
         toast(approved ? '✅ 已批准，任務繼續執行' : '❌ 已拒絕，Agent 將嘗試替代方案');
         setTimeout(refreshApprovals, 400);
+      } catch (e) { toast('Error: ' + e.message, true); }
+    }
+
+    // ── Memory ─────────────────────────────────────────────────────────────
+
+    let _memCurrentPage = 1;
+    let _memTotalPages  = 1;
+
+    async function loadMemory(page = 1) {
+      _memCurrentPage = page;
+      try {
+        const res  = await fetch(`${API}/memory?page=${page}&page_size=20`);
+        const data = await res.json();
+        _memTotalPages = data.total_pages || 1;
+
+        const list   = document.getElementById('memoryList');
+        const status = document.getElementById('memoryStatus');
+        status.textContent = `${data.total} memory records`;
+
+        if (!data.items || !data.items.length) {
+          list.innerHTML = '<li style="color:var(--muted);font-size:0.88rem;padding:1rem 0">No memories yet — run a task to populate memory.</li>';
+          document.getElementById('memoryPagination').style.display = 'none';
+          return;
+        }
+
+        list.innerHTML = data.items.map(m => {
+          const typeClass = 'type-' + (m.type || 'unknown');
+          const label = {
+            task_result: 'Task Result',
+            user_preference: 'User Pref',
+            system_context: 'System',
+            conversation: 'Convo',
+          }[m.type] || m.type;
+          const time   = m.timestamp ? new Date(m.timestamp).toLocaleString() : '';
+          const snippet = escHtml((m.content || '').slice(0, 120)) + ((m.content || '').length > 120 ? '…' : '');
+          return `
+            <li class="memory-item" id="mem-${escHtml(m.id)}">
+              <div class="memory-body">
+                <div class="memory-meta">
+                  <span class="memory-type-badge ${typeClass}">${label}</span>
+                  <span class="memory-time">${time}</span>
+                </div>
+                <div class="memory-content">${snippet}</div>
+              </div>
+              <button class="memory-del-btn" title="Delete" onclick="deleteMemory('${escHtml(m.id)}')">✕</button>
+            </li>`;
+        }).join('');
+
+        // Pagination
+        const pg  = document.getElementById('memoryPagination');
+        const info = document.getElementById('memPageInfo');
+        pg.style.display = data.total_pages > 1 ? 'flex' : 'none';
+        info.textContent  = `Page ${data.page} / ${data.total_pages}  (${data.total} total)`;
+        document.getElementById('memPrevBtn').disabled = page <= 1;
+        document.getElementById('memNextBtn').disabled = page >= data.total_pages;
+
       } catch (e) {
-        toast('Error: ' + e.message, true);
+        toast('Could not load memories: ' + e.message, true);
       }
+    }
+
+    function memPage(delta) {
+      const newPage = _memCurrentPage + delta;
+      if (newPage >= 1 && newPage <= _memTotalPages) loadMemory(newPage);
+    }
+
+    async function deleteMemory(id) {
+      try {
+        const res = await fetch(`${API}/memory/${id}`, { method: 'DELETE' });
+        if (!res.ok) { const err = await res.json(); toast(err.detail || 'Delete failed', true); return; }
+        const el = document.getElementById('mem-' + id);
+        if (el) { el.style.opacity = '0.3'; setTimeout(() => loadMemory(_memCurrentPage), 400); }
+        toast('Memory deleted.');
+      } catch (e) { toast('Error: ' + e.message, true); }
+    }
+
+    async function confirmClearMemory() {
+      if (!confirm('Clear ALL memories? This cannot be undone.')) return;
+      try {
+        const res  = await fetch(`${API}/memory`, { method: 'DELETE' });
+        const data = await res.json();
+        toast(`Cleared ${data.deleted_count} memories.`);
+        loadMemory(1);
+      } catch (e) { toast('Error: ' + e.message, true); }
+    }
+
+    // ── Usage ──────────────────────────────────────────────────────────────
+
+    let _usagePage      = 1;
+    let _usageTotalPages = 1;
+
+    async function loadUsageSummary() {
+      try {
+        const res  = await fetch(`${API}/usage/summary`);
+        const data = await res.json();
+
+        document.getElementById('statTotalCalls').textContent    = fmt(data.total_calls);
+        document.getElementById('statCommCalls').textContent     = fmt(data.commercial_calls);
+        document.getElementById('statTotalCost').textContent     = '$' + (data.total_cost_usd || 0).toFixed(4);
+        document.getElementById('statCommCost').textContent      = '$' + (data.commercial_cost_usd || 0).toFixed(4);
+        document.getElementById('statTokensIn').textContent      = fmtK(data.total_tokens_in);
+        document.getElementById('statTokensOut').textContent     = fmtK(data.total_tokens_out);
+        document.getElementById('statEscalations').textContent   = fmt(data.escalation_count);
+
+        drawChart(data.cost_by_day || []);
+      } catch (e) {
+        console.error('Usage summary error:', e);
+      }
+    }
+
+    async function loadUsageRecords(page) {
+      _usagePage = page || _usagePage;
+      const provider  = document.getElementById('filterProvider').value;
+      const dateFrom  = document.getElementById('filterDateFrom').value;
+      const dateTo    = document.getElementById('filterDateTo').value;
+
+      const params = new URLSearchParams({ page: _usagePage, page_size: 20 });
+      if (provider)  params.set('provider',  provider);
+      if (dateFrom)  params.set('date_from', dateFrom);
+      if (dateTo)    params.set('date_to',   dateTo);
+
+      try {
+        const res  = await fetch(`${API}/usage?${params}`);
+        const data = await res.json();
+        _usageTotalPages = data.total_pages || 1;
+
+        const tbody = document.getElementById('usageTableBody');
+        if (!data.items || !data.items.length) {
+          tbody.innerHTML = '<tr><td colspan="7" style="color:var(--muted);text-align:center;padding:1.5rem">No records found.</td></tr>';
+        } else {
+          tbody.innerHTML = data.items.map(r => {
+            const pClass   = 'provider-' + (r.model_provider || 'ollama');
+            const pLabel   = (r.model_provider || 'ollama').toUpperCase();
+            const timeStr  = r.created_at ? new Date(r.created_at).toLocaleString() : '';
+            const costStr  = r.cost_usd > 0 ? '$' + r.cost_usd.toFixed(6) : '—';
+            const desc     = escHtml((r.task_description || '').slice(0, 60));
+            return `<tr>
+              <td style="font-size:0.76rem;color:var(--muted)">${timeStr}</td>
+              <td style="font-family:monospace;font-size:0.76rem">${escHtml(r.model || '')}</td>
+              <td><span class="provider-badge ${pClass}">${pLabel}</span></td>
+              <td>${fmt(r.tokens_in)}</td>
+              <td>${fmt(r.tokens_out)}</td>
+              <td>${costStr}</td>
+              <td class="task-desc-cell" title="${escHtml(r.task_description || '')}">${desc}</td>
+            </tr>`;
+          }).join('');
+        }
+
+        // Pagination info
+        const info = document.getElementById('usagePageInfo');
+        info.textContent = `Page ${data.page} / ${data.total_pages}  (${data.total} records)`;
+        document.getElementById('usagePrevBtn').disabled = _usagePage <= 1;
+        document.getElementById('usageNextBtn').disabled = _usagePage >= _usageTotalPages;
+
+      } catch (e) {
+        toast('Could not load usage: ' + e.message, true);
+      }
+    }
+
+    function usagePage(delta) {
+      const newPage = _usagePage + delta;
+      if (newPage >= 1 && newPage <= _usageTotalPages) loadUsageRecords(newPage);
+    }
+
+    function clearUsageFilters() {
+      document.getElementById('filterProvider').value  = '';
+      document.getElementById('filterDateFrom').value  = '';
+      document.getElementById('filterDateTo').value    = '';
+      loadUsageRecords(1);
+    }
+
+    // ── Chart ──────────────────────────────────────────────────────────────
+
+    function drawChart(data) {
+      const canvas  = document.getElementById('usageChart');
+      const empty   = document.getElementById('chartEmpty');
+      const ctx     = canvas.getContext('2d');
+
+      // Fill last 30 days with zeros
+      const days = 30;
+      const today = new Date();
+      const allDays = [];
+      for (let i = days - 1; i >= 0; i--) {
+        const d = new Date(today);
+        d.setDate(d.getDate() - i);
+        allDays.push(d.toISOString().slice(0, 10));
+      }
+      const lookup = {};
+      (data || []).forEach(d => { lookup[d.date] = d.cost; });
+      const values = allDays.map(d => lookup[d] || 0);
+      const maxVal = Math.max(...values, 0.000001);
+
+      if (maxVal === 0.000001) {
+        canvas.style.display = 'none';
+        empty.style.display  = 'block';
+        return;
+      }
+      canvas.style.display = 'block';
+      empty.style.display  = 'none';
+
+      // Resize canvas to actual CSS size
+      const W = canvas.offsetWidth || 800;
+      const H = 160;
+      canvas.width  = W;
+      canvas.height = H;
+
+      const PAD_L = 55, PAD_R = 16, PAD_T = 16, PAD_B = 32;
+      const chartW = W - PAD_L - PAD_R;
+      const chartH = H - PAD_T - PAD_B;
+
+      ctx.clearRect(0, 0, W, H);
+
+      // Grid lines
+      const gridLines = 4;
+      ctx.strokeStyle = '#2d3148';
+      ctx.lineWidth   = 1;
+      for (let i = 0; i <= gridLines; i++) {
+        const y = PAD_T + (chartH / gridLines) * i;
+        ctx.beginPath();
+        ctx.moveTo(PAD_L, y);
+        ctx.lineTo(PAD_L + chartW, y);
+        ctx.stroke();
+        // Y label
+        const val = maxVal * (1 - i / gridLines);
+        ctx.fillStyle = '#8888aa';
+        ctx.font = '10px system-ui';
+        ctx.textAlign = 'right';
+        ctx.fillText('$' + val.toFixed(4), PAD_L - 6, y + 4);
+      }
+
+      // X axis labels (every 5 days)
+      ctx.textAlign = 'center';
+      for (let i = 0; i < days; i += 5) {
+        const x = PAD_L + (i / (days - 1)) * chartW;
+        ctx.fillStyle = '#8888aa';
+        ctx.fillText(allDays[i].slice(5), x, H - 8);
+      }
+
+      // Filled area
+      const pts = values.map((v, i) => ({
+        x: PAD_L + (i / (days - 1)) * chartW,
+        y: PAD_T + chartH - (v / maxVal) * chartH,
+      }));
+
+      ctx.beginPath();
+      ctx.moveTo(pts[0].x, PAD_T + chartH);
+      pts.forEach(p => ctx.lineTo(p.x, p.y));
+      ctx.lineTo(pts[pts.length - 1].x, PAD_T + chartH);
+      ctx.closePath();
+      ctx.fillStyle = 'rgba(124,106,247,0.15)';
+      ctx.fill();
+
+      // Line
+      ctx.beginPath();
+      pts.forEach((p, i) => i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y));
+      ctx.strokeStyle = '#7c6af7';
+      ctx.lineWidth   = 2;
+      ctx.lineJoin    = 'round';
+      ctx.stroke();
+
+      // Dots
+      ctx.fillStyle = '#7c6af7';
+      pts.forEach(p => {
+        if (values[pts.indexOf(p)] > 0) {
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, 3, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      });
     }
 
     // ── Toast ──────────────────────────────────────────────────────────────
 
     function toast(msg, isError = false) {
-      // Don't overlap with FAB
-      const fab = document.getElementById('approvalFab');
+      const fab    = document.getElementById('approvalFab');
       const toastEl = document.getElementById('toast');
-      const fabVisible = fab.style.display !== 'none';
-      toastEl.style.bottom = fabVisible ? '4.5rem' : '1.5rem';
-      toastEl.textContent = msg;
+      toastEl.style.bottom = fab.style.display !== 'none' ? '4.5rem' : '1.5rem';
+      toastEl.textContent  = msg;
       toastEl.style.borderColor = isError ? 'var(--error)' : 'var(--border)';
       toastEl.classList.add('show');
       setTimeout(() => toastEl.classList.remove('show'), 3000);
@@ -644,12 +1132,19 @@
       return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
     }
 
+    function fmt(n)  { return (n || 0).toLocaleString(); }
+    function fmtK(n) {
+      n = n || 0;
+      if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M';
+      if (n >= 1_000)     return (n / 1_000).toFixed(1) + 'K';
+      return String(n);
+    }
+
     // ── Init ───────────────────────────────────────────────────────────────
 
     window.onload = () => {
       loadSkills();
       loadTools();
-      // Poll for pending approvals every 3 seconds
       pollApprovals();
       setInterval(pollApprovals, 3000);
     };

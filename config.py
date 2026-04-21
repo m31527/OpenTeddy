@@ -42,6 +42,11 @@ class Config:
         default_factory=lambda: os.getenv("DB_PATH", "openteddy.db")
     )
 
+    # ── Memory (ChromaDB) ────────────────────────────────────────────────────
+    memory_db_path: str = field(
+        default_factory=lambda: os.getenv("MEMORY_DB_PATH", "./memory_db")
+    )
+
     # ── Skill Factory ────────────────────────────────────────────────────────
     skills_dir: str = field(
         default_factory=lambda: os.getenv("SKILLS_DIR", "skills")
