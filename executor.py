@@ -286,17 +286,17 @@ class Executor:
         """Extract fields from Qwen's JSON output (tolerant of extra text)."""
         match = re.search(r"\{.*\}", text, re.DOTALL)
         if not match:
-            return text.strip(), 0.3, None, None
+            return text.strip(), 0.65, None, None
         try:
             data = json.loads(match.group())
             result = str(data.get("result", text.strip()))
-            confidence = float(data.get("confidence", 0.5))
+            confidence = float(data.get("confidence", 0.75))
             confidence = max(0.0, min(1.0, confidence))
             skill_hint = data.get("skill_needed") or None
             skill_desc = data.get("skill_description") or None
             return result, confidence, skill_hint, skill_desc
         except (json.JSONDecodeError, ValueError):
-            return text.strip(), 0.3, None, None
+            return text.strip(), 0.65, None, None
 
     async def _request_skill_creation(self, name: str, description: str) -> None:
         """Fire-and-forget: ask SkillFactory to build a new skill."""

@@ -115,10 +115,19 @@ class Orchestrator:
             new_skills  = [s.name for s in all_skills if s.success_count == 0]
 
             # 4. Synthesise final summary (pass task_id for usage recording)
-            results = [st.result or "" for st in subtasks if st.result]
-            summary = await self.escalation.synthesize_summary(
-                req.goal, results, task_id=req.id
+            results_texts = [st.result or "" for st in subtasks if st.result]
+            had_escalation = any(
+                getattr(st, 'status', None) == TaskStatus.ESCALATED for st in subtasks
             )
+
+            if had_escalation or not results_texts:
+                # 只有真的升級過才用 Claude 做 summary
+                summary = await self.escalation.synthesize_summary(
+                    req.goal, results_texts, task_id=req.id
+                )
+            else:
+                # 全部地端完成 → 直接組合結果，不呼叫 Claude
+                summary = "\n\n".join(results_texts)
 
             overall_status = self._derive_status(subtasks)
             await self.tracker.update_task_status(req.id, overall_status, summary)
@@ -193,19 +202,28 @@ class Orchestrator:
         return subtasks
 
     async def _run_subtask(self, st: SubTask, context: Dict[str, Any]) -> SubTask:
-        """Execute one subtask; escalate if confidence too low."""
-        st = await self.executor.execute(st, context)
+        """Execute one subtask with retry; only escalate to Claude after all retries fail."""
+        max_local_retries = getattr(config, 'escalation_failure_limit', 3)
 
-        should_escalate = (
-            st.status == TaskStatus.FAILED
-            or st.confidence < config.escalation_confidence_threshold
-        )
-        if should_escalate:
+        for attempt in range(max_local_retries):
+            st = await self.executor.execute(st, context)
+            confidence = getattr(st, 'confidence', 1.0)
+            escalation_threshold = getattr(config, 'escalation_confidence_threshold', 0.6)
+
+            if st.status != TaskStatus.FAILED and confidence >= escalation_threshold:
+                return st  # 地端成功，直接回傳
+
             logger.info(
-                "Subtask %s needs escalation (status=%s, conf=%.2f)",
-                st.id, st.status, st.confidence,
+                "Subtask %s local attempt %d/%d failed (conf=%.2f), retrying...",
+                st.id, attempt + 1, max_local_retries, confidence,
             )
-            st = await self.escalation.resolve(st, context)
+
+        # 所有重試都失敗 → 才升級到 Claude
+        logger.info(
+            "Subtask %s escalating to Claude after %d failed attempts.",
+            st.id, max_local_retries,
+        )
+        st = await self.escalation.resolve(st, context)
         return st
 
     async def _gemma_complete(
