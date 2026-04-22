@@ -38,6 +38,22 @@ _DOCKER_UNHEALTHY_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Detect a subtask description that is essentially just ``cd <path>``.
+# Allows optional leading "執行 " / "run ". Stops at shell operators so we
+# don't accidentally swallow commands that already chain with && / ; / |.
+_BARE_CD_RE = re.compile(
+    r"""
+    ^\s*
+    (?:執行\s+|run\s+)?
+    cd\s+
+    (?P<path>[^\s&|;<>]+)
+    \s*$
+    """,
+    re.VERBOSE | re.IGNORECASE,
+)
+# Strip leading "執行 " / "run " when merging descriptions.
+_LEADING_VERB_RE = re.compile(r"^(?:執行|run)\s+", re.IGNORECASE)
+
 _PLAN_SYSTEM_BASE = """\
 你是 Teddy-Orch，OpenTeddy 多智能體系統的任務規劃 AI。
 把用戶的目標拆解成具體的、可執行的子任務。
@@ -52,6 +68,11 @@ _PLAN_SYSTEM_BASE = """\
 - 不要說「分析專案」，要說「執行 ls -la 和 cat README.md 查看專案結構」
 - 不要說「設定環境」，要說「執行 cp .env.example .env 建立設定檔」
 - 包含驗證步驟：做完每個重要操作後，加入一個子任務執行指令確認結果
+- 【目錄切換規則 — 很重要】每個子任務都是獨立的 subprocess，`cd` 不會留給下一步。
+  需要進入某目錄操作時，**必須**把 `cd` 跟實際動作串在同一個子任務用 `&&`。
+  ✅ 正確：「cd /path/to/project && docker compose up -d --build」
+  ❌ 錯誤：先一個子任務「cd /path/to/project」，再一個子任務「docker compose up」
+  docker compose 也可以用 `-f /path/to/docker-compose.yml` 取代 cd。
 - 子任務數量控制在 10 個以下
 
 【重要輸出規則】：
@@ -102,6 +123,9 @@ class Orchestrator:
         try:
             # 1. Plan (with optional memory context)
             subtasks = await self._plan(req)
+            # Defensive pass: merge bare `cd X` subtasks into the next
+            # subtask with `&&` so the cd actually takes effect.
+            subtasks = self._flatten_cd_subtasks(subtasks)
             for st in subtasks:
                 await self.tracker.create_subtask(st)
 
@@ -243,6 +267,52 @@ class Orchestrator:
             ]
         logger.info("Planned %d subtasks for task %s", len(subtasks), req.id)
         return subtasks
+
+    @staticmethod
+    def _flatten_cd_subtasks(subtasks: List[SubTask]) -> List[SubTask]:
+        """Merge ``cd <path>`` subtasks into the following subtask.
+
+        Each shell command runs in its own subprocess, so a bare ``cd``
+        subtask has no lasting effect on subsequent subtasks. When the
+        planner (Gemma) splits a directory switch and its operation into
+        two separate subtasks — a classic mistake — collapse them into a
+        single ``cd <path> && <next-command>`` subtask.
+
+        A trailing bare cd with nothing after it is dropped (no-op).
+        """
+        if not subtasks:
+            return subtasks
+
+        flattened: List[SubTask] = []
+        i = 0
+        n = len(subtasks)
+        while i < n:
+            st = subtasks[i]
+            match = _BARE_CD_RE.match(st.description or "")
+            if match and i + 1 < n:
+                path = match.group("path")
+                nxt = subtasks[i + 1]
+                next_desc = _LEADING_VERB_RE.sub("", nxt.description or "").strip()
+                nxt.description = f"執行 cd {path} && {next_desc}"
+                logger.info(
+                    "Flattening bare 'cd %s' subtask into next: %r",
+                    path, nxt.description[:120],
+                )
+                i += 1  # skip the bare cd; next iteration handles the merged next
+                continue
+            if match and i + 1 == n:
+                logger.info(
+                    "Dropping trailing bare 'cd %s' subtask (no-op).",
+                    match.group("path"),
+                )
+                i += 1
+                continue
+            flattened.append(st)
+            i += 1
+
+        for idx, st in enumerate(flattened):
+            st.order = idx
+        return flattened
 
     async def _run_subtask(self, st: SubTask, context: Dict[str, Any]) -> SubTask:
         """Execute one subtask with retry; only escalate to Claude after all retries fail.

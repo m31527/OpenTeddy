@@ -29,8 +29,9 @@ _MAX_TOOL_ROUNDS = 10   # prevent infinite tool-call loops
 # Objective failure markers in tool results — override self-reported confidence
 # when present, so Claude takes over instead of a false "completed".
 _FAILURE_SIGNAL_RE = re.compile(
-    r"\b(unhealthy|Restarting|Exited \(\d+\)|Dead|CrashLoopBackOff|"
-    r"Error response from daemon|ERROR \d{4}(?:\s*\(\d+\))?)\b",
+    r"\b(?:unhealthy|Restarting|Exited \(\d+\)|Dead|CrashLoopBackOff|"
+    r"Error response from daemon|ERROR \d{4}(?:\s*\(\d+\))?|"
+    r"WARNING: no compose file found)",
     re.IGNORECASE,
 )
 _FAILURE_CLAMP_CONFIDENCE = 0.3
