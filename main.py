@@ -22,8 +22,11 @@ from escalation import EscalationAgent
 from executor import Executor
 from memory import MemoryManager
 from models import (
+    CreateSessionRequest,
     RunRequest,
     RunResponse,
+    Session,
+    SessionListResponse,
     SkillListResponse,
     StatusResponse,
     TaskRequest,
@@ -194,7 +197,19 @@ async def health() -> dict:
 
 @app.post("/run", response_model=RunResponse, status_code=202)
 async def run_task(body: RunRequest) -> RunResponse:
-    req    = TaskRequest(goal=body.goal, context=body.context, priority=body.priority)
+    req = TaskRequest(
+        goal=body.goal,
+        context=body.context,
+        priority=body.priority,
+        session_id=body.session_id,
+    )
+    # Auto-create the session row if the client gave us a new id so the
+    # sessions list picks it up on refresh.
+    if body.session_id:
+        try:
+            await tracker.create_session(body.session_id, body.goal[:60] or "New session")
+        except Exception:  # noqa: BLE001
+            pass
     result = await orchestrator.run(req)
     return RunResponse(
         task_id=result.task_id,
@@ -218,8 +233,41 @@ async def get_task_status(task_id: str) -> StatusResponse:
 
 
 @app.get("/tasks", response_model=list)
-async def list_tasks(limit: int = 20) -> list:
-    return await tracker.list_tasks(limit=limit)
+async def list_tasks(
+    limit: int = 20, session_id: Optional[str] = None,
+) -> list:
+    return await tracker.list_tasks(limit=limit, session_id=session_id)
+
+
+# ── Session endpoints ─────────────────────────────────────────────────────────
+
+@app.get("/sessions", response_model=SessionListResponse)
+async def list_sessions(limit: int = 50) -> SessionListResponse:
+    rows = await tracker.list_sessions(limit=limit)
+    return SessionListResponse(sessions=[Session(**r) for r in rows])
+
+
+@app.post("/sessions", response_model=Session)
+async def create_session(body: CreateSessionRequest) -> Session:
+    s = Session(title=body.title or "New session")
+    await tracker.create_session(s.id, s.title)
+    return s
+
+
+@app.patch("/sessions/{session_id}", response_model=Session)
+async def rename_session(session_id: str, body: CreateSessionRequest) -> Session:
+    await tracker.rename_session(session_id, body.title or "Session")
+    rows = await tracker.list_sessions(limit=1000)
+    for r in rows:
+        if r["id"] == session_id:
+            return Session(**r)
+    raise HTTPException(status_code=404, detail="Session not found")
+
+
+@app.delete("/sessions/{session_id}")
+async def delete_session(session_id: str) -> dict:
+    await tracker.delete_session(session_id)
+    return {"ok": True}
 
 
 @app.get("/skills", response_model=SkillListResponse)

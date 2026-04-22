@@ -188,7 +188,9 @@ class Orchestrator:
                 summary = await self._gemma_summarize(req.goal, tool_log_text, task_id=req.id)
 
             # 6. 任務完成後自動執行確認指令，把結果附加到 summary
-            confirmation_output = await self._run_confirmation_checks(req.goal)
+            confirmation_output = await self._run_confirmation_checks(
+                req.goal, subtasks=subtasks,
+            )
             if confirmation_output:
                 summary += confirmation_output
 
@@ -202,6 +204,7 @@ class Orchestrator:
                         task_id=req.id,
                         goal=req.goal,
                         final_output=summary,
+                        session_id=req.session_id,
                     )
                 except Exception as exc:  # noqa: BLE001
                     logger.warning("Memory store failed (non-fatal): %s", exc)
@@ -231,10 +234,15 @@ class Orchestrator:
         skill_names   = [s.name for s in active_skills]
 
         # ── Retrieve long-term memory context ────────────────────────────────
+        # Scoped to the request's session_id so cross-project memories don't
+        # leak in (e.g. prior mold-harvester tasks bleeding into a fresh
+        # Pixelle-Video deployment).
         memory_ctx = ""
         if self.memory is not None:
             try:
-                memory_ctx = await self.memory.get_context_for_task(req.goal)
+                memory_ctx = await self.memory.get_context_for_task(
+                    req.goal, session_id=req.session_id,
+                )
             except Exception as exc:  # noqa: BLE001
                 logger.warning("Memory retrieval failed (non-fatal): %s", exc)
 
@@ -388,34 +396,70 @@ class Orchestrator:
         """根據子任務類型執行驗證指令。
 
         回傳 ``(驗證輸出, is_healthy)``；若沒有匹配的驗證規則回傳 None。
-        對於 ``docker ps``，會額外解析 STATUS 欄並在偵測到 unhealthy /
-        Restarting / Exited 時自動抓取 ``docker logs`` 與 ``docker inspect``，
-        並把 is_healthy 設為 False 以觸發升級。
+        對於 docker 類操作，會優先使用 ``docker compose ps``（以子任務
+        裡的 ``cd X`` 或 ``-f path`` 當作專案根），只看本次任務啟動的
+        服務，而不是整台主機的所有容器。在偵測到 unhealthy / Restarting /
+        Exited 時自動抓取 ``docker logs`` 與 ``docker inspect``，並把
+        is_healthy 設為 False 以觸發升級。
         """
-        desc = st.description.lower()
+        desc = st.description
+        desc_lower = desc.lower()
 
-        # 對應關鍵字 → 驗證指令
+        # Docker 操作：嘗試用 scoped 指令避免看到無關容器
+        docker_keywords = ["docker compose", "docker-compose", "docker run", "docker"]
+        if any(kw in desc_lower for kw in docker_keywords):
+            scoped_cmd = self._compose_scoped_ps_cmd(desc) or "docker ps"
+            logger.info("Running verification '%s' for subtask %s", scoped_cmd, st.id)
+            output = await self._run_cmd_capture(scoped_cmd, timeout=10.0, max_chars=1200)
+            if output is None:
+                return None
+            return await self._inspect_docker_health(output)
+
+        # 其他類型：固定映射
         checks: List[Tuple[List[str], str]] = [
             (["git clone"],                    "ls -la"),
-            (["docker compose", "docker-compose", "docker run"],  "docker ps"),
-            (["docker"],                       "docker ps"),
             (["pip install"],                  "pip list | head -20"),
             (["npm install", "yarn install"],  "ls node_modules 2>/dev/null | head -10 || echo 'node_modules not found'"),
             (["mkdir"],                        "ls -la"),
             (["cp ", "copy "],                 "ls -la"),
         ]
-
         for keywords, cmd in checks:
-            if any(kw in desc for kw in keywords):
+            if any(kw in desc_lower for kw in keywords):
                 logger.info("Running verification '%s' for subtask %s", cmd, st.id)
                 output = await self._run_cmd_capture(cmd, timeout=10.0, max_chars=800)
                 if output is None:
                     return None
-                if "docker ps" in cmd:
-                    return await self._inspect_docker_health(output)
                 return (output, True)
 
         return None  # 沒有匹配的驗證規則
+
+    @staticmethod
+    def _compose_scoped_ps_cmd(desc: str) -> Optional[str]:
+        """Produce a scoped ``docker compose ps`` command when the subtask
+        clearly targets a specific compose project.
+
+        Picks the first of these signals that appears in the description:
+        - ``-f <path>`` / ``--file <path>``  → ``docker compose -f <path> ps``
+        - ``cd <dir>``                        → ``cd <dir> && docker compose ps``
+
+        Returns None when no target can be extracted, letting the caller
+        fall back to plain ``docker ps``.
+        """
+        f_match = re.search(r"(?:^|\s)(?:-f|--file)(?:\s+|=)(\S+)", desc)
+        if f_match:
+            path = f_match.group(1).strip().rstrip(";&|")
+            return (
+                f"docker compose -f {path} ps --format "
+                "'table {{.Name}}\\t{{.Status}}\\t{{.Service}}'"
+            )
+        cd_match = re.search(r"\bcd\s+([^\s&|;<>]+)", desc)
+        if cd_match:
+            path = cd_match.group(1).strip()
+            return (
+                f"cd {path} && docker compose ps --format "
+                "'table {{.Name}}\\t{{.Status}}\\t{{.Service}}'"
+            )
+        return None
 
     async def _inspect_docker_health(self, ps_output: str) -> Tuple[str, bool]:
         """Scan ``docker ps`` output. If any row shows unhealthy/Restarting/
@@ -489,6 +533,11 @@ class Orchestrator:
 4. 如果執行記錄中有 docker ps、ls、pip list 等驗證結果，把它納入報告
 5. 保持簡潔，不要重複相同的資訊
 6. 完全使用繁體中文回答
+7. 【非常重要】只能描述「工具執行記錄」中實際出現過的容器、檔案、錯誤。
+   不要提及記錄裡沒有的容器名稱 (例如任何未出現在本次 log 的舊容器)、
+   也不要把主機上其他無關的狀態當成本次任務的失敗。
+   如果某個錯誤訊息的容器名稱跟本次任務的目標不相關，請明確指出
+   「此為主機既有狀態，與本次任務無關」。
 """
         prompt = (
             f"用戶的目標：{goal}\n\n"
@@ -506,13 +555,28 @@ class Orchestrator:
             return "\n".join(lines)
         return result
 
-    async def _run_confirmation_checks(self, goal: str) -> str:
-        """根據任務目標關鍵字，執行確認指令並回傳格式化結果。"""
+    async def _run_confirmation_checks(
+        self, goal: str, subtasks: Optional[List[SubTask]] = None,
+    ) -> str:
+        """根據任務目標關鍵字，執行確認指令並回傳格式化結果。
+
+        對於 Docker 任務，會從子任務描述中擷取 compose 路徑（``cd X`` 或
+        ``-f path``），優先使用 ``docker compose ps`` 只看本次任務的服務，
+        不汙染主機上其他既有容器。擷取不到才退回全域 ``docker ps``。
+        """
         goal_lower = goal.lower()
         confirmation_cmds: List[Tuple[str, str]] = []
 
         if "docker" in goal_lower:
-            confirmation_cmds.append(("Docker 容器狀態", "docker ps"))
+            scoped_cmd = None
+            for st in (subtasks or []):
+                scoped_cmd = self._compose_scoped_ps_cmd(st.description or "")
+                if scoped_cmd:
+                    break
+            if scoped_cmd:
+                confirmation_cmds.append(("本任務容器狀態", scoped_cmd))
+            else:
+                confirmation_cmds.append(("Docker 容器狀態", "docker ps"))
         if any(kw in goal_lower for kw in ["clone", "git", "repository", "repo"]):
             confirmation_cmds.append(("目錄內容", "ls -la ~/ 2>/dev/null || ls -la ."))
         if any(kw in goal_lower for kw in ["install", "pip", "package"]):

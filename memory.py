@@ -101,6 +101,7 @@ class MemoryManager:
         memory_type: str,
         task_id: str,
         importance: float = 0.5,
+        session_id: Optional[str] = None,
     ) -> Optional[str]:
         """
         Embed *content* and store it in the collection.
@@ -111,6 +112,9 @@ class MemoryManager:
                          "system_context" | "conversation".
             task_id:     Parent task ID for provenance.
             importance:  0.0–1.0 float used for future weighting.
+            session_id:  Logical session / thread; retrieval is scoped to
+                         this session to prevent cross-project contamination.
+                         Empty string means "global".
 
         Returns:
             The generated memory ID, or None on failure.
@@ -131,6 +135,7 @@ class MemoryManager:
                     "task_id": task_id,
                     "timestamp": timestamp,
                     "importance": float(importance),
+                    "session_id": session_id or "",
                 }],
                 ids=[memory_id],
             )
@@ -146,13 +151,19 @@ class MemoryManager:
     # ── Read ──────────────────────────────────────────────────────────────────
 
     async def search_memory(
-        self, query: str, n_results: int = 5
+        self, query: str, n_results: int = 5,
+        session_id: Optional[str] = None,
     ) -> list[dict]:
         """
         Semantic similarity search.
 
+        When *session_id* is provided, results are restricted to memories
+        from that session. This is the primary defence against the
+        "mold-harvester context leaking into a Pixelle-Video task" bug.
+
         Returns a list of dicts:
-          {id, content, type, task_id, timestamp, importance, relevance_score}
+          {id, content, type, task_id, session_id, timestamp, importance,
+           relevance_score}
         Most relevant first.
         """
         if not self.is_available or not query:
@@ -163,11 +174,16 @@ class MemoryManager:
             if total == 0:
                 return []
 
-            actual_n = min(n_results, total)
-            results = self._collection.query(  # type: ignore[union-attr]
-                query_texts=[query],
-                n_results=actual_n,
-            )
+            # Over-fetch when filtering because the where clause runs after
+            # the nearest-neighbour lookup in ChromaDB's query pipeline.
+            actual_n = min(n_results * (3 if session_id else 1), total)
+            query_kwargs: dict = {
+                "query_texts": [query],
+                "n_results":   actual_n,
+            }
+            if session_id:
+                query_kwargs["where"] = {"session_id": session_id}
+            results = self._collection.query(**query_kwargs)  # type: ignore[union-attr]
 
             docs      = results.get("documents", [[]])[0]
             metas     = results.get("metadatas",  [[]])[0]
@@ -181,24 +197,29 @@ class MemoryManager:
                     "content":         doc,
                     "type":            meta.get("type", "unknown"),
                     "task_id":         meta.get("task_id", ""),
+                    "session_id":      meta.get("session_id", ""),
                     "timestamp":       meta.get("timestamp", ""),
                     "importance":      float(meta.get("importance", 0.5)),
                     "relevance_score": round(max(0.0, 1.0 - float(dist)), 4),
                 })
-            return memories
+            return memories[:n_results]
 
         except Exception as exc:  # noqa: BLE001
             logger.error("search_memory failed: %s", exc)
             return []
 
-    async def get_context_for_task(self, task_description: str) -> str:
+    async def get_context_for_task(
+        self, task_description: str, session_id: Optional[str] = None,
+    ) -> str:
         """
         Retrieve the top-5 most relevant memories and format them as a
         context block ready for injection into an LLM system prompt.
 
         Returns empty string if no memories exist or ChromaDB is unavailable.
         """
-        memories = await self.search_memory(task_description, n_results=5)
+        memories = await self.search_memory(
+            task_description, n_results=5, session_id=session_id,
+        )
         if not memories:
             return ""
 
@@ -224,10 +245,12 @@ class MemoryManager:
         task_id: str,
         goal: str,
         final_output: str,
+        session_id: Optional[str] = None,
     ) -> None:
         """
         Called automatically after a task completes.
-        Stores a task-result summary and any detected user preferences.
+        Stores a task-result summary and any detected user preferences,
+        tagged with *session_id* so retrieval is scoped to the same thread.
         """
         if not self.is_available:
             return
@@ -239,6 +262,7 @@ class MemoryManager:
             memory_type="task_result",
             task_id=task_id,
             importance=0.7,
+            session_id=session_id,
         )
 
         # 2. Extract and store detected user preferences
@@ -248,6 +272,7 @@ class MemoryManager:
                 memory_type="user_preference",
                 task_id=task_id,
                 importance=0.8,
+                session_id=session_id,
             )
 
     # ── Pagination / management ───────────────────────────────────────────────

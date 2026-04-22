@@ -46,6 +46,12 @@ class TaskRequest(BaseModel):
     context: Dict[str, Any] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=datetime.utcnow)
     priority: int = Field(default=5, ge=1, le=10)
+    session_id: Optional[str] = Field(
+        default=None,
+        description="Logical session / thread this task belongs to. Memory "
+                    "retrieval is scoped to this session to prevent "
+                    "cross-project contamination.",
+    )
 
 
 class SubTask(BaseModel):
@@ -125,6 +131,22 @@ class RunRequest(BaseModel):
     goal: str
     context: Dict[str, Any] = Field(default_factory=dict)
     priority: int = Field(default=5, ge=1, le=10)
+    session_id: Optional[str] = None
+
+
+class Session(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    title: str = "New session"
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class SessionListResponse(BaseModel):
+    sessions: List[Session]
+
+
+class CreateSessionRequest(BaseModel):
+    title: Optional[str] = None
 
 
 class RunResponse(BaseModel):
@@ -147,6 +169,13 @@ class SkillListResponse(BaseModel):
 # ── SQLite DDL (used by tracker.py) ──────────────────────────────────────────
 
 SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS sessions (
+    id          TEXT PRIMARY KEY,
+    title       TEXT NOT NULL DEFAULT 'New session',
+    created_at  TEXT NOT NULL,
+    updated_at  TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS tasks (
     id          TEXT PRIMARY KEY,
     goal        TEXT NOT NULL,
@@ -155,8 +184,11 @@ CREATE TABLE IF NOT EXISTS tasks (
     summary     TEXT,
     priority    INTEGER DEFAULT 5,
     created_at  TEXT NOT NULL,
-    completed_at TEXT
+    completed_at TEXT,
+    session_id  TEXT
 );
+
+CREATE INDEX IF NOT EXISTS idx_tasks_session ON tasks(session_id);
 
 CREATE TABLE IF NOT EXISTS subtasks (
     id             TEXT PRIMARY KEY,

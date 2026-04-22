@@ -66,13 +66,16 @@ class Tracker:
         logger.info("Tracker opened: %s", self.db_path)
 
     async def _migrate_usage_columns(self) -> None:
-        """Add new columns to usage_records for pre-existing databases."""
-        # SQLite does not support ADD COLUMN IF NOT EXISTS directly,
-        # so we catch the OperationalError if the column already exists.
+        """Add new columns for pre-existing databases.
+
+        SQLite does not support ADD COLUMN IF NOT EXISTS, so we catch the
+        OperationalError when a column already exists.
+        """
         migrations = [
             "ALTER TABLE usage_records ADD COLUMN session_id TEXT NOT NULL DEFAULT ''",
             "ALTER TABLE usage_records ADD COLUMN model_provider TEXT NOT NULL DEFAULT 'ollama'",
             "ALTER TABLE usage_records ADD COLUMN task_description TEXT DEFAULT ''",
+            "ALTER TABLE tasks ADD COLUMN session_id TEXT",
         ]
         for sql in migrations:
             try:
@@ -103,8 +106,8 @@ class Tracker:
 
     async def create_task(self, req: TaskRequest) -> None:
         await self.db.execute(
-            "INSERT INTO tasks(id, goal, context, status, priority, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO tasks(id, goal, context, status, priority, created_at, session_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
             (
                 req.id,
                 req.goal,
@@ -112,9 +115,17 @@ class Tracker:
                 TaskStatus.PENDING.value,
                 req.priority,
                 req.created_at.isoformat(),
+                req.session_id,
             ),
         )
         await self.db.commit()
+        # Bump session updated_at so the session list can order by recency.
+        if req.session_id:
+            await self.db.execute(
+                "UPDATE sessions SET updated_at=? WHERE id=?",
+                (datetime.utcnow().isoformat(), req.session_id),
+            )
+            await self.db.commit()
 
     async def update_task_status(
         self,
@@ -138,12 +149,53 @@ class Tracker:
             row = await cur.fetchone()
             return dict(row) if row else None
 
-    async def list_tasks(self, limit: int = 50) -> List[dict]:
+    async def list_tasks(
+        self, limit: int = 50, session_id: Optional[str] = None,
+    ) -> List[dict]:
+        if session_id:
+            async with self.db.execute(
+                "SELECT * FROM tasks WHERE session_id=? "
+                "ORDER BY created_at DESC LIMIT ?",
+                (session_id, limit),
+            ) as cur:
+                rows = await cur.fetchall()
+        else:
+            async with self.db.execute(
+                "SELECT * FROM tasks ORDER BY created_at DESC LIMIT ?", (limit,)
+            ) as cur:
+                rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+
+    # ── Session CRUD ──────────────────────────────────────────────────────────
+
+    async def create_session(self, session_id: str, title: str) -> None:
+        now = datetime.utcnow().isoformat()
+        await self.db.execute(
+            "INSERT OR IGNORE INTO sessions(id, title, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?)",
+            (session_id, title, now, now),
+        )
+        await self.db.commit()
+
+    async def list_sessions(self, limit: int = 50) -> List[dict]:
         async with self.db.execute(
-            "SELECT * FROM tasks ORDER BY created_at DESC LIMIT ?", (limit,)
+            "SELECT * FROM sessions ORDER BY updated_at DESC LIMIT ?", (limit,)
         ) as cur:
             rows = await cur.fetchall()
             return [dict(r) for r in rows]
+
+    async def rename_session(self, session_id: str, title: str) -> None:
+        await self.db.execute(
+            "UPDATE sessions SET title=?, updated_at=? WHERE id=?",
+            (title, datetime.utcnow().isoformat(), session_id),
+        )
+        await self.db.commit()
+
+    async def delete_session(self, session_id: str) -> None:
+        """Remove the session row. Tasks stay but their session_id dangles —
+        they will no longer appear in the filtered task list."""
+        await self.db.execute("DELETE FROM sessions WHERE id=?", (session_id,))
+        await self.db.commit()
 
     # ── SubTask CRUD ──────────────────────────────────────────────────────────
 

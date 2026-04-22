@@ -759,6 +759,38 @@
       flex-direction: column;
       height: calc(100vh - 106px);
     }
+    .session-bar {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.5rem 1.25rem;
+      border-bottom: 1px solid var(--border);
+      background: var(--bg-secondary);
+      font-size: 0.8rem;
+    }
+    .session-bar-label {
+      color: var(--text-muted);
+      font-weight: 500;
+    }
+    .session-bar select {
+      flex: 1;
+      max-width: 360px;
+      padding: 0.3rem 0.55rem;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: var(--surface);
+      font-size: 0.82rem;
+      color: var(--text-primary);
+    }
+    .session-btn {
+      padding: 0.3rem 0.7rem;
+      font-size: 0.78rem;
+    }
+    .session-hint {
+      margin-left: auto;
+      color: var(--text-muted);
+      font-size: 0.72rem;
+    }
     .chat-messages {
       flex: 1;
       overflow-y: auto;
@@ -1078,6 +1110,13 @@
   <!-- ── TASKS TAB — Chat Interface ──────────────────────────────────────── -->
   <div id="tab-tasks" class="tab-panel active">
     <div class="chat-layout">
+      <div class="session-bar">
+        <label for="sessionSelect" class="session-bar-label">Session</label>
+        <select id="sessionSelect" onchange="switchSession(this.value)"></select>
+        <button type="button" class="btn-ghost session-btn" onclick="createNewSession()" title="Start a new session">+ New</button>
+        <button type="button" class="btn-ghost session-btn" onclick="renameCurrentSession()" title="Rename this session">Rename</button>
+        <span id="sessionHint" class="session-hint"></span>
+      </div>
       <div class="chat-messages" id="chatMessages">
         <div class="msg-agent">
           Hello! I'm OpenTeddy 🐩 Describe what you'd like me to do and I'll get started.
@@ -1397,6 +1436,15 @@
     // Map of tool-call key → { timer30, timer90 } for stuck-detection UI
     let _stuckTimers = {};
 
+    // ── Session state ───────────────────────────────────────────────────────
+    // _currentSessionId is the logical thread/conversation the user is in.
+    // Persisted to localStorage so refreshes don't lose the active session.
+    // Memory retrieval + task listing are both scoped to this id server-side,
+    // which stops cross-project contamination (e.g. mold-harvester leaking
+    // into a Pixelle-Video run).
+    let _currentSessionId = localStorage.getItem('teddy.session_id') || null;
+    let _sessionTitles = {};  // id → title cache for the "Rename" button
+
     function initWS() {
       const proto = location.protocol === 'https:' ? 'wss' : 'ws';
       _ws = new WebSocket(`${proto}://${location.host}/ws`);
@@ -1426,19 +1474,110 @@
       return el;
     }
 
+    // ── Sessions ────────────────────────────────────────────────────────────
+    async function loadSessions() {
+      try {
+        const res = await fetch(`${API}/sessions`);
+        if (!res.ok) return;
+        const data = await res.json();
+        const sel = document.getElementById('sessionSelect');
+        sel.innerHTML = '';
+        _sessionTitles = {};
+        const sessions = (data.sessions || []);
+
+        // No sessions yet: auto-create one so every task always lives in a thread.
+        if (sessions.length === 0) {
+          const created = await apiCreateSession('Default session');
+          if (!created) return;
+          sessions.push(created);
+        }
+
+        for (const s of sessions) {
+          _sessionTitles[s.id] = s.title;
+          const opt = document.createElement('option');
+          opt.value = s.id;
+          opt.textContent = s.title;
+          sel.appendChild(opt);
+        }
+
+        // Validate / pick a current session.
+        if (!_currentSessionId || !_sessionTitles[_currentSessionId]) {
+          _currentSessionId = sessions[0].id;
+          localStorage.setItem('teddy.session_id', _currentSessionId);
+        }
+        sel.value = _currentSessionId;
+      } catch (e) {
+        console.debug('loadSessions error:', e);
+      }
+    }
+
+    async function apiCreateSession(title) {
+      try {
+        const res = await fetch(`${API}/sessions`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ title }),
+        });
+        if (!res.ok) return null;
+        return await res.json();
+      } catch { return null; }
+    }
+
+    async function createNewSession() {
+      const title = prompt('Session name?', 'New session');
+      if (title === null) return;
+      const s = await apiCreateSession(title.trim() || 'New session');
+      if (!s) { toast('Could not create session', true); return; }
+      _currentSessionId = s.id;
+      localStorage.setItem('teddy.session_id', s.id);
+      await loadSessions();
+      await loadChatHistory();
+    }
+
+    async function switchSession(id) {
+      if (!id || id === _currentSessionId) return;
+      _currentSessionId = id;
+      localStorage.setItem('teddy.session_id', id);
+      await loadChatHistory();
+    }
+
+    async function renameCurrentSession() {
+      if (!_currentSessionId) return;
+      const current = _sessionTitles[_currentSessionId] || '';
+      const next = prompt('Rename this session:', current);
+      if (next === null || next.trim() === '' || next.trim() === current) return;
+      try {
+        const res = await fetch(`${API}/sessions/${_currentSessionId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ title: next.trim() }),
+        });
+        if (!res.ok) throw new Error(res.statusText);
+        await loadSessions();
+      } catch (e) { toast('Rename failed: ' + e.message, true); }
+    }
+
     // Load the last N completed tasks from the server and render them as
     // prior Q&A bubbles, so refreshing or coming back later preserves the
     // conversation. The server-side SQLite store is the source of truth.
     async function loadChatHistory(limit = 20) {
       try {
-        const res = await fetch(`${API}/tasks?limit=${limit}`);
+        const qs = new URLSearchParams({ limit: String(limit) });
+        if (_currentSessionId) qs.set('session_id', _currentSessionId);
+        const res = await fetch(`${API}/tasks?${qs.toString()}`);
         if (!res.ok) return;
         const tasks = await res.json();
-        if (!Array.isArray(tasks) || tasks.length === 0) return;
-
         const chat = document.getElementById('chatMessages');
-        // Replace the default greeting once we have real history.
         chat.innerHTML = '';
+
+        if (!Array.isArray(tasks) || tasks.length === 0) {
+          // Fresh session — show the greeting again so the chat isn't empty.
+          const g = document.createElement('div');
+          g.className = 'msg-agent';
+          g.textContent = "Hello! I'm OpenTeddy 🐩 This is a new session — describe what you'd like me to do.";
+          chat.appendChild(g);
+          return;
+        }
 
         // Oldest first so the newest sits above the input.
         const ordered = tasks.slice().reverse();
@@ -1646,7 +1785,12 @@
         const res  = await fetch(`${API}/run`, {
           method:  'POST',
           headers: { 'Content-Type': 'application/json' },
-          body:    JSON.stringify({ goal, priority, context: {} }),
+          body:    JSON.stringify({
+            goal,
+            priority,
+            context: {},
+            session_id: _currentSessionId || undefined,
+          }),
         });
         const data = await res.json();
         _currentTaskId = data.task_id;
@@ -2388,9 +2532,13 @@
     }
 
     // ── Init ─────────────────────────────────────────────────────────────────
-    window.onload = () => {
+    window.onload = async () => {
       initWS();
-      loadChatHistory();
+      // Sessions must load first so loadChatHistory has a valid session_id
+      // to filter by. Without this the first paint may show cross-session
+      // tasks, defeating the whole isolation fix.
+      await loadSessions();
+      await loadChatHistory();
       loadSkills();
       loadTools();
       pollApprovals();
