@@ -1426,6 +1426,43 @@
       return el;
     }
 
+    // Load the last N completed tasks from the server and render them as
+    // prior Q&A bubbles, so refreshing or coming back later preserves the
+    // conversation. The server-side SQLite store is the source of truth.
+    async function loadChatHistory(limit = 20) {
+      try {
+        const res = await fetch(`${API}/tasks?limit=${limit}`);
+        if (!res.ok) return;
+        const tasks = await res.json();
+        if (!Array.isArray(tasks) || tasks.length === 0) return;
+
+        const chat = document.getElementById('chatMessages');
+        // Replace the default greeting once we have real history.
+        chat.innerHTML = '';
+
+        // Oldest first so the newest sits above the input.
+        const ordered = tasks.slice().reverse();
+        for (const t of ordered) {
+          if (t.goal) {
+            const u = document.createElement('div');
+            u.className = 'msg-user';
+            u.textContent = t.goal;
+            chat.appendChild(u);
+          }
+          const a = document.createElement('div');
+          a.className = 'msg-agent';
+          const body = t.summary
+            ? `<div class="md-body">${renderMarkdown(t.summary)}</div>`
+            : `<span style="color:var(--text-muted)">(${escHtml(t.status || 'no summary')})</span>`;
+          a.innerHTML = body;
+          chat.appendChild(a);
+        }
+        chat.scrollTop = chat.scrollHeight;
+      } catch (e) {
+        console.debug('loadChatHistory error:', e);
+      }
+    }
+
     function addUserMessage(text) {
       const el = document.createElement('div');
       el.className = 'msg-user';
@@ -2353,6 +2390,7 @@
     // ── Init ─────────────────────────────────────────────────────────────────
     window.onload = () => {
       initWS();
+      loadChatHistory();
       loadSkills();
       loadTools();
       pollApprovals();
