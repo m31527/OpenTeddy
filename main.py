@@ -6,8 +6,10 @@ Run with: uvicorn main:app --reload
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
+import uuid
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator, Optional
 
@@ -82,6 +84,12 @@ class _WSManager:
 
 
 ws_manager = _WSManager()
+
+
+# ── In-flight task registry ───────────────────────────────────────────────────
+# Maps task_id → asyncio.Task so POST /tasks/{id}/cancel can interrupt a
+# running orchestrator.run() coroutine (Stop button in the UI).
+_running_tasks: dict[str, asyncio.Task] = {}
 
 
 @asynccontextmanager
@@ -197,7 +205,11 @@ async def health() -> dict:
 
 @app.post("/run", response_model=RunResponse, status_code=202)
 async def run_task(body: RunRequest) -> RunResponse:
+    # Use a client-supplied task_id when present so the UI can call
+    # POST /tasks/{id}/cancel (Stop button) on the *same* id it sent.
+    task_id = body.task_id or str(uuid.uuid4())
     req = TaskRequest(
+        id=task_id,
         goal=body.goal,
         context=body.context,
         priority=body.priority,
@@ -210,12 +222,49 @@ async def run_task(body: RunRequest) -> RunResponse:
             await tracker.create_session(body.session_id, body.goal[:60] or "New session")
         except Exception:  # noqa: BLE001
             pass
-    result = await orchestrator.run(req)
+
+    # Run the orchestrator as a tracked asyncio.Task so /tasks/{id}/cancel
+    # can call .cancel() on it mid-flight. Without this wrapper we'd have
+    # no handle to interrupt the coroutine from another HTTP handler.
+    run_task_obj = asyncio.create_task(orchestrator.run(req))
+    _running_tasks[task_id] = run_task_obj
+    try:
+        result = await run_task_obj
+    except asyncio.CancelledError:
+        logger.info("Task %s was cancelled by user (Stop button)", task_id)
+        cancelled_msg = "⏹️ 任務已被使用者中斷"
+        # Best-effort: mark the task failed so the history reflects the
+        # interrupt (swallow errors — DB state isn't essential here).
+        try:
+            await tracker.update_task_status(task_id, TaskStatus.FAILED, cancelled_msg)
+        except Exception:  # noqa: BLE001
+            pass
+        return RunResponse(
+            task_id=task_id,
+            status=TaskStatus.FAILED,
+            message=cancelled_msg,
+        )
+    finally:
+        _running_tasks.pop(task_id, None)
+
     return RunResponse(
         task_id=result.task_id,
         status=result.status,
         message=result.summary,
     )
+
+
+@app.post("/tasks/{task_id}/cancel")
+async def cancel_task(task_id: str) -> dict:
+    """Cancel an in-flight task (Stop button from the UI)."""
+    t = _running_tasks.get(task_id)
+    if not t:
+        raise HTTPException(
+            status_code=404,
+            detail="No running task with that id (already finished?)",
+        )
+    t.cancel()
+    return {"cancelled": True, "task_id": task_id}
 
 
 @app.get("/tasks/{task_id}", response_model=StatusResponse)

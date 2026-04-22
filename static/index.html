@@ -8,7 +8,12 @@
     :root {
       --bg-primary:    #faf9f7;
       --bg-secondary:  #f3f1ed;
-      --bg-sidebar:    #f0ede8;
+      --bg-sidebar:    #171717;
+      --sidebar-text:  rgba(255,255,255,0.88);
+      --sidebar-muted: rgba(255,255,255,0.55);
+      --sidebar-hover: rgba(255,255,255,0.06);
+      --sidebar-active:rgba(255,255,255,0.12);
+      --sidebar-border:rgba(255,255,255,0.08);
       --surface:       #ffffff;
       --border:        #e5e0d8;
       --text-primary:  #1a1a1a;
@@ -24,83 +29,237 @@
       --error:         #cc3333;
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { height: 100%; overflow: hidden; }
     body {
       background: var(--bg-primary);
       color: var(--text-primary);
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-      min-height: 100vh;
     }
 
-    /* ── Header ─────────────────────────────────────────────────────────── */
-    header {
-      background: var(--surface);
-      border-bottom: 1px solid var(--border);
-      padding: 0.7rem 1.5rem;
+    /* ── App Layout ──────────────────────────────────────────────────────── */
+    .app-layout {
       display: flex;
-      align-items: center;
-      gap: 0.65rem;
-      position: sticky;
-      top: 0;
-      z-index: 100;
-    }
-    .logo-wrap {
-      width: 32px; height: 32px;
-      border-radius: 50%;
+      height: 100vh;
       overflow: hidden;
+    }
+
+    /* ── Sidebar (ChatGPT / Claude style) ────────────────────────────────── */
+    .sidebar {
+      width: 260px;
+      min-width: 260px;
       flex-shrink: 0;
+      background: var(--bg-sidebar);
+      color: var(--sidebar-text);
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      overflow: hidden;
+      border-right: 1px solid #000;
+    }
+    .sidebar-header { padding: 0.75rem 0.75rem 0.5rem; }
+    .sidebar-brand {
       display: flex;
       align-items: center;
-      justify-content: center;
+      gap: 0.55rem;
+      padding: 0.35rem 0.4rem 0.75rem;
     }
-    .logo-text {
-      font-size: 0.9375rem;
+    .sidebar-logo {
+      width: 30px; height: 30px;
+      border-radius: 50%;
+      object-fit: cover;
+      flex-shrink: 0;
+    }
+    .sidebar-brand-name {
+      font-size: 0.95rem;
       font-weight: 600;
-      color: var(--text-primary);
+      color: var(--sidebar-text);
       letter-spacing: -0.01em;
     }
-    .header-right {
-      margin-left: auto;
-      display: flex;
-      align-items: center;
-      gap: 0.75rem;
-    }
-    .ws-badge {
-      display: inline-block;
-      width: 8px; height: 8px;
-      border-radius: 50%;
-      background: var(--text-muted);
-      transition: background 0.3s;
-    }
-    .ws-badge.connected { background: var(--success); }
-
-    /* ── Tab Bar ─────────────────────────────────────────────────────────── */
-    .tab-bar {
-      background: var(--surface);
-      border-bottom: 1px solid var(--border);
-      padding: 0 1.5rem;
-      display: flex;
-      position: sticky;
-      top: 53px;
-      z-index: 99;
-    }
-    .tab-btn {
-      background: transparent;
-      border: none;
-      border-bottom: 2px solid transparent;
-      color: var(--text-muted);
-      padding: 0.65rem 1rem;
-      font-size: 0.875rem;
+    .new-chat-btn {
+      width: 100%;
+      background: rgba(255,255,255,0.03);
+      border: 1px solid var(--sidebar-border);
+      color: var(--sidebar-text);
+      border-radius: 10px;
+      padding: 0.6rem 0.85rem;
+      font-size: 0.86rem;
       font-weight: 500;
       font-family: inherit;
       cursor: pointer;
-      transition: color 0.15s, border-color 0.15s;
-      white-space: nowrap;
-      border-radius: 0;
+      display: flex;
+      align-items: center;
+      gap: 0.55rem;
+      justify-content: flex-start;
+      transition: background 0.15s, border-color 0.15s;
     }
-    .tab-btn:hover { color: var(--text-primary); background: transparent; }
-    .tab-btn.active { color: var(--text-primary); border-bottom-color: var(--text-primary); }
+    .new-chat-btn:hover { background: var(--sidebar-hover); border-color: rgba(255,255,255,0.2); }
+    .new-chat-btn .plus-icon {
+      display: inline-flex;
+      width: 18px; height: 18px;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid var(--sidebar-muted);
+      border-radius: 50%;
+      font-size: 0.82rem;
+      line-height: 1;
+    }
+
+    .sidebar-section-label {
+      font-size: 0.68rem;
+      color: var(--sidebar-muted);
+      padding: 0.75rem 0.85rem 0.3rem;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      font-weight: 600;
+    }
+    .session-list-wrap {
+      flex: 1;
+      overflow-y: auto;
+      padding: 0 0.5rem 0.75rem;
+    }
+    .session-list-wrap::-webkit-scrollbar { width: 6px; }
+    .session-list-wrap::-webkit-scrollbar-thumb {
+      background: rgba(255,255,255,0.12);
+      border-radius: 3px;
+    }
+    .session-list { display: flex; flex-direction: column; gap: 1px; }
+    .session-item {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.5rem 0.65rem;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 0.84rem;
+      color: var(--sidebar-text);
+      transition: background 0.1s;
+      position: relative;
+    }
+    .session-item:hover { background: var(--sidebar-hover); }
+    .session-item.active { background: var(--sidebar-active); }
+    .session-item-title {
+      flex: 1;
+      min-width: 0;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .session-item-actions {
+      display: flex;
+      gap: 2px;
+      opacity: 0;
+      transition: opacity 0.12s;
+    }
+    .session-item:hover .session-item-actions,
+    .session-item.active .session-item-actions { opacity: 1; }
+    .session-action-btn {
+      background: transparent;
+      border: none;
+      color: var(--sidebar-muted);
+      padding: 3px 6px;
+      font-size: 0.82rem;
+      border-radius: 5px;
+      cursor: pointer;
+      line-height: 1;
+      font-family: inherit;
+    }
+    .session-action-btn:hover { background: rgba(255,255,255,0.1); color: var(--sidebar-text); }
+
+    .sidebar-footer {
+      border-top: 1px solid var(--sidebar-border);
+      padding: 0.4rem 0.5rem 0.65rem;
+      flex-shrink: 0;
+    }
+    .sidebar-nav {
+      display: flex;
+      flex-direction: column;
+      gap: 1px;
+      margin-bottom: 0.35rem;
+    }
+    .sidebar-nav-btn {
+      display: flex;
+      align-items: center;
+      gap: 0.55rem;
+      background: transparent;
+      border: none;
+      color: var(--sidebar-text);
+      padding: 0.45rem 0.65rem;
+      font-size: 0.82rem;
+      font-family: inherit;
+      border-radius: 8px;
+      cursor: pointer;
+      text-align: left;
+      width: 100%;
+      transition: background 0.1s;
+    }
+    .sidebar-nav-btn:hover { background: var(--sidebar-hover); }
+    .sidebar-nav-btn.active { background: var(--sidebar-active); }
+    .sidebar-nav-btn .nav-icon { font-size: 0.95rem; width: 18px; text-align: center; }
+
+    .sidebar-status {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.5rem 0.65rem;
+      font-size: 0.72rem;
+      color: var(--sidebar-muted);
+    }
+
+    /* ── Main content ────────────────────────────────────────────────────── */
+    .main-content {
+      flex: 1;
+      min-width: 0;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      position: relative;
+    }
     .tab-panel { display: none; }
-    .tab-panel.active { display: block; }
+    .tab-panel.active { display: flex; flex-direction: column; flex: 1; overflow-y: auto; }
+    #tab-tasks.tab-panel.active { display: flex; flex-direction: column; overflow: hidden; }
+
+    .panel-header {
+      padding: 1.1rem 1.5rem 0.8rem;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface);
+      flex-shrink: 0;
+    }
+    .panel-header h1 {
+      font-size: 1.05rem;
+      font-weight: 600;
+      color: var(--text-primary);
+    }
+
+    .chat-header {
+      display: flex;
+      align-items: center;
+      gap: 0.7rem;
+      padding: 0.7rem 1.25rem;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface);
+      flex-shrink: 0;
+      min-height: 48px;
+    }
+    .hamburger {
+      display: none;
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text-secondary);
+      border-radius: 8px;
+      padding: 0.35rem 0.55rem;
+      font-size: 1rem;
+      cursor: pointer;
+      line-height: 1;
+    }
+    .chat-header-title {
+      font-size: 0.9rem;
+      font-weight: 500;
+      color: var(--text-primary);
+      flex: 1;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
 
     /* ── Container / Cards ───────────────────────────────────────────────── */
     .container { max-width: 960px; margin: 2rem auto; padding: 0 1.25rem; }
@@ -202,6 +361,15 @@
     .status-failed    { color: var(--error);   border-color: #fca5a5; background: #fef2f2; }
     .status-escalated { color: var(--purple);  border-color: #c4b5fd; background: var(--purple-light); }
 
+    .ws-badge {
+      display: inline-block;
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: var(--text-muted);
+      transition: background 0.3s;
+    }
+    .ws-badge.connected { background: var(--success); }
+
     /* ── Loader ──────────────────────────────────────────────────────────── */
     .loader {
       display: inline-block;
@@ -269,10 +437,8 @@
     }
     #approval-banner .banner-btn:hover { background: #f5f5f5; }
 
-    /* Push sticky header/tab-bar down when banner is visible */
-    body.has-banner header    { top: 53px; }
-    body.has-banner .tab-bar  { top: 106px; }
-    body.has-banner .chat-layout { height: calc(100vh - 159px); }
+    /* Push whole layout down when banner is visible */
+    body.has-banner .app-layout { height: calc(100vh - 53px); margin-top: 53px; }
 
     /* ── Approval Card (in-chat) ─────────────────────────────────────────── */
     .approval-card {
@@ -462,7 +628,7 @@
       padding: 1.5rem 0;
     }
 
-    /* ── Skills ──────────────────────────────────────────────────────────── */
+    /* ── Skills / Tools / Memory / Usage / Settings ──────────────────────── */
     .skills-grid {
       display: grid;
       grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
@@ -478,7 +644,6 @@
     .skill-card .skill-desc { font-size: 0.76rem; color: var(--text-muted); }
     .skill-card .skill-stats { margin-top: 0.45rem; font-size: 0.72rem; color: var(--success); }
 
-    /* ── Tools ───────────────────────────────────────────────────────────── */
     .tools-grid {
       display: grid;
       grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
@@ -495,7 +660,6 @@
     .risk-low  { color: var(--success); font-size: 0.7rem; font-weight: 600; margin-top: 0.3rem; }
     .risk-high { color: var(--warning); font-size: 0.7rem; font-weight: 600; margin-top: 0.3rem; }
 
-    /* ── Memory ──────────────────────────────────────────────────────────── */
     .memory-list { list-style: none; }
     .memory-item {
       background: var(--bg-primary);
@@ -544,7 +708,6 @@
     }
     .memory-del-btn:hover { color: var(--error); border-color: var(--error); background: #fff0f0; }
 
-    /* ── Usage ───────────────────────────────────────────────────────────── */
     .stats-grid {
       display: grid;
       grid-template-columns: repeat(auto-fill, minmax(155px, 1fr));
@@ -633,7 +796,6 @@
     .pagination { display: flex; align-items: center; gap: 0.75rem; margin-top: 1rem; }
     .pagination .page-info { color: var(--text-muted); font-size: 0.82rem; flex: 1; text-align: center; }
 
-    /* ── Settings ────────────────────────────────────────────────────────── */
     .settings-section { margin-bottom: 1.75rem; }
     .settings-section h3 {
       font-size: 0.875rem;
@@ -757,39 +919,8 @@
     .chat-layout {
       display: flex;
       flex-direction: column;
-      height: calc(100vh - 106px);
-    }
-    .session-bar {
-      display: flex;
-      align-items: center;
-      gap: 0.5rem;
-      padding: 0.5rem 1.25rem;
-      border-bottom: 1px solid var(--border);
-      background: var(--bg-secondary);
-      font-size: 0.8rem;
-    }
-    .session-bar-label {
-      color: var(--text-muted);
-      font-weight: 500;
-    }
-    .session-bar select {
       flex: 1;
-      max-width: 360px;
-      padding: 0.3rem 0.55rem;
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      background: var(--surface);
-      font-size: 0.82rem;
-      color: var(--text-primary);
-    }
-    .session-btn {
-      padding: 0.3rem 0.7rem;
-      font-size: 0.78rem;
-    }
-    .session-hint {
-      margin-left: auto;
-      color: var(--text-muted);
-      font-size: 0.72rem;
+      overflow: hidden;
     }
     .chat-messages {
       flex: 1;
@@ -803,7 +934,6 @@
       margin: 0 auto;
     }
 
-    /* Agent message — left aligned */
     .msg-agent {
       background: var(--bg-secondary);
       border-radius: 18px 18px 18px 4px;
@@ -815,7 +945,6 @@
       line-height: 1.55;
     }
 
-    /* User message — right aligned */
     .msg-user {
       background: var(--text-primary);
       color: #ffffff;
@@ -825,6 +954,17 @@
       align-self: flex-end;
       font-size: 0.9rem;
       line-height: 1.55;
+    }
+
+    .msg-system {
+      background: #fff0f0;
+      border: 1px solid #fca5a5;
+      color: var(--error);
+      border-radius: 10px;
+      padding: 9px 14px;
+      align-self: center;
+      font-size: 0.82rem;
+      font-weight: 500;
     }
 
     /* Tool execution card — collapsible */
@@ -908,15 +1048,13 @@
       overflow-y: auto;
     }
 
-    /* Markdown-rendered summary body */
+    /* Markdown */
     .md-body {
       line-height: 1.55;
       color: var(--text-primary);
       word-break: break-word;
     }
-    .md-body h2,
-    .md-body h3,
-    .md-body h4 {
+    .md-body h2, .md-body h3, .md-body h4 {
       margin: 0.8rem 0 0.35rem;
       font-weight: 600;
       color: var(--text-primary);
@@ -933,10 +1071,7 @@
       padding: 0;
       list-style: disc;
     }
-    .md-body ul.md-list li {
-      margin: 0.15rem 0;
-      line-height: 1.5;
-    }
+    .md-body ul.md-list li { margin: 0.15rem 0; line-height: 1.5; }
     .md-body .md-inline-code {
       font-family: 'Courier New', monospace;
       font-size: 0.85em;
@@ -966,7 +1101,6 @@
       margin: 0.7rem 0;
     }
 
-    /* Subtask list inside chat result */
     .chat-subtasks {
       margin-top: 0.6rem;
       list-style: none;
@@ -982,7 +1116,6 @@
       color: var(--text-secondary);
     }
 
-    /* Chat input area */
     .chat-input-area {
       background: var(--surface);
       border-top: 1px solid var(--border);
@@ -1022,6 +1155,8 @@
       padding: 0;
       width: 100%;
     }
+
+    /* Send button (default) + Stop button (while running) */
     .send-btn {
       background: var(--text-primary);
       border: none;
@@ -1036,9 +1171,21 @@
       align-items: center;
       justify-content: center;
       transition: background 0.15s;
+      min-width: 34px;
+      min-height: 32px;
     }
     .send-btn:hover { background: #333; }
     .send-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .send-btn.is-stop {
+      background: var(--error);
+      animation: stop-pulse 1.4s ease-in-out infinite;
+    }
+    .send-btn.is-stop:hover { background: #a82525; }
+    @keyframes stop-pulse {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(204,51,51,0.5); }
+      50%       { box-shadow: 0 0 0 6px rgba(204,51,51,0); }
+    }
+
     .priority-field {
       display: flex;
       flex-direction: column;
@@ -1060,10 +1207,18 @@
       font-size: 0.85rem;
     }
 
-    /* Hidden compat elements */
+    .input-hint {
+      font-size: 0.68rem;
+      color: var(--text-muted);
+      margin-top: 4px;
+      text-align: center;
+      max-width: 800px;
+      margin-left: auto;
+      margin-right: auto;
+    }
+
     #streamCard, #resultCard { display: none !important; }
 
-    /* Subtask list (old panel) */
     .subtask-list { list-style: none; }
     .subtask-list li {
       border-bottom: 1px solid var(--border);
@@ -1076,6 +1231,28 @@
     .subtask-list li:last-child { border-bottom: none; }
     .subtask-desc { flex: 1; }
     .subtask-conf { color: var(--text-muted); font-size: 0.75rem; }
+
+    /* ── Mobile sidebar ──────────────────────────────────────────────────── */
+    #sidebarOverlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.5);
+      z-index: 499;
+    }
+    #sidebarOverlay.open { display: block; }
+    @media (max-width: 768px) {
+      .sidebar {
+        position: fixed;
+        left: -280px;
+        top: 0;
+        z-index: 500;
+        transition: left 0.25s ease;
+        box-shadow: 4px 0 20px rgba(0,0,0,0.2);
+      }
+      .sidebar.open { left: 0; }
+      .hamburger { display: inline-flex; }
+    }
   </style>
 </head>
 <body>
@@ -1086,334 +1263,357 @@
     <button class="banner-btn" onclick="openApprovalModal()">查看並確認 →</button>
   </div>
 
-  <!-- ── Header ──────────────────────────────────────────────────────────── -->
-  <header>
-    <div class="logo-wrap">
-      <img src="/static/teddy.png" alt="OpenTeddy" style="width:36px;height:36px;border-radius:50%;object-fit:cover;">
-    </div>
-    <span class="logo-text">OpenTeddy</span>
-    <div class="header-right">
-      <span id="wsBadge" class="ws-badge" title="WebSocket connection"></span>
-    </div>
-  </header>
+  <!-- ── App Layout ──────────────────────────────────────────────────────── -->
+  <div class="app-layout">
 
-  <!-- ── Tab Bar ─────────────────────────────────────────────────────────── -->
-  <div class="tab-bar">
-    <button class="tab-btn active" onclick="switchTab('tasks',this)">Tasks</button>
-    <button class="tab-btn" onclick="switchTab('skills',this)">Skills</button>
-    <button class="tab-btn" onclick="switchTab('tools',this)">Tools</button>
-    <button class="tab-btn" onclick="switchTab('memory',this)">Memory</button>
-    <button class="tab-btn" onclick="switchTab('usage',this)">Usage</button>
-    <button class="tab-btn" onclick="switchTab('settings',this)" style="margin-left:auto">Settings</button>
-  </div>
-
-  <!-- ── TASKS TAB — Chat Interface ──────────────────────────────────────── -->
-  <div id="tab-tasks" class="tab-panel active">
-    <div class="chat-layout">
-      <div class="session-bar">
-        <label for="sessionSelect" class="session-bar-label">Session</label>
-        <select id="sessionSelect" onchange="switchSession(this.value)"></select>
-        <button type="button" class="btn-ghost session-btn" onclick="createNewSession()" title="Start a new session">+ New</button>
-        <button type="button" class="btn-ghost session-btn" onclick="renameCurrentSession()" title="Rename this session">Rename</button>
-        <span id="sessionHint" class="session-hint"></span>
-      </div>
-      <div class="chat-messages" id="chatMessages">
-        <div class="msg-agent">
-          Hello! I'm OpenTeddy 🐩 Describe what you'd like me to do and I'll get started.
+    <!-- Sidebar (sessions list + admin nav) -->
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-header">
+        <div class="sidebar-brand">
+          <img src="/static/teddy.png" alt="OpenTeddy" class="sidebar-logo">
+          <span class="sidebar-brand-name">OpenTeddy</span>
         </div>
-      </div>
-      <div class="chat-input-area">
-        <div class="chat-input-row">
-          <div class="priority-field">
-            <label>Priority</label>
-            <input type="number" id="priority" value="5" min="1" max="10" />
-          </div>
-          <div class="chat-input-wrap">
-            <textarea id="goal" rows="1" placeholder="Describe your task…"
-              onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();runTask()}"
-              oninput="this.style.height='auto';this.style.height=Math.min(this.scrollHeight,150)+'px'"></textarea>
-            <button class="send-btn" id="runBtn" onclick="runTask()" title="Send (Enter)">↑</button>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- Hidden elements kept for JS compatibility -->
-    <div id="streamCard"><div id="streamLog"></div></div>
-    <div id="resultCard">
-      <span id="resultStatus" class="status-badge"></span>
-      <code id="resultTaskId"></code>
-      <div id="resultSummary"></div>
-      <div id="subtaskSection" style="display:none"><ul id="subtaskList" class="subtask-list"></ul></div>
-    </div>
-  </div>
-
-  <!-- ── SKILLS TAB ──────────────────────────────────────────────────────── -->
-  <div id="tab-skills" class="tab-panel">
-    <div class="container">
-      <div class="card">
-        <h2>Skills Library</h2>
-        <div style="margin-bottom:1rem">
-          <button class="btn-ghost" onclick="loadSkills()">Refresh</button>
-        </div>
-        <div class="skills-grid" id="skillsGrid">
-          <div style="color:var(--text-muted);font-size:0.875rem">No skills loaded yet.</div>
-        </div>
-      </div>
-      <div class="card">
-        <h2>Generate Skill Manually</h2>
-        <div class="row">
-          <div class="field">
-            <label>Skill name (snake_case)</label>
-            <input type="text" id="skillName" placeholder="e.g. web_search" />
-          </div>
-          <div class="field" style="flex:2">
-            <label>Description</label>
-            <input type="text" id="skillDesc" placeholder="Searches the web and returns a summary" />
-          </div>
-          <button class="btn-primary" onclick="generateSkill()">Generate</button>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <!-- ── TOOLS TAB ───────────────────────────────────────────────────────── -->
-  <div id="tab-tools" class="tab-panel">
-    <div class="container">
-      <div class="card">
-        <h2>Registered Tools</h2>
-        <div style="margin-bottom:1rem">
-          <button class="btn-ghost" onclick="loadTools()">Refresh</button>
-        </div>
-        <div class="tools-grid" id="toolsGrid">
-          <div style="color:var(--text-muted);font-size:0.875rem">Loading tools…</div>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <!-- ── MEMORY TAB ──────────────────────────────────────────────────────── -->
-  <div id="tab-memory" class="tab-panel">
-    <div class="container">
-      <div class="card">
-        <h2>Long-term Memory</h2>
-        <div style="display:flex;gap:0.75rem;margin-bottom:1rem;align-items:center;flex-wrap:wrap">
-          <button class="btn-ghost" onclick="loadMemory()">Refresh</button>
-          <button class="btn-danger btn-sm" onclick="confirmClearMemory()">Clear All</button>
-          <span id="memoryStatus" style="color:var(--text-muted);font-size:0.8rem;margin-left:auto"></span>
-        </div>
-        <ul class="memory-list" id="memoryList">
-          <li style="color:var(--text-muted);font-size:0.875rem;padding:1rem 0">
-            No memories yet — run a task to populate memory.
-          </li>
-        </ul>
-        <div class="pagination" id="memoryPagination" style="display:none">
-          <button id="memPrevBtn" class="btn-ghost btn-sm" onclick="memPage(-1)">← Prev</button>
-          <span class="page-info" id="memPageInfo"></span>
-          <button id="memNextBtn" class="btn-ghost btn-sm" onclick="memPage(1)">Next →</button>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <!-- ── USAGE TAB ───────────────────────────────────────────────────────── -->
-  <div id="tab-usage" class="tab-panel">
-    <div class="container">
-      <div class="card">
-        <h2>Usage Overview</h2>
-        <div class="stats-grid" id="statsGrid">
-          <div class="stat-card"><div class="stat-label">Total Calls</div><div class="stat-value" id="statTotalCalls">—</div></div>
-          <div class="stat-card"><div class="stat-label">Commercial (Anthropic)</div><div class="stat-value yellow" id="statCommCalls">—</div></div>
-          <div class="stat-card"><div class="stat-label">Total Cost</div><div class="stat-value green" id="statTotalCost">—</div></div>
-          <div class="stat-card"><div class="stat-label">Commercial Cost</div><div class="stat-value yellow" id="statCommCost">—</div></div>
-          <div class="stat-card"><div class="stat-label">Tokens In</div><div class="stat-value" id="statTokensIn">—</div></div>
-          <div class="stat-card"><div class="stat-label">Tokens Out</div><div class="stat-value" id="statTokensOut">—</div></div>
-          <div class="stat-card"><div class="stat-label">Escalations</div><div class="stat-value purple" id="statEscalations">—</div></div>
-        </div>
-        <div class="chart-wrapper">
-          <h3>Daily Cost (last 30 days) — USD</h3>
-          <canvas id="usageChart"></canvas>
-          <div id="chartEmpty" style="color:var(--text-muted);font-size:0.84rem;text-align:center;padding:1rem;display:none">
-            No cost data yet.
-          </div>
-        </div>
-        <button class="btn-ghost btn-sm" onclick="loadUsageSummary()">Refresh Stats</button>
+        <button class="new-chat-btn" onclick="createNewSession()">
+          <span class="plus-icon">+</span>
+          <span>New chat</span>
+        </button>
       </div>
 
-      <div class="card">
-        <h2>Usage Records</h2>
-        <div class="usage-filters">
-          <div class="field">
-            <label>Provider</label>
-            <select id="filterProvider">
-              <option value="">All Providers</option>
-              <option value="anthropic">Anthropic</option>
-              <option value="ollama">Ollama</option>
-            </select>
-          </div>
-          <div class="field">
-            <label>Date From</label>
-            <input type="date" id="filterDateFrom" />
-          </div>
-          <div class="field">
-            <label>Date To</label>
-            <input type="date" id="filterDateTo" />
-          </div>
-          <button class="btn-primary" onclick="loadUsageRecords(1)" style="align-self:flex-end">Filter</button>
-          <button class="btn-ghost" onclick="clearUsageFilters()" style="align-self:flex-end">Reset</button>
-        </div>
-        <div class="usage-table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Time</th><th>Model</th><th>Provider</th>
-                <th>Tokens In</th><th>Tokens Out</th><th>Cost (USD)</th><th>Task</th>
-              </tr>
-            </thead>
-            <tbody id="usageTableBody">
-              <tr><td colspan="7" style="color:var(--text-muted);text-align:center;padding:1.5rem">No records yet.</td></tr>
-            </tbody>
-          </table>
-        </div>
-        <div class="pagination" id="usagePagination">
-          <button id="usagePrevBtn" class="btn-ghost btn-sm" onclick="usagePage(-1)">← Prev</button>
-          <span class="page-info" id="usagePageInfo"></span>
-          <button id="usageNextBtn" class="btn-ghost btn-sm" onclick="usagePage(1)">Next →</button>
+      <div class="sidebar-section-label">Chats</div>
+      <div class="session-list-wrap">
+        <div class="session-list" id="sessionList">
+          <!-- populated by loadSessions() -->
         </div>
       </div>
-    </div>
-  </div>
 
-  <!-- ── SETTINGS TAB ─────────────────────────────────────────────────────── -->
-  <div id="tab-settings" class="tab-panel">
-    <div class="container">
-      <div class="card">
-
-        <!-- Model Settings -->
-        <div class="settings-section">
-          <h3>Model Settings</h3>
-          <div class="ollama-status">
-            <span id="ollamaDot" class="ollama-dot"></span>
-            <span id="ollamaLabel" class="ollama-label">Checking…</span>
-            <span id="ollamaUrl" class="ollama-url"></span>
-          </div>
-          <div style="font-size:0.76rem;color:var(--text-muted);margin-bottom:0.5rem;font-weight:500">Installed Models</div>
-          <div class="model-list" id="modelList">
-            <div style="color:var(--text-muted);font-size:0.82rem">Loading…</div>
-          </div>
-          <div class="row" style="margin-bottom:0.85rem">
-            <div class="field">
-              <label>Orchestrator Model (Gemma)</label>
-              <select id="sel_orchestrator_model"><option value="">⚠️ Ollama offline</option></select>
-            </div>
-            <div class="field">
-              <label>Executor Model (Qwen)</label>
-              <select id="sel_executor_model"><option value="">⚠️ Ollama offline</option></select>
-            </div>
-          </div>
-          <div class="row" style="margin-bottom:0.85rem">
-            <div class="field">
-              <label>Claude Model (Escalation)</label>
-              <input type="text" id="inp_claude_model" placeholder="claude-opus-4-6" />
-            </div>
-          </div>
-          <div class="row" style="margin-bottom:1.25rem">
-            <div class="field">
-              <label>Orchestrator Ollama URL</label>
-              <input type="text" id="inp_gemma_base_url" placeholder="http://localhost:11434" />
-            </div>
-            <div class="field">
-              <label>Executor Ollama URL</label>
-              <input type="text" id="inp_qwen_base_url" placeholder="http://localhost:11434" />
-            </div>
-          </div>
-          <div style="font-size:0.76rem;color:var(--text-muted);margin-bottom:0.5rem;font-weight:500">Pull New Model</div>
-          <div class="pull-row">
-            <div class="field">
-              <label>Model name (e.g. llama3:8b)</label>
-              <input type="text" id="pullModelName" placeholder="gemma3:12b" />
-            </div>
-            <button class="btn-primary" onclick="pullModel()" id="pullBtn">⬇ Pull</button>
-          </div>
-          <div class="progress-wrap" id="pullProgress">
-            <div class="progress-label">
-              <span id="pullStatusText">Preparing…</span>
-              <span id="pullPct">0%</span>
-            </div>
-            <div class="progress-bar-outer">
-              <div class="progress-bar-inner" id="pullBar"></div>
-            </div>
-          </div>
-        </div>
-
-        <!-- Parameter Settings -->
-        <div class="settings-section">
-          <h3>Parameter Settings</h3>
-          <div class="param-row">
-            <div class="param-field">
-              <label>Escalation Confidence Threshold
-                <span class="param-value" id="val_escalation_threshold">0.60</span>
-              </label>
-              <input type="range" id="rng_escalation_threshold" min="0" max="1" step="0.05" value="0.6"
-                oninput="document.getElementById('val_escalation_threshold').textContent=parseFloat(this.value).toFixed(2)" />
-            </div>
-            <div class="param-field">
-              <label>Escalation Failure Limit
-                <span class="param-value" id="val_escalation_failure_limit">3</span>
-              </label>
-              <input type="range" id="rng_escalation_failure_limit" min="1" max="10" step="1" value="3"
-                oninput="document.getElementById('val_escalation_failure_limit').textContent=this.value" />
-            </div>
-          </div>
-          <div class="param-row">
-            <div class="param-field">
-              <label>Gemma Max Tokens
-                <span class="param-value" id="val_gemma_max_tokens">4096</span>
-              </label>
-              <input type="range" id="rng_gemma_max_tokens" min="512" max="8192" step="256" value="4096"
-                oninput="document.getElementById('val_gemma_max_tokens').textContent=this.value" />
-            </div>
-            <div class="param-field">
-              <label>Qwen Max Tokens
-                <span class="param-value" id="val_qwen_max_tokens">4096</span>
-              </label>
-              <input type="range" id="rng_qwen_max_tokens" min="512" max="8192" step="256" value="4096"
-                oninput="document.getElementById('val_qwen_max_tokens').textContent=this.value" />
-            </div>
-          </div>
-          <div class="param-row">
-            <div class="param-field">
-              <label>Skill Match Threshold
-                <span class="param-value" id="val_skill_match_threshold">0.40</span>
-              </label>
-              <input type="range" id="rng_skill_match_threshold" min="0" max="1" step="0.05" value="0.4"
-                oninput="document.getElementById('val_skill_match_threshold').textContent=parseFloat(this.value).toFixed(2)" />
-            </div>
-            <div class="param-field">
-              <label>Skill Promotion Threshold
-                <span class="param-value" id="val_skill_promotion_threshold">5</span>
-              </label>
-              <input type="range" id="rng_skill_promotion_threshold" min="1" max="50" step="1" value="5"
-                oninput="document.getElementById('val_skill_promotion_threshold').textContent=this.value" />
-            </div>
-          </div>
-        </div>
-
-        <div class="settings-save-row">
-          <button class="btn-primary" onclick="saveSettings()" id="saveSettingsBtn">Save Settings</button>
-          <span class="settings-msg" id="settingsMsg"></span>
+      <div class="sidebar-footer">
+        <nav class="sidebar-nav">
+          <button class="sidebar-nav-btn" data-tab="skills"   onclick="switchTab('skills')"><span class="nav-icon">📚</span>Skills</button>
+          <button class="sidebar-nav-btn" data-tab="tools"    onclick="switchTab('tools')"><span class="nav-icon">🔧</span>Tools</button>
+          <button class="sidebar-nav-btn" data-tab="memory"   onclick="switchTab('memory')"><span class="nav-icon">🧠</span>Memory</button>
+          <button class="sidebar-nav-btn" data-tab="usage"    onclick="switchTab('usage')"><span class="nav-icon">📊</span>Usage</button>
+          <button class="sidebar-nav-btn" data-tab="settings" onclick="switchTab('settings')"><span class="nav-icon">⚙️</span>Settings</button>
+        </nav>
+        <div class="sidebar-status">
+          <span id="wsBadge" class="ws-badge" title="WebSocket connection"></span>
+          <span id="wsLabel">Connecting…</span>
         </div>
       </div>
-    </div>
-  </div>
+    </aside>
 
-  <!-- ── Approval FAB ─────────────────────────────────────────────────────── -->
+    <div id="sidebarOverlay" onclick="closeSidebar()"></div>
+
+    <!-- Main content area (tab panels) -->
+    <div class="main-content">
+
+      <!-- ── TASKS TAB — Chat Interface ──────────────────────────────────── -->
+      <div id="tab-tasks" class="tab-panel active">
+        <div class="chat-header">
+          <button class="hamburger" onclick="toggleSidebar()" aria-label="Open sidebar">☰</button>
+          <span class="chat-header-title" id="chatHeaderTitle">New session</span>
+        </div>
+        <div class="chat-layout">
+          <div class="chat-messages" id="chatMessages">
+            <div class="msg-agent">
+              Hello! I'm OpenTeddy 🐩 Describe what you'd like me to do and I'll get started.
+            </div>
+          </div>
+          <div class="chat-input-area">
+            <div class="chat-input-row">
+              <div class="priority-field">
+                <label>Priority</label>
+                <input type="number" id="priority" value="5" min="1" max="10" />
+              </div>
+              <div class="chat-input-wrap">
+                <textarea id="goal" rows="1" placeholder="Describe your task… (click ↑ to send)"
+                  onkeydown="handleGoalKey(event)"
+                  oninput="this.style.height='auto';this.style.height=Math.min(this.scrollHeight,150)+'px'"></textarea>
+                <button class="send-btn" id="runBtn" onclick="onSendOrStop()" title="Send">↑</button>
+              </div>
+            </div>
+            <div class="input-hint">Enter 換行 · 點擊 ↑ 送出 · 執行中可按 ■ 中斷（⌘/Ctrl+Enter 亦可送出）</div>
+          </div>
+        </div>
+
+        <div id="streamCard"><div id="streamLog"></div></div>
+        <div id="resultCard">
+          <span id="resultStatus" class="status-badge"></span>
+          <code id="resultTaskId"></code>
+          <div id="resultSummary"></div>
+          <div id="subtaskSection" style="display:none"><ul id="subtaskList" class="subtask-list"></ul></div>
+        </div>
+      </div>
+
+      <!-- ── SKILLS TAB ──────────────────────────────────────────────────── -->
+      <div id="tab-skills" class="tab-panel">
+        <div class="panel-header"><h1>Skills</h1></div>
+        <div class="container">
+          <div class="card">
+            <h2>Skills Library</h2>
+            <div style="margin-bottom:1rem">
+              <button class="btn-ghost" onclick="loadSkills()">Refresh</button>
+            </div>
+            <div class="skills-grid" id="skillsGrid">
+              <div style="color:var(--text-muted);font-size:0.875rem">No skills loaded yet.</div>
+            </div>
+          </div>
+          <div class="card">
+            <h2>Generate Skill Manually</h2>
+            <div class="row">
+              <div class="field">
+                <label>Skill name (snake_case)</label>
+                <input type="text" id="skillName" placeholder="e.g. web_search" />
+              </div>
+              <div class="field" style="flex:2">
+                <label>Description</label>
+                <input type="text" id="skillDesc" placeholder="Searches the web and returns a summary" />
+              </div>
+              <button class="btn-primary" onclick="generateSkill()">Generate</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── TOOLS TAB ───────────────────────────────────────────────────── -->
+      <div id="tab-tools" class="tab-panel">
+        <div class="panel-header"><h1>Tools</h1></div>
+        <div class="container">
+          <div class="card">
+            <h2>Registered Tools</h2>
+            <div style="margin-bottom:1rem">
+              <button class="btn-ghost" onclick="loadTools()">Refresh</button>
+            </div>
+            <div class="tools-grid" id="toolsGrid">
+              <div style="color:var(--text-muted);font-size:0.875rem">Loading tools…</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── MEMORY TAB ──────────────────────────────────────────────────── -->
+      <div id="tab-memory" class="tab-panel">
+        <div class="panel-header"><h1>Memory</h1></div>
+        <div class="container">
+          <div class="card">
+            <h2>Long-term Memory</h2>
+            <div style="display:flex;gap:0.75rem;margin-bottom:1rem;align-items:center;flex-wrap:wrap">
+              <button class="btn-ghost" onclick="loadMemory()">Refresh</button>
+              <button class="btn-danger btn-sm" onclick="confirmClearMemory()">Clear All</button>
+              <span id="memoryStatus" style="color:var(--text-muted);font-size:0.8rem;margin-left:auto"></span>
+            </div>
+            <ul class="memory-list" id="memoryList">
+              <li style="color:var(--text-muted);font-size:0.875rem;padding:1rem 0">
+                No memories yet — run a task to populate memory.
+              </li>
+            </ul>
+            <div class="pagination" id="memoryPagination" style="display:none">
+              <button id="memPrevBtn" class="btn-ghost btn-sm" onclick="memPage(-1)">← Prev</button>
+              <span class="page-info" id="memPageInfo"></span>
+              <button id="memNextBtn" class="btn-ghost btn-sm" onclick="memPage(1)">Next →</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── USAGE TAB ───────────────────────────────────────────────────── -->
+      <div id="tab-usage" class="tab-panel">
+        <div class="panel-header"><h1>Usage</h1></div>
+        <div class="container">
+          <div class="card">
+            <h2>Usage Overview</h2>
+            <div class="stats-grid" id="statsGrid">
+              <div class="stat-card"><div class="stat-label">Total Calls</div><div class="stat-value" id="statTotalCalls">—</div></div>
+              <div class="stat-card"><div class="stat-label">Commercial (Anthropic)</div><div class="stat-value yellow" id="statCommCalls">—</div></div>
+              <div class="stat-card"><div class="stat-label">Total Cost</div><div class="stat-value green" id="statTotalCost">—</div></div>
+              <div class="stat-card"><div class="stat-label">Commercial Cost</div><div class="stat-value yellow" id="statCommCost">—</div></div>
+              <div class="stat-card"><div class="stat-label">Tokens In</div><div class="stat-value" id="statTokensIn">—</div></div>
+              <div class="stat-card"><div class="stat-label">Tokens Out</div><div class="stat-value" id="statTokensOut">—</div></div>
+              <div class="stat-card"><div class="stat-label">Escalations</div><div class="stat-value purple" id="statEscalations">—</div></div>
+            </div>
+            <div class="chart-wrapper">
+              <h3>Daily Cost (last 30 days) — USD</h3>
+              <canvas id="usageChart"></canvas>
+              <div id="chartEmpty" style="color:var(--text-muted);font-size:0.84rem;text-align:center;padding:1rem;display:none">
+                No cost data yet.
+              </div>
+            </div>
+            <button class="btn-ghost btn-sm" onclick="loadUsageSummary()">Refresh Stats</button>
+          </div>
+
+          <div class="card">
+            <h2>Usage Records</h2>
+            <div class="usage-filters">
+              <div class="field">
+                <label>Provider</label>
+                <select id="filterProvider">
+                  <option value="">All Providers</option>
+                  <option value="anthropic">Anthropic</option>
+                  <option value="ollama">Ollama</option>
+                </select>
+              </div>
+              <div class="field">
+                <label>Date From</label>
+                <input type="date" id="filterDateFrom" />
+              </div>
+              <div class="field">
+                <label>Date To</label>
+                <input type="date" id="filterDateTo" />
+              </div>
+              <button class="btn-primary" onclick="loadUsageRecords(1)" style="align-self:flex-end">Filter</button>
+              <button class="btn-ghost" onclick="clearUsageFilters()" style="align-self:flex-end">Reset</button>
+            </div>
+            <div class="usage-table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Time</th><th>Model</th><th>Provider</th>
+                    <th>Tokens In</th><th>Tokens Out</th><th>Cost (USD)</th><th>Task</th>
+                  </tr>
+                </thead>
+                <tbody id="usageTableBody">
+                  <tr><td colspan="7" style="color:var(--text-muted);text-align:center;padding:1.5rem">No records yet.</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="pagination" id="usagePagination">
+              <button id="usagePrevBtn" class="btn-ghost btn-sm" onclick="usagePage(-1)">← Prev</button>
+              <span class="page-info" id="usagePageInfo"></span>
+              <button id="usageNextBtn" class="btn-ghost btn-sm" onclick="usagePage(1)">Next →</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── SETTINGS TAB ─────────────────────────────────────────────────── -->
+      <div id="tab-settings" class="tab-panel">
+        <div class="panel-header"><h1>Settings</h1></div>
+        <div class="container">
+          <div class="card">
+
+            <div class="settings-section">
+              <h3>Model Settings</h3>
+              <div class="ollama-status">
+                <span id="ollamaDot" class="ollama-dot"></span>
+                <span id="ollamaLabel" class="ollama-label">Checking…</span>
+                <span id="ollamaUrl" class="ollama-url"></span>
+              </div>
+              <div style="font-size:0.76rem;color:var(--text-muted);margin-bottom:0.5rem;font-weight:500">Installed Models</div>
+              <div class="model-list" id="modelList">
+                <div style="color:var(--text-muted);font-size:0.82rem">Loading…</div>
+              </div>
+              <div class="row" style="margin-bottom:0.85rem">
+                <div class="field">
+                  <label>Orchestrator Model (Gemma)</label>
+                  <select id="sel_orchestrator_model"><option value="">⚠️ Ollama offline</option></select>
+                </div>
+                <div class="field">
+                  <label>Executor Model (Qwen)</label>
+                  <select id="sel_executor_model"><option value="">⚠️ Ollama offline</option></select>
+                </div>
+              </div>
+              <div class="row" style="margin-bottom:0.85rem">
+                <div class="field">
+                  <label>Claude Model (Escalation)</label>
+                  <input type="text" id="inp_claude_model" placeholder="claude-opus-4-6" />
+                </div>
+              </div>
+              <div class="row" style="margin-bottom:1.25rem">
+                <div class="field">
+                  <label>Orchestrator Ollama URL</label>
+                  <input type="text" id="inp_gemma_base_url" placeholder="http://localhost:11434" />
+                </div>
+                <div class="field">
+                  <label>Executor Ollama URL</label>
+                  <input type="text" id="inp_qwen_base_url" placeholder="http://localhost:11434" />
+                </div>
+              </div>
+              <div style="font-size:0.76rem;color:var(--text-muted);margin-bottom:0.5rem;font-weight:500">Pull New Model</div>
+              <div class="pull-row">
+                <div class="field">
+                  <label>Model name (e.g. llama3:8b)</label>
+                  <input type="text" id="pullModelName" placeholder="gemma3:12b" />
+                </div>
+                <button class="btn-primary" onclick="pullModel()" id="pullBtn">⬇ Pull</button>
+              </div>
+              <div class="progress-wrap" id="pullProgress">
+                <div class="progress-label">
+                  <span id="pullStatusText">Preparing…</span>
+                  <span id="pullPct">0%</span>
+                </div>
+                <div class="progress-bar-outer">
+                  <div class="progress-bar-inner" id="pullBar"></div>
+                </div>
+              </div>
+            </div>
+
+            <div class="settings-section">
+              <h3>Parameter Settings</h3>
+              <div class="param-row">
+                <div class="param-field">
+                  <label>Escalation Confidence Threshold
+                    <span class="param-value" id="val_escalation_threshold">0.60</span>
+                  </label>
+                  <input type="range" id="rng_escalation_threshold" min="0" max="1" step="0.05" value="0.6"
+                    oninput="document.getElementById('val_escalation_threshold').textContent=parseFloat(this.value).toFixed(2)" />
+                </div>
+                <div class="param-field">
+                  <label>Escalation Failure Limit
+                    <span class="param-value" id="val_escalation_failure_limit">3</span>
+                  </label>
+                  <input type="range" id="rng_escalation_failure_limit" min="1" max="10" step="1" value="3"
+                    oninput="document.getElementById('val_escalation_failure_limit').textContent=this.value" />
+                </div>
+              </div>
+              <div class="param-row">
+                <div class="param-field">
+                  <label>Gemma Max Tokens
+                    <span class="param-value" id="val_gemma_max_tokens">4096</span>
+                  </label>
+                  <input type="range" id="rng_gemma_max_tokens" min="512" max="8192" step="256" value="4096"
+                    oninput="document.getElementById('val_gemma_max_tokens').textContent=this.value" />
+                </div>
+                <div class="param-field">
+                  <label>Qwen Max Tokens
+                    <span class="param-value" id="val_qwen_max_tokens">4096</span>
+                  </label>
+                  <input type="range" id="rng_qwen_max_tokens" min="512" max="8192" step="256" value="4096"
+                    oninput="document.getElementById('val_qwen_max_tokens').textContent=this.value" />
+                </div>
+              </div>
+              <div class="param-row">
+                <div class="param-field">
+                  <label>Skill Match Threshold
+                    <span class="param-value" id="val_skill_match_threshold">0.40</span>
+                  </label>
+                  <input type="range" id="rng_skill_match_threshold" min="0" max="1" step="0.05" value="0.4"
+                    oninput="document.getElementById('val_skill_match_threshold').textContent=parseFloat(this.value).toFixed(2)" />
+                </div>
+                <div class="param-field">
+                  <label>Skill Promotion Threshold
+                    <span class="param-value" id="val_skill_promotion_threshold">5</span>
+                  </label>
+                  <input type="range" id="rng_skill_promotion_threshold" min="1" max="50" step="1" value="5"
+                    oninput="document.getElementById('val_skill_promotion_threshold').textContent=this.value" />
+                </div>
+              </div>
+            </div>
+
+            <div class="settings-save-row">
+              <button class="btn-primary" onclick="saveSettings()" id="saveSettingsBtn">Save Settings</button>
+              <span class="settings-msg" id="settingsMsg"></span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div><!-- /main-content -->
+  </div><!-- /app-layout -->
+
   <button id="approvalFab" onclick="openApprovalModal()">
     ⚠️ Approvals
     <span class="fab-badge" id="approvalCount">0</span>
   </button>
 
-  <!-- ── Approval Modal ───────────────────────────────────────────────────── -->
   <div id="approvalOverlay" onclick="maybeCloseModal(event)">
     <div id="approvalModal">
       <button class="modal-close" onclick="closeApprovalModal()">✕ Close</button>
@@ -1429,28 +1629,43 @@
   <script>
     const API = '';
 
+    // UUID v4 helper — pre-generate task_id so /tasks/{id}/cancel works
+    // while /run is still in flight (Stop button).
+    function uuid4() {
+      if (crypto && crypto.randomUUID) return crypto.randomUUID();
+      return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+        const r = Math.random() * 16 | 0;
+        return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+      });
+    }
+
     // ── WebSocket ───────────────────────────────────────────────────────────
     let _ws = null;
     let _activeCalls = {};
     let _currentTaskId = null;
-    // Map of tool-call key → { timer30, timer90 } for stuck-detection UI
     let _stuckTimers = {};
 
-    // ── Session state ───────────────────────────────────────────────────────
-    // _currentSessionId is the logical thread/conversation the user is in.
-    // Persisted to localStorage so refreshes don't lose the active session.
-    // Memory retrieval + task listing are both scoped to this id server-side,
-    // which stops cross-project contamination (e.g. mold-harvester leaking
-    // into a Pixelle-Video run).
+    // Running-task state for the Stop button:
+    // _runAbort lets clicking Stop abort the client-side fetch immediately,
+    // while the paired /tasks/{id}/cancel request tells the server to
+    // actually stop the orchestrator coroutine.
+    let _runAbort = null;
+    let _isRunning = false;
+
+    // Session state
     let _currentSessionId = localStorage.getItem('teddy.session_id') || null;
-    let _sessionTitles = {};  // id → title cache for the "Rename" button
+    let _sessionTitles = {};
 
     function initWS() {
       const proto = location.protocol === 'https:' ? 'wss' : 'ws';
       _ws = new WebSocket(`${proto}://${location.host}/ws`);
-      _ws.onopen  = () => document.getElementById('wsBadge').classList.add('connected');
+      _ws.onopen  = () => {
+        document.getElementById('wsBadge').classList.add('connected');
+        const l = document.getElementById('wsLabel'); if (l) l.textContent = 'Connected';
+      };
       _ws.onclose = () => {
         document.getElementById('wsBadge').classList.remove('connected');
+        const l = document.getElementById('wsLabel'); if (l) l.textContent = 'Disconnected — retrying…';
         setTimeout(initWS, 3000);
       };
       _ws.onerror = () => _ws.close();
@@ -1466,7 +1681,17 @@
       };
     }
 
-    // ── Chat Helpers ────────────────────────────────────────────────────────
+    // ── Sidebar toggle (mobile) ────────────────────────────────────────────
+    function toggleSidebar() {
+      document.getElementById('sidebar').classList.toggle('open');
+      document.getElementById('sidebarOverlay').classList.toggle('open');
+    }
+    function closeSidebar() {
+      document.getElementById('sidebar').classList.remove('open');
+      document.getElementById('sidebarOverlay').classList.remove('open');
+    }
+
+    // ── Chat helpers ────────────────────────────────────────────────────────
     function appendToChat(el) {
       const chat = document.getElementById('chatMessages');
       chat.appendChild(el);
@@ -1480,35 +1705,46 @@
         const res = await fetch(`${API}/sessions`);
         if (!res.ok) return;
         const data = await res.json();
-        const sel = document.getElementById('sessionSelect');
-        sel.innerHTML = '';
         _sessionTitles = {};
-        const sessions = (data.sessions || []);
+        let sessions = data.sessions || [];
 
-        // No sessions yet: auto-create one so every task always lives in a thread.
         if (sessions.length === 0) {
           const created = await apiCreateSession('Default session');
           if (!created) return;
-          sessions.push(created);
+          sessions = [created];
         }
 
-        for (const s of sessions) {
-          _sessionTitles[s.id] = s.title;
-          const opt = document.createElement('option');
-          opt.value = s.id;
-          opt.textContent = s.title;
-          sel.appendChild(opt);
-        }
-
-        // Validate / pick a current session.
-        if (!_currentSessionId || !_sessionTitles[_currentSessionId]) {
+        if (!_currentSessionId || !sessions.find(s => s.id === _currentSessionId)) {
           _currentSessionId = sessions[0].id;
           localStorage.setItem('teddy.session_id', _currentSessionId);
         }
-        sel.value = _currentSessionId;
+
+        const list = document.getElementById('sessionList');
+        list.innerHTML = '';
+        for (const s of sessions) {
+          _sessionTitles[s.id] = s.title;
+          const item = document.createElement('div');
+          item.className = 'session-item' + (s.id === _currentSessionId ? ' active' : '');
+          item.dataset.id = s.id;
+          const titleHtml = escHtml(s.title || 'Untitled');
+          item.innerHTML = `
+            <span class="session-item-title" title="${titleHtml}">${titleHtml}</span>
+            <div class="session-item-actions">
+              <button class="session-action-btn" title="Rename" onclick="event.stopPropagation(); renameSession('${escHtml(s.id)}')">✎</button>
+              <button class="session-action-btn" title="Delete" onclick="event.stopPropagation(); deleteSession('${escHtml(s.id)}')">✕</button>
+            </div>`;
+          item.onclick = () => switchSession(s.id);
+          list.appendChild(item);
+        }
+        updateChatHeaderTitle();
       } catch (e) {
         console.debug('loadSessions error:', e);
       }
+    }
+
+    function updateChatHeaderTitle() {
+      const el = document.getElementById('chatHeaderTitle');
+      if (el) el.textContent = _sessionTitles[_currentSessionId] || 'New session';
     }
 
     async function apiCreateSession(title) {
@@ -1524,42 +1760,64 @@
     }
 
     async function createNewSession() {
-      const title = prompt('Session name?', 'New session');
-      if (title === null) return;
-      const s = await apiCreateSession(title.trim() || 'New session');
+      const s = await apiCreateSession('New session');
       if (!s) { toast('Could not create session', true); return; }
       _currentSessionId = s.id;
       localStorage.setItem('teddy.session_id', s.id);
+      showChatPanel();
       await loadSessions();
       await loadChatHistory();
+      closeSidebar();
     }
 
     async function switchSession(id) {
-      if (!id || id === _currentSessionId) return;
-      _currentSessionId = id;
-      localStorage.setItem('teddy.session_id', id);
+      if (!id) return;
+      if (id !== _currentSessionId) {
+        _currentSessionId = id;
+        localStorage.setItem('teddy.session_id', id);
+      }
+      document.querySelectorAll('.session-item').forEach(el => {
+        el.classList.toggle('active', el.dataset.id === id);
+      });
+      showChatPanel();
+      updateChatHeaderTitle();
       await loadChatHistory();
+      closeSidebar();
     }
 
-    async function renameCurrentSession() {
-      if (!_currentSessionId) return;
-      const current = _sessionTitles[_currentSessionId] || '';
+    async function renameSession(id) {
+      const current = _sessionTitles[id] || '';
       const next = prompt('Rename this session:', current);
-      if (next === null || next.trim() === '' || next.trim() === current) return;
+      if (next === null) return;
+      const trimmed = next.trim();
+      if (!trimmed || trimmed === current) return;
       try {
-        const res = await fetch(`${API}/sessions/${_currentSessionId}`, {
+        const res = await fetch(`${API}/sessions/${id}`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ title: next.trim() }),
+          body: JSON.stringify({ title: trimmed }),
         });
         if (!res.ok) throw new Error(res.statusText);
         await loadSessions();
+        toast('Renamed.');
       } catch (e) { toast('Rename failed: ' + e.message, true); }
     }
 
-    // Load the last N completed tasks from the server and render them as
-    // prior Q&A bubbles, so refreshing or coming back later preserves the
-    // conversation. The server-side SQLite store is the source of truth.
+    async function deleteSession(id) {
+      if (!confirm('Delete this session and all its task history?')) return;
+      try {
+        const res = await fetch(`${API}/sessions/${id}`, { method: 'DELETE' });
+        if (!res.ok) throw new Error(res.statusText);
+        if (id === _currentSessionId) {
+          _currentSessionId = null;
+          localStorage.removeItem('teddy.session_id');
+        }
+        await loadSessions();
+        await loadChatHistory();
+        toast('Session deleted.');
+      } catch (e) { toast('Delete failed: ' + e.message, true); }
+    }
+
     async function loadChatHistory(limit = 20) {
       try {
         const qs = new URLSearchParams({ limit: String(limit) });
@@ -1571,7 +1829,6 @@
         chat.innerHTML = '';
 
         if (!Array.isArray(tasks) || tasks.length === 0) {
-          // Fresh session — show the greeting again so the chat isn't empty.
           const g = document.createElement('div');
           g.className = 'msg-agent';
           g.textContent = "Hello! I'm OpenTeddy 🐩 This is a new session — describe what you'd like me to do.";
@@ -1579,7 +1836,6 @@
           return;
         }
 
-        // Oldest first so the newest sits above the input.
         const ordered = tasks.slice().reverse();
         for (const t of ordered) {
           if (t.goal) {
@@ -1608,7 +1864,6 @@
       el.textContent = text;
       return appendToChat(el);
     }
-
     function addAgentMessage(html, asText = true) {
       const el = document.createElement('div');
       el.className = 'msg-agent';
@@ -1616,23 +1871,25 @@
       else el.innerHTML = html;
       return appendToChat(el);
     }
+    function addSystemMessage(text) {
+      const el = document.createElement('div');
+      el.className = 'msg-system';
+      el.textContent = text;
+      return appendToChat(el);
+    }
 
-    // ── Tool Call / Result (stream → chat) ──────────────────────────────────
+    // ── Tool Call / Result ──────────────────────────────────────────────────
     function toggleToolCard(header) {
       const card = header.closest('.tool-call-card');
       if (card) card.classList.toggle('expanded');
     }
 
     function handleToolCall(data) {
-      // call_idx disambiguates multiple calls of the same tool within one
-      // round so each card gets a unique DOM id (otherwise getElementById
-      // returns the first match and subsequent cards stay stuck on "Running…").
       const idx     = data.call_idx ?? 0;
       const key     = `${data.round}-${idx}-${data.tool}`;
       const argsStr = data.args ? JSON.stringify(data.args, null, 2) : '(no args)';
 
       const card = document.createElement('div');
-      // Start expanded while running so the user sees progress; auto-collapse on success.
       card.className = 'tool-call-card expanded';
       card.id = `tc-${key}`;
       card.innerHTML = `
@@ -1653,7 +1910,6 @@
       appendToChat(card);
       _activeCalls[key] = true;
 
-      // ── Stuck-detection timers ─────────────────────────────────────────────
       const stuckEl = document.getElementById(`stuck-${key}`);
       const t30 = setTimeout(() => {
         if (!_activeCalls[key]) return;
@@ -1675,10 +1931,6 @@
       _stuckTimers[key] = { t30, t90 };
     }
 
-    // Mark any tool cards still in "Running..." state as cancelled.
-    // Runs when a task ends — handles the case where the orchestrator
-    // cancelled the executor coroutine (e.g. subtask timeout → Claude
-    // escalation) before the tool_result WebSocket event could fire.
     function cancelStragglers(reason) {
       for (const key of Object.keys(_activeCalls)) {
         const card   = document.getElementById(`tc-${key}`);
@@ -1693,7 +1945,7 @@
         if (stuck) stuck.style.display = 'none';
         if (card) {
           card.classList.add('failure');
-          card.classList.remove('expanded');  // fold away since there's no output
+          card.classList.remove('expanded');
         }
         if (row) {
           row.innerHTML = `
@@ -1713,7 +1965,6 @@
       const summaryEl = document.getElementById(`tcs-${key}`);
       if (!card || !resultRow) return;
 
-      // Clear stuck-detection timers and hide the hint
       if (_stuckTimers[key]) {
         clearTimeout(_stuckTimers[key].t30);
         clearTimeout(_stuckTimers[key].t90);
@@ -1735,65 +1986,118 @@
         <span class="tool-result-icon">${icon}</span>
         <div class="tool-result-output"><strong style="font-family:inherit;font-size:0.75rem">${label}</strong> ${text}</div>`;
 
-      // Update the collapsed summary line and auto-collapse on success.
       if (summaryEl) {
         const firstLine = (raw || (success ? 'done' : 'error')).split('\n')[0].trim().slice(0, 120);
         summaryEl.textContent = firstLine || (success ? 'done' : 'error');
       }
-      if (success) {
-        card.classList.remove('expanded');  // fold away noisy output
-      }  // on failure: keep expanded so the user sees the error
+      if (success) card.classList.remove('expanded');
 
       const chat = document.getElementById('chatMessages');
       chat.scrollTop = chat.scrollHeight;
     }
 
-    // ── Tab Navigation ──────────────────────────────────────────────────────
-    function switchTab(name, btn) {
-      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    // ── Sidebar nav / tabs ──────────────────────────────────────────────────
+    function showChatPanel() {
       document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
-      btn.classList.add('active');
-      document.getElementById('tab-' + name).classList.add('active');
+      document.getElementById('tab-tasks').classList.add('active');
+      document.querySelectorAll('.sidebar-nav-btn').forEach(b => b.classList.remove('active'));
+    }
+
+    function switchTab(name) {
+      document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+      const panel = document.getElementById('tab-' + name);
+      if (panel) panel.classList.add('active');
+      document.querySelectorAll('.sidebar-nav-btn').forEach(b => b.classList.remove('active'));
+      const navBtn = document.querySelector(`.sidebar-nav-btn[data-tab="${name}"]`);
+      if (navBtn) navBtn.classList.add('active');
+
       if (name === 'skills')   loadSkills();
       if (name === 'tools')    loadTools();
       if (name === 'memory')   loadMemory();
       if (name === 'usage')    { loadUsageSummary(); loadUsageRecords(1); }
       if (name === 'settings') loadSettings();
+      closeSidebar();
     }
 
-    // ── Task Execution ──────────────────────────────────────────────────────
+    // ── Input keyboard handling ────────────────────────────────────────────
+    // Plain Enter MUST NOT submit — the user explicitly asked for this
+    // (accidentally hitting Enter was sending messages). Enter inserts a
+    // newline, Shift+Enter inserts a newline too. Cmd/Ctrl+Enter is kept
+    // as a power-user shortcut to submit without reaching for the mouse.
+    function handleGoalKey(event) {
+      if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+        event.preventDefault();
+        if (!_isRunning) onSendOrStop();
+      }
+      // Everything else falls through — default newline behavior.
+    }
+
+    // ── Send / Stop ─────────────────────────────────────────────────────────
+    function onSendOrStop() {
+      if (_isRunning) cancelRunning();
+      else            runTask();
+    }
+
+    function setRunningState(running) {
+      _isRunning = running;
+      const btn = document.getElementById('runBtn');
+      if (!btn) return;
+      if (running) {
+        btn.classList.add('is-stop');
+        btn.textContent = '■';
+        btn.title = 'Stop — 中斷此次推論';
+      } else {
+        btn.classList.remove('is-stop');
+        btn.textContent = '↑';
+        btn.title = 'Send';
+      }
+    }
+
+    async function cancelRunning() {
+      if (_currentTaskId) {
+        try {
+          await fetch(`${API}/tasks/${_currentTaskId}/cancel`, { method: 'POST' });
+        } catch (e) { /* best-effort */ }
+      }
+      if (_runAbort) {
+        try { _runAbort.abort(); } catch {}
+      }
+    }
+
     async function runTask() {
       const goalEl   = document.getElementById('goal');
       const goal     = goalEl.value.trim();
       if (!goal) { toast('Please describe your task.'); return; }
       const priority = parseInt(document.getElementById('priority').value) || 5;
 
-      const btn = document.getElementById('runBtn');
-      btn.disabled = true;
-      btn.textContent = '…';
+      // Pre-generate task_id so /tasks/{id}/cancel works before /run returns.
+      const taskId = uuid4();
+      _currentTaskId = taskId;
+      _activeCalls   = {};
+      _runAbort      = new AbortController();
+      setRunningState(true);
 
       addUserMessage(goal);
       goalEl.value = '';
       goalEl.style.height = 'auto';
 
-      // Thinking indicator
       const thinkingEl = addAgentMessage('⏳ Working on it…');
-      _currentTaskId   = null;
-      _activeCalls     = {};
 
+      let aborted = false;
       try {
         const res  = await fetch(`${API}/run`, {
           method:  'POST',
           headers: { 'Content-Type': 'application/json' },
           body:    JSON.stringify({
+            task_id: taskId,
             goal,
             priority,
             context: {},
             session_id: _currentSessionId || undefined,
           }),
+          signal: _runAbort.signal,
         });
         const data = await res.json();
-        _currentTaskId = data.task_id;
         document.getElementById('resultTaskId').textContent = data.task_id;
         const se = document.getElementById('resultStatus');
         se.textContent = data.status;
@@ -1802,12 +2106,20 @@
 
         await loadTaskStatus(data.task_id, thinkingEl);
       } catch (e) {
-        thinkingEl.textContent = '❌ Error: ' + e.message;
-        toast('Error: ' + e.message, true);
+        if (e.name === 'AbortError') {
+          aborted = true;
+          if (thinkingEl && thinkingEl.parentNode) thinkingEl.remove();
+          cancelStragglers('已中斷');
+          addSystemMessage('⏹️ 已中斷推論 — 部分子任務可能仍在背景結束中。');
+        } else {
+          if (thinkingEl) thinkingEl.textContent = '❌ Error: ' + e.message;
+          toast('Error: ' + e.message, true);
+        }
       } finally {
-        btn.disabled    = false;
-        btn.textContent = '↑';
-        _currentTaskId  = null;
+        setRunningState(false);
+        _runAbort      = null;
+        _currentTaskId = null;
+        if (!aborted) loadSessions().catch(() => {});
       }
     }
 
@@ -1827,14 +2139,10 @@
 
         const summary = data.summary || data.message || '';
 
-        // Task reached a terminal state → sweep up any tool cards that
-        // never received a tool_result (usually because the executor
-        // coroutine was cancelled by subtask_timeout → Claude escalation).
         if (data.status && data.status !== 'running' && data.status !== 'pending') {
           cancelStragglers('已取消（任務提前結束，可能已升級到 Claude）');
         }
 
-        // Remove thinking bubble and add final result at bottom
         if (thinkingEl && thinkingEl.parentNode) thinkingEl.remove();
 
         let resultHTML = '<div class="md-body">' +
@@ -1941,7 +2249,6 @@
       } catch (e) { /* ignore */ }
     }
 
-    // ── In-chat Approval Card ─────────────────────────────────────────────────
     function handleApprovalRequired(data) {
       const approvalId = data.approval_id || data.id || '';
       const toolName   = data.tool_name   || data.tool || 'Unknown Tool';
@@ -2186,7 +2493,7 @@
       loadUsageRecords(1);
     }
 
-    // ── Chart (light-theme colors) ───────────────────────────────────────────
+    // ── Chart ────────────────────────────────────────────────────────────────
     function drawChart(data) {
       const canvas = document.getElementById('usageChart');
       const empty  = document.getElementById('chartEmpty');
@@ -2209,7 +2516,6 @@
       const PAD_L=55, PAD_R=16, PAD_T=16, PAD_B=32;
       const chartW = W-PAD_L-PAD_R, chartH = H-PAD_T-PAD_B;
       ctx.clearRect(0, 0, W, H);
-      // Grid
       ctx.strokeStyle = '#e5e0d8'; ctx.lineWidth = 1;
       for (let i = 0; i <= 4; i++) {
         const y = PAD_T + (chartH/4)*i;
@@ -2226,20 +2532,17 @@
         x: PAD_L + (i/(days-1))*chartW,
         y: PAD_T + chartH - (v/maxVal)*chartH,
       }));
-      // Fill
       ctx.beginPath(); ctx.moveTo(pts[0].x, PAD_T+chartH);
       pts.forEach(p => ctx.lineTo(p.x, p.y));
       ctx.lineTo(pts[pts.length-1].x, PAD_T+chartH); ctx.closePath();
       ctx.fillStyle='rgba(124,92,191,0.1)'; ctx.fill();
-      // Line
       ctx.beginPath(); pts.forEach((p,i) => i===0 ? ctx.moveTo(p.x,p.y) : ctx.lineTo(p.x,p.y));
       ctx.strokeStyle='#7c5cbf'; ctx.lineWidth=2; ctx.lineJoin='round'; ctx.stroke();
-      // Dots
       ctx.fillStyle='#7c5cbf';
       pts.forEach((p,i) => { if (values[i]>0) { ctx.beginPath(); ctx.arc(p.x,p.y,3,0,Math.PI*2); ctx.fill(); } });
     }
 
-    // ── Toast ────────────────────────────────────────────────────────────────
+    // ── Toast / helpers ─────────────────────────────────────────────────────
     function toast(msg, isError = false) {
       const fab    = document.getElementById('approvalFab');
       const toastEl = document.getElementById('toast');
@@ -2256,52 +2559,42 @@
       );
     }
 
-    // Minimal, safe markdown renderer for summaries from the agents.
-    // Block-level: fenced code, headings, horizontal rule, bullet lists, paragraphs.
-    // Inline: bold **text**, `code`. Everything is HTML-escaped.
     function renderMarkdown(text) {
       if (!text) return '';
       let src = String(text).replace(/\r\n/g, '\n');
 
-      // 1) Lift fenced code blocks so their contents survive verbatim.
       const codeBlocks = [];
       src = src.replace(/```(?:[\w-]*\n)?([\s\S]*?)```/g, (_, code) => {
         codeBlocks.push(code.replace(/\n+$/, ''));
         return `\n\n§§CB${codeBlocks.length - 1}§§\n\n`;
       });
 
-      // 2) Escape HTML everywhere else.
       src = escHtml(src);
 
       const inline = (s) => s
         .replace(/\*\*([^*\n]+?)\*\*/g, '<strong>$1</strong>')
         .replace(/`([^`\n]+?)`/g, '<code class="md-inline-code">$1</code>');
 
-      // 3) Walk blocks separated by blank lines and render each by type.
       const blocks = src.split(/\n{2,}/);
       const out = [];
       for (const raw of blocks) {
         const block = raw.replace(/^\n+|\n+$/g, '');
         if (!block) continue;
 
-        // Code-block placeholder
         const cb = block.match(/^§§CB(\d+)§§$/);
         if (cb) {
           out.push(`<pre class="md-pre">${escHtml(codeBlocks[+cb[1]])}</pre>`);
           continue;
         }
 
-        // Horizontal rule
         if (/^---+\s*$/.test(block)) { out.push('<hr class="md-hr">'); continue; }
 
-        // Headings (single-line blocks)
         let m;
         if ((m = block.match(/^#### (.+)$/))) { out.push(`<h4>${inline(m[1])}</h4>`); continue; }
         if ((m = block.match(/^### (.+)$/)))  { out.push(`<h4>${inline(m[1])}</h4>`); continue; }
         if ((m = block.match(/^## (.+)$/)))   { out.push(`<h3>${inline(m[1])}</h3>`); continue; }
         if ((m = block.match(/^# (.+)$/)))    { out.push(`<h2>${inline(m[1])}</h2>`); continue; }
 
-        // Mixed block: split into <ul> runs vs paragraph runs line-by-line.
         const lines = block.split('\n');
         let listBuf = [];
         let textBuf = [];
@@ -2534,9 +2827,6 @@
     // ── Init ─────────────────────────────────────────────────────────────────
     window.onload = async () => {
       initWS();
-      // Sessions must load first so loadChatHistory has a valid session_id
-      // to filter by. Without this the first paint may show cross-session
-      // tasks, defeating the whole isolation fix.
       await loadSessions();
       await loadChatHistory();
       loadSkills();
