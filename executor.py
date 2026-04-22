@@ -35,6 +35,36 @@ _FAILURE_SIGNAL_RE = re.compile(
     re.IGNORECASE,
 )
 _FAILURE_CLAMP_CONFIDENCE = 0.3
+_OUTPUT_PREVIEW_CHARS = 500
+
+
+def _preview_tool_output(tool_result: Dict[str, Any]) -> str:
+    """Produce a short string preview of a tool result for the Web UI.
+
+    Falls back through stdout → stderr → stringified result → error so the
+    collapsed tool card always shows something meaningful (not just "done").
+    """
+    if not tool_result:
+        return ""
+    result = tool_result.get("result")
+    if isinstance(result, dict):
+        text = (
+            result.get("stdout")
+            or result.get("stderr")
+            or result.get("content")
+            or ""
+        )
+        if not text:
+            # Last resort: serialise the dict
+            text = json.dumps(result, ensure_ascii=False)
+    elif isinstance(result, str):
+        text = result
+    elif result is not None:
+        text = str(result)
+    else:
+        text = tool_result.get("error") or ""
+    text = (text or "").strip()
+    return text[:_OUTPUT_PREVIEW_CHARS]
 
 _SYSTEM_PROMPT = """\
 You are Teddy-Exec, a precise task executor powered by Qwen.
@@ -202,7 +232,7 @@ class Executor:
             })
 
             # Execute each tool and collect results
-            for call in tool_calls:
+            for call_idx, call in enumerate(tool_calls):
                 fn_info = call.get("function", {})
                 tool_name: str = fn_info.get("name", "")
                 raw_args = fn_info.get("arguments", {})
@@ -212,14 +242,17 @@ class Executor:
                 )
 
                 logger.info(
-                    "Tool call round=%d tool=%s args=%s task=%s",
-                    round_idx, tool_name, args, task_id,
+                    "Tool call round=%d idx=%d tool=%s args=%s task=%s",
+                    round_idx, call_idx, tool_name, args, task_id,
                 )
 
-                # Push event to Web UI
+                # Push event to Web UI. call_idx disambiguates multiple calls
+                # of the same tool within a single round so each gets its own
+                # card instead of sharing a DOM id.
                 await self._push_event({
                     "event": "tool_call",
                     "round": round_idx,
+                    "call_idx": call_idx,
                     "tool": tool_name,
                     "args": args,
                     "task_id": task_id,
@@ -254,13 +287,19 @@ class Executor:
                             tool_name, task_id,
                         )
 
+                # Build a short, human-readable output preview for the UI so
+                # collapsed cards show the real first line instead of "(done)".
+                output_preview = _preview_tool_output(tool_result)
+
                 # Push result event to Web UI
                 await self._push_event({
                     "event": "tool_result",
                     "round": round_idx,
+                    "call_idx": call_idx,
                     "tool": tool_name,
                     "success": tool_result.get("success"),
                     "error": tool_result.get("error"),
+                    "output": output_preview,
                     "task_id": task_id,
                 })
 

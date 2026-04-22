@@ -1448,7 +1448,11 @@
     }
 
     function handleToolCall(data) {
-      const key     = `${data.round}-${data.tool}`;
+      // call_idx disambiguates multiple calls of the same tool within one
+      // round so each card gets a unique DOM id (otherwise getElementById
+      // returns the first match and subsequent cards stay stuck on "Running…").
+      const idx     = data.call_idx ?? 0;
+      const key     = `${data.round}-${idx}-${data.tool}`;
       const argsStr = data.args ? JSON.stringify(data.args, null, 2) : '(no args)';
 
       const card = document.createElement('div');
@@ -1496,7 +1500,8 @@
     }
 
     function handleToolResult(data) {
-      const key       = `${data.round}-${data.tool}`;
+      const idx       = data.call_idx ?? 0;
+      const key       = `${data.round}-${idx}-${data.tool}`;
       const card      = document.getElementById(`tc-${key}`);
       const resultRow = document.getElementById(`tcr-${key}`);
       const summaryEl = document.getElementById(`tcs-${key}`);
