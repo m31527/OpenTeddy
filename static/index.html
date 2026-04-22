@@ -3,198 +3,219 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>OpenTeddy Dashboard</title>
+  <title>OpenTeddy</title>
   <style>
     :root {
-      --bg: #0f1117;
-      --surface: #1a1d27;
-      --border: #2d3148;
-      --accent: #7c6af7;
-      --accent-dim: #4b3fc4;
-      --text: #e8eaf6;
-      --muted: #8888aa;
-      --success: #4caf8a;
-      --warning: #f0b429;
-      --error: #f56565;
-      --escalated: #a78bfa;
-      --orange: #f97316;
-      --orange-dim: #c2510e;
-      --memory: #06b6d4;
-      --memory-dim: #0891b2;
+      --bg-primary:    #faf9f7;
+      --bg-secondary:  #f3f1ed;
+      --bg-sidebar:    #f0ede8;
+      --surface:       #ffffff;
+      --border:        #e5e0d8;
+      --text-primary:  #1a1a1a;
+      --text-secondary:#6b6b6b;
+      --text-muted:    #9b9b9b;
+      --accent:        #d97757;
+      --accent-hover:  #c4623e;
+      --accent-light:  #fdf0eb;
+      --purple:        #7c5cbf;
+      --purple-light:  #f0ecfa;
+      --success:       #2a7d46;
+      --warning:       #b45309;
+      --error:         #cc3333;
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
-      background: var(--bg);
-      color: var(--text);
-      font-family: 'Segoe UI', system-ui, sans-serif;
+      background: var(--bg-primary);
+      color: var(--text-primary);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
       min-height: 100vh;
     }
+
+    /* ── Header ─────────────────────────────────────────────────────────── */
     header {
       background: var(--surface);
       border-bottom: 1px solid var(--border);
-      padding: 1rem 2rem;
+      padding: 0.7rem 1.5rem;
       display: flex;
       align-items: center;
-      gap: 1rem;
+      gap: 0.65rem;
+      position: sticky;
+      top: 0;
+      z-index: 100;
     }
-    header h1 { font-size: 1.5rem; font-weight: 700; }
-    header span.badge {
-      background: var(--accent-dim);
-      color: #fff;
-      border-radius: 999px;
-      padding: 0.15rem 0.65rem;
-      font-size: 0.72rem;
+    .logo-wrap {
+      width: 32px; height: 32px;
+      border-radius: 50%;
+      overflow: hidden;
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .logo-text {
+      font-size: 0.9375rem;
       font-weight: 600;
+      color: var(--text-primary);
+      letter-spacing: -0.01em;
     }
+    .header-right {
+      margin-left: auto;
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+    .ws-badge {
+      display: inline-block;
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: var(--text-muted);
+      transition: background 0.3s;
+    }
+    .ws-badge.connected { background: var(--success); }
 
-    /* ── Tab Navigation ──────────────────────────────────────────────────── */
+    /* ── Tab Bar ─────────────────────────────────────────────────────────── */
     .tab-bar {
       background: var(--surface);
       border-bottom: 1px solid var(--border);
-      padding: 0 2rem;
+      padding: 0 1.5rem;
       display: flex;
-      gap: 0;
+      position: sticky;
+      top: 53px;
+      z-index: 99;
     }
     .tab-btn {
       background: transparent;
       border: none;
-      border-bottom: 3px solid transparent;
-      color: var(--muted);
-      padding: 0.75rem 1.2rem;
-      font-size: 0.9rem;
-      font-weight: 600;
+      border-bottom: 2px solid transparent;
+      color: var(--text-muted);
+      padding: 0.65rem 1rem;
+      font-size: 0.875rem;
+      font-weight: 500;
+      font-family: inherit;
       cursor: pointer;
-      transition: color 0.2s, border-color 0.2s;
-      border-radius: 0;
+      transition: color 0.15s, border-color 0.15s;
       white-space: nowrap;
+      border-radius: 0;
     }
-    .tab-btn:hover { color: var(--text); background: transparent; }
-    .tab-btn.active {
-      color: var(--accent);
-      border-bottom-color: var(--accent);
-    }
+    .tab-btn:hover { color: var(--text-primary); background: transparent; }
+    .tab-btn.active { color: var(--text-primary); border-bottom-color: var(--text-primary); }
     .tab-panel { display: none; }
     .tab-panel.active { display: block; }
 
-    .container { max-width: 960px; margin: 2rem auto; padding: 0 1rem; }
+    /* ── Container / Cards ───────────────────────────────────────────────── */
+    .container { max-width: 960px; margin: 2rem auto; padding: 0 1.25rem; }
     .card {
       background: var(--surface);
       border: 1px solid var(--border);
       border-radius: 12px;
       padding: 1.5rem;
       margin-bottom: 1.5rem;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.06);
     }
-    .card h2 { font-size: 1.1rem; margin-bottom: 1rem; color: var(--accent); }
+    .card h2 {
+      font-size: 0.9375rem;
+      font-weight: 600;
+      color: var(--text-primary);
+      margin-bottom: 1rem;
+    }
+
+    /* ── Form Inputs ─────────────────────────────────────────────────────── */
     textarea, input[type=text], input[type=number], input[type=date], select {
       width: 100%;
-      background: var(--bg);
+      background: var(--bg-primary);
       border: 1px solid var(--border);
       border-radius: 8px;
-      color: var(--text);
-      padding: 0.7rem 1rem;
-      font-size: 0.95rem;
+      color: var(--text-primary);
+      padding: 0.58rem 0.85rem;
+      font-size: 0.875rem;
+      font-family: inherit;
       outline: none;
-      transition: border 0.2s;
+      transition: border-color 0.15s;
     }
-    textarea:focus, input:focus, select:focus { border-color: var(--accent); }
+    textarea:focus, input:focus, select:focus { border-color: var(--text-secondary); }
     textarea { resize: vertical; min-height: 80px; }
-    .row { display: flex; gap: 1rem; align-items: flex-end; flex-wrap: wrap; }
+    .row { display: flex; gap: 0.85rem; align-items: flex-end; flex-wrap: wrap; }
     .field { flex: 1; min-width: 180px; }
-    .field label { display: block; font-size: 0.8rem; color: var(--muted); margin-bottom: 0.4rem; }
+    .field label {
+      display: block;
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      margin-bottom: 0.35rem;
+      font-weight: 500;
+    }
+
+    /* ── Buttons ─────────────────────────────────────────────────────────── */
     button {
-      background: var(--accent);
-      color: #fff;
-      border: none;
+      background: transparent;
+      border: 1.5px solid var(--text-primary);
+      color: var(--text-primary);
       border-radius: 8px;
-      padding: 0.65rem 1.4rem;
-      font-size: 0.95rem;
-      font-weight: 600;
+      padding: 0.5rem 1rem;
+      font-size: 0.875rem;
+      font-weight: 500;
+      font-family: inherit;
       cursor: pointer;
-      transition: background 0.2s;
+      transition: background 0.15s;
       white-space: nowrap;
     }
-    button:hover { background: var(--accent-dim); }
-    button:disabled { opacity: 0.45; cursor: not-allowed; }
-    .btn-approve { background: #166534; color: #bbf7d0; }
-    .btn-approve:hover { background: #15803d; }
-    .btn-reject { background: #7f1d1d; color: #fecaca; }
-    .btn-reject:hover { background: #991b1b; }
-    .btn-danger { background: #7f1d1d; color: #fecaca; }
-    .btn-danger:hover { background: #991b1b; }
-    .btn-ghost {
-      background: transparent;
-      border: 1px solid var(--border);
-      color: var(--text);
-    }
-    .btn-ghost:hover { background: var(--border); }
-    .btn-sm { padding: 0.35rem 0.85rem; font-size: 0.82rem; }
+    button:hover { background: var(--bg-secondary); }
+    button:disabled { opacity: 0.4; cursor: not-allowed; }
 
+    .btn-primary {
+      background: var(--text-primary);
+      color: #ffffff;
+      border-color: var(--text-primary);
+    }
+    .btn-primary:hover { background: #333333; }
+
+    .btn-danger { border-color: var(--error); color: var(--error); }
+    .btn-danger:hover { background: #fff0f0; }
+
+    .btn-approve { border-color: var(--success); color: var(--success); }
+    .btn-approve:hover { background: #f0fdf4; }
+
+    .btn-reject { border-color: var(--error); color: var(--error); }
+    .btn-reject:hover { background: #fff0f0; }
+
+    .btn-ghost {
+      border: 1.5px solid var(--border);
+      color: var(--text-secondary);
+    }
+    .btn-ghost:hover { background: var(--bg-secondary); }
+
+    .btn-sm { padding: 0.32rem 0.7rem; font-size: 0.8rem; }
+
+    /* ── Status Badges ───────────────────────────────────────────────────── */
     .status-badge {
       display: inline-block;
-      border-radius: 999px;
-      padding: 0.15rem 0.6rem;
-      font-size: 0.75rem;
-      font-weight: 700;
+      border-radius: 6px;
+      padding: 0.15rem 0.55rem;
+      font-size: 0.7rem;
+      font-weight: 600;
       text-transform: uppercase;
+      letter-spacing: 0.03em;
+      border: 1px solid currentColor;
     }
-    .status-pending   { background: #2d3148; color: var(--muted); }
-    .status-running   { background: #1e3a5f; color: #60a5fa; }
-    .status-completed { background: #1a3d2e; color: var(--success); }
-    .status-failed    { background: #3d1a1a; color: var(--error); }
-    .status-escalated { background: #2d1a4d; color: var(--escalated); }
-    .result-box {
-      background: var(--bg);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 1rem;
-      margin-top: 0.75rem;
-      font-size: 0.9rem;
-      white-space: pre-wrap;
-      word-break: break-word;
-      max-height: 300px;
-      overflow-y: auto;
-    }
-    .subtask-list { list-style: none; }
-    .subtask-list li {
-      border-bottom: 1px solid var(--border);
-      padding: 0.6rem 0;
-      display: flex;
-      align-items: flex-start;
-      gap: 0.75rem;
-      font-size: 0.88rem;
-    }
-    .subtask-list li:last-child { border-bottom: none; }
-    .subtask-desc { flex: 1; color: var(--text); }
-    .subtask-conf { color: var(--muted); font-size: 0.78rem; }
-    .skills-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-      gap: 0.75rem;
-    }
-    .skill-card {
-      background: var(--bg);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 0.85rem;
-    }
-    .skill-card .skill-name { font-weight: 700; font-size: 0.9rem; margin-bottom: 0.3rem; }
-    .skill-card .skill-desc { font-size: 0.78rem; color: var(--muted); }
-    .skill-card .skill-stats { margin-top: 0.5rem; font-size: 0.75rem; color: var(--success); }
+    .status-pending   { color: var(--text-muted); border-color: var(--border); }
+    .status-running   { color: #2563eb; border-color: #93c5fd; background: #eff6ff; }
+    .status-completed { color: var(--success); border-color: #86efac; background: #f0fdf4; }
+    .status-failed    { color: var(--error);   border-color: #fca5a5; background: #fef2f2; }
+    .status-escalated { color: var(--purple);  border-color: #c4b5fd; background: var(--purple-light); }
 
-    /* ── Loader ────────────────────────────────────────────────────────────── */
+    /* ── Loader ──────────────────────────────────────────────────────────── */
     .loader {
       display: inline-block;
-      width: 16px; height: 16px;
+      width: 13px; height: 13px;
       border: 2px solid var(--border);
-      border-top-color: var(--accent);
+      border-top-color: var(--text-primary);
       border-radius: 50%;
       animation: spin 0.7s linear infinite;
       vertical-align: middle;
-      margin-right: 6px;
+      margin-right: 5px;
     }
     @keyframes spin { to { transform: rotate(360deg); } }
 
-    /* ── Toast ────────────────────────────────────────────────────────────── */
+    /* ── Toast ───────────────────────────────────────────────────────────── */
     #toast {
       position: fixed;
       bottom: 1.5rem;
@@ -202,53 +223,55 @@
       background: var(--surface);
       border: 1px solid var(--border);
       border-radius: 10px;
-      padding: 0.75rem 1.25rem;
-      font-size: 0.9rem;
+      padding: 0.7rem 1.2rem;
+      font-size: 0.875rem;
       opacity: 0;
       transition: opacity 0.3s;
       pointer-events: none;
       z-index: 900;
+      color: var(--text-primary);
+      box-shadow: 0 4px 12px rgba(0,0,0,0.1);
     }
     #toast.show { opacity: 1; }
 
-    /* ── Approval FAB ─────────────────────────────────────────────────────── */
+    /* ── Approval FAB ────────────────────────────────────────────────────── */
     #approvalFab {
       position: fixed;
       bottom: 1.5rem;
       right: 1.5rem;
-      background: var(--orange);
+      background: var(--text-primary);
       color: #fff;
       border: none;
       border-radius: 999px;
-      padding: 0.75rem 1.2rem;
-      font-size: 0.95rem;
-      font-weight: 700;
+      padding: 0.6rem 1.1rem;
+      font-size: 0.875rem;
+      font-weight: 600;
       cursor: pointer;
       display: none;
       align-items: center;
       gap: 0.5rem;
-      box-shadow: 0 4px 16px rgba(249,115,22,0.4);
+      box-shadow: 0 4px 14px rgba(0,0,0,0.18);
       z-index: 800;
-      transition: background 0.2s, transform 0.1s;
+      transition: background 0.15s, transform 0.1s;
     }
-    #approvalFab:hover { background: var(--orange-dim); transform: scale(1.04); }
+    #approvalFab:hover { background: #333; transform: scale(1.02); }
     #approvalFab .fab-badge {
-      background: #fff;
-      color: var(--orange);
+      background: var(--accent);
+      color: #fff;
       border-radius: 999px;
-      font-size: 0.75rem;
-      font-weight: 800;
-      padding: 0.05rem 0.5rem;
-      min-width: 1.4rem;
+      font-size: 0.7rem;
+      font-weight: 700;
+      padding: 0.05rem 0.45rem;
+      min-width: 1.3rem;
       text-align: center;
     }
 
-    /* ── Approval Modal ───────────────────────────────────────────────────── */
+    /* ── Approval Modal ──────────────────────────────────────────────────── */
     #approvalOverlay {
       display: none;
       position: fixed;
       inset: 0;
-      background: rgba(0,0,0,0.65);
+      background: rgba(0,0,0,0.3);
       z-index: 1000;
       align-items: center;
       justify-content: center;
@@ -262,127 +285,185 @@
       width: min(680px, 92vw);
       max-height: 80vh;
       overflow-y: auto;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.12);
     }
-    #approvalModal h3 { font-size: 1.15rem; color: var(--orange); margin-bottom: 1rem; }
+    #approvalModal h3 {
+      font-size: 1rem;
+      font-weight: 600;
+      color: var(--text-primary);
+      margin-bottom: 1rem;
+    }
     .approval-item {
-      background: var(--bg);
+      background: var(--bg-primary);
       border: 1px solid var(--border);
       border-radius: 10px;
       padding: 1rem;
       margin-bottom: 0.85rem;
     }
-    .approval-item .tool-name { font-weight: 700; font-size: 0.95rem; color: var(--warning); margin-bottom: 0.4rem; }
+    .approval-item .tool-name {
+      font-weight: 600;
+      font-size: 0.9rem;
+      color: var(--text-primary);
+      margin-bottom: 0.4rem;
+    }
     .approval-item .tool-args {
       font-family: 'Courier New', monospace;
-      font-size: 0.82rem;
-      color: var(--muted);
+      font-size: 0.78rem;
+      color: var(--text-secondary);
       white-space: pre-wrap;
       word-break: break-all;
+      background: var(--bg-secondary);
+      border-radius: 6px;
+      padding: 0.5rem 0.65rem;
       margin-bottom: 0.75rem;
       max-height: 140px;
       overflow-y: auto;
     }
-    .approval-item .approval-meta { font-size: 0.76rem; color: var(--muted); margin-bottom: 0.75rem; }
+    .approval-item .approval-meta {
+      font-size: 0.74rem;
+      color: var(--text-muted);
+      margin-bottom: 0.75rem;
+    }
     .approval-actions { display: flex; gap: 0.6rem; }
-    .approval-actions button { padding: 0.45rem 1rem; font-size: 0.85rem; }
+    .approval-actions button { padding: 0.38rem 0.85rem; font-size: 0.82rem; }
     .modal-close {
       float: right;
-      background: transparent;
-      border: 1px solid var(--border);
-      color: var(--muted);
-      padding: 0.35rem 0.85rem;
-      font-size: 0.82rem;
+      border: 1.5px solid var(--border);
+      color: var(--text-muted);
+      padding: 0.28rem 0.7rem;
+      font-size: 0.8rem;
       margin-bottom: 0.5rem;
     }
-    .modal-close:hover { background: var(--border); }
-    .empty-approvals { color: var(--muted); font-size: 0.9rem; text-align: center; padding: 1.5rem 0; }
+    .modal-close:hover { background: var(--bg-secondary); }
+    .empty-approvals {
+      color: var(--text-muted);
+      font-size: 0.875rem;
+      text-align: center;
+      padding: 1.5rem 0;
+    }
 
-    /* ── Tools panel ──────────────────────────────────────────────────────── */
+    /* ── Skills ──────────────────────────────────────────────────────────── */
+    .skills-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+      gap: 0.75rem;
+    }
+    .skill-card {
+      background: var(--bg-primary);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.85rem;
+    }
+    .skill-card .skill-name { font-weight: 600; font-size: 0.875rem; margin-bottom: 0.25rem; }
+    .skill-card .skill-desc { font-size: 0.76rem; color: var(--text-muted); }
+    .skill-card .skill-stats { margin-top: 0.45rem; font-size: 0.72rem; color: var(--success); }
+
+    /* ── Tools ───────────────────────────────────────────────────────────── */
     .tools-grid {
       display: grid;
       grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
       gap: 0.65rem;
     }
-    .tool-card {
-      background: var(--bg);
+    .tool-panel-card {
+      background: var(--bg-primary);
       border: 1px solid var(--border);
       border-radius: 8px;
       padding: 0.75rem;
     }
-    .tool-card .tool-name { font-weight: 700; font-size: 0.88rem; margin-bottom: 0.25rem; }
-    .tool-card .tool-desc { font-size: 0.76rem; color: var(--muted); }
-    .risk-low  { color: var(--success); font-size: 0.7rem; font-weight: 700; margin-top: 0.3rem; }
-    .risk-high { color: var(--warning); font-size: 0.7rem; font-weight: 700; margin-top: 0.3rem; }
+    .tool-panel-card .tool-name { font-weight: 600; font-size: 0.85rem; margin-bottom: 0.2rem; }
+    .tool-panel-card .tool-desc { font-size: 0.75rem; color: var(--text-muted); }
+    .risk-low  { color: var(--success); font-size: 0.7rem; font-weight: 600; margin-top: 0.3rem; }
+    .risk-high { color: var(--warning); font-size: 0.7rem; font-weight: 600; margin-top: 0.3rem; }
 
-    /* ── Memory panel ─────────────────────────────────────────────────────── */
+    /* ── Memory ──────────────────────────────────────────────────────────── */
     .memory-list { list-style: none; }
     .memory-item {
-      background: var(--bg);
+      background: var(--bg-primary);
       border: 1px solid var(--border);
       border-radius: 8px;
       padding: 0.85rem 1rem;
-      margin-bottom: 0.6rem;
+      margin-bottom: 0.55rem;
       display: flex;
       gap: 0.75rem;
       align-items: flex-start;
     }
     .memory-body { flex: 1; min-width: 0; }
-    .memory-meta { display: flex; gap: 0.5rem; align-items: center; margin-bottom: 0.3rem; flex-wrap: wrap; }
+    .memory-meta {
+      display: flex;
+      gap: 0.5rem;
+      align-items: center;
+      margin-bottom: 0.3rem;
+      flex-wrap: wrap;
+    }
     .memory-type-badge {
-      font-size: 0.68rem;
-      font-weight: 700;
+      font-size: 0.67rem;
+      font-weight: 600;
       text-transform: uppercase;
       border-radius: 4px;
-      padding: 0.1rem 0.45rem;
+      padding: 0.1rem 0.42rem;
+      border: 1px solid currentColor;
+      letter-spacing: 0.03em;
     }
-    .type-task_result    { background: #1a3d2e; color: var(--success); }
-    .type-user_preference { background: #1e3a5f; color: #60a5fa; }
-    .type-system_context { background: #2d1a4d; color: var(--escalated); }
-    .type-conversation   { background: #2d2a1a; color: var(--warning); }
-    .type-unknown        { background: #2d3148; color: var(--muted); }
-    .memory-time { font-size: 0.72rem; color: var(--muted); }
-    .memory-content { font-size: 0.84rem; color: var(--text); line-height: 1.5; word-break: break-word; }
+    .type-task_result     { color: var(--success); }
+    .type-user_preference { color: #2563eb; }
+    .type-system_context  { color: var(--purple); }
+    .type-conversation    { color: var(--warning); }
+    .type-unknown         { color: var(--text-muted); }
+    .memory-time    { font-size: 0.71rem; color: var(--text-muted); }
+    .memory-content { font-size: 0.84rem; color: var(--text-secondary); line-height: 1.5; word-break: break-word; }
     .memory-del-btn {
       background: transparent;
-      border: none;
-      color: var(--muted);
-      font-size: 1rem;
+      border: 1px solid var(--border);
+      color: var(--text-muted);
+      font-size: 0.78rem;
       cursor: pointer;
-      padding: 0.1rem 0.3rem;
+      padding: 0.12rem 0.4rem;
       border-radius: 4px;
       flex-shrink: 0;
-      line-height: 1;
+      line-height: 1.3;
     }
-    .memory-del-btn:hover { color: var(--error); background: #3d1a1a; }
-    .pagination { display: flex; align-items: center; gap: 0.75rem; margin-top: 1rem; }
-    .pagination .page-info { color: var(--muted); font-size: 0.85rem; flex: 1; text-align: center; }
+    .memory-del-btn:hover { color: var(--error); border-color: var(--error); background: #fff0f0; }
 
-    /* ── Usage panel ──────────────────────────────────────────────────────── */
+    /* ── Usage ───────────────────────────────────────────────────────────── */
     .stats-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+      grid-template-columns: repeat(auto-fill, minmax(155px, 1fr));
       gap: 0.75rem;
       margin-bottom: 1.5rem;
     }
     .stat-card {
-      background: var(--bg);
+      background: var(--bg-primary);
       border: 1px solid var(--border);
       border-radius: 10px;
-      padding: 1rem 1.2rem;
+      padding: 0.9rem 1rem;
     }
-    .stat-label { font-size: 0.75rem; color: var(--muted); margin-bottom: 0.3rem; text-transform: uppercase; letter-spacing: 0.05em; }
-    .stat-value { font-size: 1.5rem; font-weight: 700; color: var(--text); }
-    .stat-value.green { color: var(--success); }
+    .stat-label {
+      font-size: 0.7rem;
+      color: var(--text-muted);
+      margin-bottom: 0.35rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      font-weight: 500;
+    }
+    .stat-value { font-size: 1.4rem; font-weight: 700; color: var(--text-primary); }
+    .stat-value.green  { color: var(--success); }
     .stat-value.yellow { color: var(--warning); }
-    .stat-value.purple { color: var(--escalated); }
+    .stat-value.purple { color: var(--purple); }
     .chart-wrapper {
-      background: var(--bg);
+      background: var(--bg-primary);
       border: 1px solid var(--border);
       border-radius: 10px;
       padding: 1rem;
-      margin-bottom: 1.5rem;
+      margin-bottom: 1.25rem;
     }
-    .chart-wrapper h3 { font-size: 0.85rem; color: var(--muted); margin-bottom: 0.75rem; }
+    .chart-wrapper h3 {
+      font-size: 0.72rem;
+      color: var(--text-muted);
+      margin-bottom: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      font-weight: 500;
+    }
     #usageChart { width: 100%; height: 160px; display: block; }
     .usage-filters {
       display: flex;
@@ -393,47 +474,51 @@
     }
     .usage-filters .field { min-width: 140px; flex: 1; }
     .usage-table-wrap { overflow-x: auto; }
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      font-size: 0.82rem;
-    }
+    table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
     th {
       text-align: left;
       padding: 0.5rem 0.75rem;
-      color: var(--muted);
+      color: var(--text-muted);
       font-weight: 600;
-      font-size: 0.75rem;
+      font-size: 0.7rem;
       text-transform: uppercase;
+      letter-spacing: 0.05em;
       border-bottom: 1px solid var(--border);
     }
     td {
       padding: 0.5rem 0.75rem;
       border-bottom: 1px solid var(--border);
-      color: var(--text);
+      color: var(--text-primary);
       vertical-align: top;
     }
     tr:last-child td { border-bottom: none; }
-    tr:hover td { background: rgba(124,106,247,0.04); }
+    tr:hover td { background: var(--bg-primary); }
     .provider-badge {
-      font-size: 0.68rem;
-      font-weight: 700;
+      font-size: 0.67rem;
+      font-weight: 600;
       border-radius: 4px;
-      padding: 0.1rem 0.45rem;
+      padding: 0.1rem 0.42rem;
       text-transform: uppercase;
+      border: 1px solid currentColor;
     }
-    .provider-anthropic { background: #1e3a5f; color: #60a5fa; }
-    .provider-ollama    { background: #1a3d2e; color: var(--success); }
-    .task-desc-cell { max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+    .provider-anthropic { color: var(--purple); }
+    .provider-ollama    { color: var(--success); }
+    .task-desc-cell {
+      max-width: 200px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: var(--text-muted);
+    }
+    .pagination { display: flex; align-items: center; gap: 0.75rem; margin-top: 1rem; }
+    .pagination .page-info { color: var(--text-muted); font-size: 0.82rem; flex: 1; text-align: center; }
 
-    /* ── Settings panel ──────────────────────────────────────────────────── */
-    .settings-section {
-      margin-bottom: 1.75rem;
-    }
+    /* ── Settings ────────────────────────────────────────────────────────── */
+    .settings-section { margin-bottom: 1.75rem; }
     .settings-section h3 {
-      font-size: 0.95rem;
-      font-weight: 700;
-      color: var(--accent);
+      font-size: 0.875rem;
+      font-weight: 600;
+      color: var(--text-primary);
       margin-bottom: 1rem;
       padding-bottom: 0.5rem;
       border-bottom: 1px solid var(--border);
@@ -443,20 +528,19 @@
       align-items: center;
       gap: 0.6rem;
       margin-bottom: 1rem;
-      font-size: 0.88rem;
+      font-size: 0.875rem;
     }
     .ollama-dot {
-      width: 10px; height: 10px;
+      width: 8px; height: 8px;
       border-radius: 50%;
-      background: var(--muted);
+      background: var(--text-muted);
       flex-shrink: 0;
       transition: background 0.3s;
     }
     .ollama-dot.online  { background: var(--success); }
     .ollama-dot.offline { background: var(--error); }
-    .ollama-label { color: var(--text); }
-    .ollama-url   { color: var(--muted); font-size: 0.78rem; margin-left: 0.25rem; }
-
+    .ollama-label { color: var(--text-primary); }
+    .ollama-url   { color: var(--text-muted); font-size: 0.76rem; }
     .model-list {
       display: grid;
       grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
@@ -464,30 +548,29 @@
       margin-bottom: 1rem;
     }
     .model-chip {
-      background: var(--bg);
+      background: var(--bg-primary);
       border: 1px solid var(--border);
       border-radius: 8px;
-      padding: 0.55rem 0.85rem;
+      padding: 0.5rem 0.8rem;
       display: flex;
       justify-content: space-between;
       align-items: center;
       gap: 0.5rem;
     }
-    .model-chip-name  { font-size: 0.82rem; font-weight: 600; color: var(--text); word-break: break-all; }
-    .model-chip-size  { font-size: 0.72rem; color: var(--muted); white-space: nowrap; }
+    .model-chip-name { font-size: 0.82rem; font-weight: 600; word-break: break-all; }
+    .model-chip-size { font-size: 0.71rem; color: var(--text-muted); white-space: nowrap; }
     .model-chip-del {
       background: transparent;
-      border: none;
-      color: var(--muted);
-      font-size: 0.85rem;
+      border: 1px solid var(--border);
+      color: var(--text-muted);
+      font-size: 0.76rem;
       cursor: pointer;
-      padding: 0.1rem 0.3rem;
+      padding: 0.1rem 0.35rem;
       border-radius: 4px;
-      line-height: 1;
+      line-height: 1.2;
       flex-shrink: 0;
     }
-    .model-chip-del:hover { color: var(--error); background: #3d1a1a; }
-
+    .model-chip-del:hover { color: var(--error); border-color: var(--error); background: #fff0f0; }
     .pull-row {
       display: flex;
       gap: 0.65rem;
@@ -497,7 +580,7 @@
     }
     .pull-row .field { flex: 1; min-width: 180px; }
     .progress-wrap {
-      background: var(--bg);
+      background: var(--bg-primary);
       border: 1px solid var(--border);
       border-radius: 8px;
       padding: 0.65rem 0.85rem;
@@ -505,8 +588,8 @@
     }
     .progress-wrap.active { display: block; }
     .progress-label {
-      font-size: 0.8rem;
-      color: var(--muted);
+      font-size: 0.76rem;
+      color: var(--text-muted);
       margin-bottom: 0.4rem;
       display: flex;
       justify-content: space-between;
@@ -514,17 +597,16 @@
     .progress-bar-outer {
       background: var(--border);
       border-radius: 999px;
-      height: 8px;
+      height: 5px;
       overflow: hidden;
     }
     .progress-bar-inner {
-      background: var(--accent);
+      background: var(--text-primary);
       height: 100%;
       border-radius: 999px;
       width: 0%;
       transition: width 0.3s ease;
     }
-
     .param-row {
       display: grid;
       grid-template-columns: 1fr 1fr;
@@ -535,173 +617,323 @@
     .param-field label {
       display: flex;
       justify-content: space-between;
-      font-size: 0.8rem;
-      color: var(--muted);
+      font-size: 0.76rem;
+      color: var(--text-muted);
       margin-bottom: 0.35rem;
     }
-    .param-field label .param-value {
-      color: var(--accent);
-      font-weight: 700;
-    }
-    input[type=range] {
-      width: 100%;
-      accent-color: var(--accent);
-      cursor: pointer;
-    }
+    .param-field label .param-value { color: var(--text-primary); font-weight: 600; }
+    input[type=range] { width: 100%; accent-color: var(--text-primary); cursor: pointer; }
     .settings-save-row {
       display: flex;
       align-items: center;
       gap: 1rem;
       margin-top: 1.5rem;
     }
-    .settings-msg {
-      font-size: 0.88rem;
-      color: var(--success);
-      display: none;
-    }
+    .settings-msg { font-size: 0.875rem; color: var(--success); display: none; }
     .settings-msg.show { display: block; }
     .settings-msg.err  { color: var(--error); }
 
-    /* ── Agent 串流面板 ───────────────────────────────────────────────────── */
-    #streamCard h2 { color: var(--warning); }
-    .stream-empty { color: var(--muted); font-size: 0.85rem; text-align: center; padding: 1rem 0; }
+    /* ── CHAT INTERFACE ──────────────────────────────────────────────────── */
+    .chat-layout {
+      display: flex;
+      flex-direction: column;
+      height: calc(100vh - 106px);
+    }
+    .chat-messages {
+      flex: 1;
+      overflow-y: auto;
+      padding: 1.5rem;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      max-width: 800px;
+      width: 100%;
+      margin: 0 auto;
+    }
+
+    /* Agent message — left aligned */
+    .msg-agent {
+      background: var(--bg-secondary);
+      border-radius: 18px 18px 18px 4px;
+      padding: 11px 16px;
+      max-width: 80%;
+      align-self: flex-start;
+      font-size: 0.9rem;
+      color: var(--text-primary);
+      line-height: 1.55;
+    }
+
+    /* User message — right aligned */
+    .msg-user {
+      background: var(--text-primary);
+      color: #ffffff;
+      border-radius: 18px 18px 4px 18px;
+      padding: 11px 16px;
+      max-width: 80%;
+      align-self: flex-end;
+      font-size: 0.9rem;
+      line-height: 1.55;
+    }
+
+    /* Tool execution card */
     .tool-call-card {
-      background: #1a1d2a;
+      background: var(--bg-secondary);
       border: 1px solid var(--border);
-      border-left: 3px solid #4b5563;
+      border-left: 3px solid var(--purple);
       border-radius: 8px;
-      padding: 0.8rem 1rem;
-      margin-bottom: 0.55rem;
-      font-size: 0.87rem;
-      transition: border-left-color 0.3s;
+      padding: 9px 13px;
+      font-size: 0.82rem;
+      align-self: stretch;
+      transition: border-left-color 0.25s;
     }
     .tool-call-card.success { border-left-color: var(--success); }
     .tool-call-card.failure { border-left-color: var(--error); }
     .tool-call-header {
       display: flex;
       align-items: center;
-      gap: 0.5rem;
-      font-weight: 700;
-      color: #94a3b8;
-      margin-bottom: 0.35rem;
+      gap: 0.45rem;
+      font-weight: 600;
+      color: var(--text-secondary);
+      margin-bottom: 0.3rem;
+      font-size: 0.82rem;
     }
-    .tool-call-name { color: var(--warning); font-family: 'Courier New', monospace; }
+    .tool-call-name { color: var(--purple); font-family: 'Courier New', monospace; }
     .tool-call-args {
       font-family: 'Courier New', monospace;
-      font-size: 0.79rem;
-      color: var(--muted);
+      font-size: 0.75rem;
+      color: var(--text-muted);
       white-space: pre-wrap;
       word-break: break-all;
-      background: var(--bg);
+      background: var(--surface);
       border-radius: 4px;
-      padding: 0.35rem 0.6rem;
-      max-height: 80px;
+      padding: 0.3rem 0.55rem;
+      max-height: 75px;
       overflow-y: auto;
     }
     .tool-result-row {
       display: flex;
       align-items: flex-start;
       gap: 0.4rem;
-      margin-top: 0.4rem;
+      margin-top: 0.35rem;
     }
-    .tool-result-icon { font-size: 1rem; flex-shrink: 0; }
+    .tool-result-icon { font-size: 0.85rem; flex-shrink: 0; line-height: 1.6; }
     .tool-result-output {
       font-family: 'Courier New', monospace;
-      font-size: 0.79rem;
-      color: var(--text);
+      font-size: 0.75rem;
+      color: var(--text-secondary);
       white-space: pre-wrap;
       word-break: break-all;
-      background: var(--bg);
+      background: var(--surface);
       border-radius: 4px;
-      padding: 0.35rem 0.6rem;
+      padding: 0.3rem 0.55rem;
       flex: 1;
-      max-height: 100px;
+      max-height: 95px;
       overflow-y: auto;
     }
-    .ws-badge {
-      display: inline-block;
-      width: 8px; height: 8px;
-      border-radius: 50%;
-      background: var(--muted);
-      margin-right: 4px;
-      vertical-align: middle;
-      transition: background 0.3s;
+
+    /* Subtask list inside chat result */
+    .chat-subtasks {
+      margin-top: 0.6rem;
+      list-style: none;
+      border-top: 1px solid var(--border);
+      padding-top: 0.5rem;
     }
-    .ws-badge.connected { background: var(--success); }
+    .chat-subtasks li {
+      display: flex;
+      align-items: flex-start;
+      gap: 0.5rem;
+      padding: 0.3rem 0;
+      font-size: 0.82rem;
+      color: var(--text-secondary);
+    }
+
+    /* Chat input area */
+    .chat-input-area {
+      background: var(--surface);
+      border-top: 1px solid var(--border);
+      padding: 0.85rem 1.5rem 1rem;
+    }
+    .chat-input-row {
+      display: flex;
+      align-items: flex-end;
+      gap: 0.65rem;
+      max-width: 800px;
+      margin: 0 auto;
+    }
+    .chat-input-wrap {
+      border: 1.5px solid var(--border);
+      border-radius: 16px;
+      background: var(--bg-primary);
+      padding: 8px 10px 8px 14px;
+      display: flex;
+      align-items: flex-end;
+      gap: 8px;
+      flex: 1;
+      transition: border-color 0.15s;
+    }
+    .chat-input-wrap:focus-within { border-color: var(--text-secondary); }
+    .chat-input-wrap textarea {
+      border: none;
+      outline: none;
+      resize: none;
+      flex: 1;
+      font-size: 0.9375rem;
+      background: transparent;
+      min-height: 24px;
+      max-height: 150px;
+      line-height: 1.5;
+      color: var(--text-primary);
+      font-family: inherit;
+      padding: 0;
+      width: 100%;
+    }
+    .send-btn {
+      background: var(--text-primary);
+      border: none;
+      border-radius: 10px;
+      padding: 6px 11px;
+      color: white;
+      font-size: 1rem;
+      cursor: pointer;
+      flex-shrink: 0;
+      line-height: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: background 0.15s;
+    }
+    .send-btn:hover { background: #333; }
+    .send-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .priority-field {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 0.2rem;
+      flex-shrink: 0;
+    }
+    .priority-field label {
+      font-size: 0.65rem;
+      color: var(--text-muted);
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .priority-field input {
+      width: 50px;
+      text-align: center;
+      padding: 0.38rem 0.3rem;
+      font-size: 0.85rem;
+    }
+
+    /* Hidden compat elements */
+    #streamCard, #resultCard { display: none !important; }
+
+    /* Subtask list (old panel) */
+    .subtask-list { list-style: none; }
+    .subtask-list li {
+      border-bottom: 1px solid var(--border);
+      padding: 0.55rem 0;
+      display: flex;
+      align-items: flex-start;
+      gap: 0.75rem;
+      font-size: 0.85rem;
+    }
+    .subtask-list li:last-child { border-bottom: none; }
+    .subtask-desc { flex: 1; }
+    .subtask-conf { color: var(--text-muted); font-size: 0.75rem; }
   </style>
 </head>
 <body>
+
+  <!-- ── Header ──────────────────────────────────────────────────────────── -->
   <header>
-    <h1>🐻 OpenTeddy</h1>
-    <span class="badge">Multi-Agent System</span>
-    <span id="wsBadge" class="ws-badge" title="WebSocket 連線狀態"></span>
+    <div class="logo-wrap">
+      <svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <circle cx="16" cy="16" r="15" fill="#fbe8e0" stroke="#e5e0d8" stroke-width="1"/>
+        <!-- Body -->
+        <ellipse cx="16" cy="20" rx="6" ry="5" fill="#c0392b"/>
+        <!-- Head -->
+        <circle cx="16" cy="12" r="4.5" fill="#c0392b"/>
+        <!-- Ear left -->
+        <ellipse cx="11.5" cy="13" rx="2.2" ry="3.5" fill="#a93226" transform="rotate(-10 11.5 13)"/>
+        <!-- Ear right -->
+        <ellipse cx="20.5" cy="13" rx="2.2" ry="3.5" fill="#a93226" transform="rotate(10 20.5 13)"/>
+        <!-- Pom top -->
+        <circle cx="16" cy="7.5" r="2.2" fill="#e74c3c"/>
+        <!-- Pom legs -->
+        <circle cx="11" cy="24" r="2" fill="#e74c3c"/>
+        <circle cx="21" cy="24" r="2" fill="#e74c3c"/>
+        <!-- Eyes -->
+        <circle cx="14.3" cy="11.5" r="0.85" fill="#fff"/>
+        <circle cx="17.7" cy="11.5" r="0.85" fill="#fff"/>
+        <!-- Nose -->
+        <ellipse cx="16" cy="13.4" rx="0.8" ry="0.55" fill="#7b241c"/>
+      </svg>
+    </div>
+    <span class="logo-text">OpenTeddy</span>
+    <div class="header-right">
+      <span id="wsBadge" class="ws-badge" title="WebSocket connection"></span>
+    </div>
   </header>
 
-  <!-- Tab bar -->
+  <!-- ── Tab Bar ─────────────────────────────────────────────────────────── -->
   <div class="tab-bar">
-    <button class="tab-btn active" onclick="switchTab('tasks')">▶ Tasks</button>
-    <button class="tab-btn" onclick="switchTab('skills')">⚙️ Skills</button>
-    <button class="tab-btn" onclick="switchTab('tools')">🛠 Tools</button>
-    <button class="tab-btn" onclick="switchTab('memory')">🧠 Memory</button>
-    <button class="tab-btn" onclick="switchTab('usage')">📊 Usage</button>
-    <button class="tab-btn" onclick="switchTab('settings')" style="margin-left:auto">⚙ Settings</button>
+    <button class="tab-btn active" onclick="switchTab('tasks',this)">Tasks</button>
+    <button class="tab-btn" onclick="switchTab('skills',this)">Skills</button>
+    <button class="tab-btn" onclick="switchTab('tools',this)">Tools</button>
+    <button class="tab-btn" onclick="switchTab('memory',this)">Memory</button>
+    <button class="tab-btn" onclick="switchTab('usage',this)">Usage</button>
+    <button class="tab-btn" onclick="switchTab('settings',this)" style="margin-left:auto">Settings</button>
   </div>
 
-  <!-- ── TASKS TAB ─────────────────────────────────────────────────────────── -->
+  <!-- ── TASKS TAB — Chat Interface ──────────────────────────────────────── -->
   <div id="tab-tasks" class="tab-panel active">
-    <div class="container">
-      <div class="card">
-        <h2>▶ Run a Task</h2>
-        <div class="field" style="margin-bottom:0.85rem">
-          <label>Goal (natural language)</label>
-          <textarea id="goal" placeholder="e.g. Research the latest news on quantum computing and summarise the top 3 breakthroughs"></textarea>
+    <div class="chat-layout">
+      <div class="chat-messages" id="chatMessages">
+        <div class="msg-agent">
+          Hello! I'm OpenTeddy 🐩 Describe what you'd like me to do and I'll get started.
         </div>
-        <div class="row">
-          <div class="field">
-            <label>Priority (1–10)</label>
+      </div>
+      <div class="chat-input-area">
+        <div class="chat-input-row">
+          <div class="priority-field">
+            <label>Priority</label>
             <input type="number" id="priority" value="5" min="1" max="10" />
           </div>
-          <button id="runBtn" onclick="runTask()">Run Task</button>
-        </div>
-      </div>
-
-      <!-- Agent 串流：工具呼叫即時顯示 -->
-      <div class="card" id="streamCard" style="display:none">
-        <h2>⚡ Agent 串流</h2>
-        <div id="streamLog" style="max-height:420px;overflow-y:auto">
-          <div class="stream-empty">等待工具呼叫…</div>
-        </div>
-      </div>
-
-      <div class="card" id="resultCard" style="display:none">
-        <h2>📋 Result</h2>
-        <div style="display:flex;gap:0.75rem;align-items:center;margin-bottom:0.5rem">
-          <span id="resultStatus" class="status-badge"></span>
-          <code style="font-size:0.78rem;color:var(--muted)" id="resultTaskId"></code>
-        </div>
-        <div class="result-box" id="resultSummary"></div>
-        <div id="subtaskSection" style="margin-top:1rem;display:none">
-          <div style="font-size:0.85rem;color:var(--muted);margin-bottom:0.5rem">Sub-tasks</div>
-          <ul class="subtask-list" id="subtaskList"></ul>
+          <div class="chat-input-wrap">
+            <textarea id="goal" rows="1" placeholder="Describe your task…"
+              onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();runTask()}"
+              oninput="this.style.height='auto';this.style.height=Math.min(this.scrollHeight,150)+'px'"></textarea>
+            <button class="send-btn" id="runBtn" onclick="runTask()" title="Send (Enter)">↑</button>
+          </div>
         </div>
       </div>
     </div>
+
+    <!-- Hidden elements kept for JS compatibility -->
+    <div id="streamCard"><div id="streamLog"></div></div>
+    <div id="resultCard">
+      <span id="resultStatus" class="status-badge"></span>
+      <code id="resultTaskId"></code>
+      <div id="resultSummary"></div>
+      <div id="subtaskSection" style="display:none"><ul id="subtaskList" class="subtask-list"></ul></div>
+    </div>
   </div>
 
-  <!-- ── SKILLS TAB ────────────────────────────────────────────────────────── -->
+  <!-- ── SKILLS TAB ──────────────────────────────────────────────────────── -->
   <div id="tab-skills" class="tab-panel">
     <div class="container">
       <div class="card">
-        <h2>⚙️ Skills Library</h2>
+        <h2>Skills Library</h2>
         <div style="margin-bottom:1rem">
-          <button onclick="loadSkills()" class="btn-ghost">Refresh Skills</button>
+          <button class="btn-ghost" onclick="loadSkills()">Refresh</button>
         </div>
         <div class="skills-grid" id="skillsGrid">
-          <div style="color:var(--muted);font-size:0.88rem">No skills loaded yet.</div>
+          <div style="color:var(--text-muted);font-size:0.875rem">No skills loaded yet.</div>
         </div>
       </div>
       <div class="card">
-        <h2>🔧 Generate Skill Manually</h2>
+        <h2>Generate Skill Manually</h2>
         <div class="row">
           <div class="field">
             <label>Skill name (snake_case)</label>
@@ -711,55 +943,56 @@
             <label>Description</label>
             <input type="text" id="skillDesc" placeholder="Searches the web and returns a summary" />
           </div>
-          <button onclick="generateSkill()">Generate</button>
+          <button class="btn-primary" onclick="generateSkill()">Generate</button>
         </div>
       </div>
     </div>
   </div>
 
-  <!-- ── TOOLS TAB ─────────────────────────────────────────────────────────── -->
+  <!-- ── TOOLS TAB ───────────────────────────────────────────────────────── -->
   <div id="tab-tools" class="tab-panel">
     <div class="container">
       <div class="card">
-        <h2>🛠 Registered Tools</h2>
+        <h2>Registered Tools</h2>
         <div style="margin-bottom:1rem">
-          <button onclick="loadTools()" class="btn-ghost">Refresh Tools</button>
+          <button class="btn-ghost" onclick="loadTools()">Refresh</button>
         </div>
         <div class="tools-grid" id="toolsGrid">
-          <div style="color:var(--muted);font-size:0.88rem">Loading tools…</div>
+          <div style="color:var(--text-muted);font-size:0.875rem">Loading tools…</div>
         </div>
       </div>
     </div>
   </div>
 
-  <!-- ── MEMORY TAB ────────────────────────────────────────────────────────── -->
+  <!-- ── MEMORY TAB ──────────────────────────────────────────────────────── -->
   <div id="tab-memory" class="tab-panel">
     <div class="container">
       <div class="card">
-        <h2 style="color:var(--memory)">🧠 Long-term Memory</h2>
+        <h2>Long-term Memory</h2>
         <div style="display:flex;gap:0.75rem;margin-bottom:1rem;align-items:center;flex-wrap:wrap">
-          <button onclick="loadMemory()" class="btn-ghost">Refresh</button>
-          <button onclick="confirmClearMemory()" class="btn-danger btn-sm">🗑 Clear All Memories</button>
-          <span id="memoryStatus" style="color:var(--muted);font-size:0.82rem"></span>
+          <button class="btn-ghost" onclick="loadMemory()">Refresh</button>
+          <button class="btn-danger btn-sm" onclick="confirmClearMemory()">Clear All</button>
+          <span id="memoryStatus" style="color:var(--text-muted);font-size:0.8rem;margin-left:auto"></span>
         </div>
         <ul class="memory-list" id="memoryList">
-          <li style="color:var(--muted);font-size:0.88rem;padding:1rem 0">No memories yet — run a task to populate memory.</li>
+          <li style="color:var(--text-muted);font-size:0.875rem;padding:1rem 0">
+            No memories yet — run a task to populate memory.
+          </li>
         </ul>
         <div class="pagination" id="memoryPagination" style="display:none">
-          <button id="memPrevBtn" onclick="memPage(-1)" class="btn-ghost btn-sm">← Prev</button>
+          <button id="memPrevBtn" class="btn-ghost btn-sm" onclick="memPage(-1)">← Prev</button>
           <span class="page-info" id="memPageInfo"></span>
-          <button id="memNextBtn" onclick="memPage(1)"  class="btn-ghost btn-sm">Next →</button>
+          <button id="memNextBtn" class="btn-ghost btn-sm" onclick="memPage(1)">Next →</button>
         </div>
       </div>
     </div>
   </div>
 
-  <!-- ── USAGE TAB ─────────────────────────────────────────────────────────── -->
+  <!-- ── USAGE TAB ───────────────────────────────────────────────────────── -->
   <div id="tab-usage" class="tab-panel">
     <div class="container">
-      <!-- Summary stats -->
       <div class="card">
-        <h2>📊 Usage Overview</h2>
+        <h2>Usage Overview</h2>
         <div class="stats-grid" id="statsGrid">
           <div class="stat-card"><div class="stat-label">Total Calls</div><div class="stat-value" id="statTotalCalls">—</div></div>
           <div class="stat-card"><div class="stat-label">Commercial (Anthropic)</div><div class="stat-value yellow" id="statCommCalls">—</div></div>
@@ -769,24 +1002,18 @@
           <div class="stat-card"><div class="stat-label">Tokens Out</div><div class="stat-value" id="statTokensOut">—</div></div>
           <div class="stat-card"><div class="stat-label">Escalations</div><div class="stat-value purple" id="statEscalations">—</div></div>
         </div>
-
-        <!-- Cost by day chart (Canvas) -->
         <div class="chart-wrapper">
           <h3>Daily Cost (last 30 days) — USD</h3>
           <canvas id="usageChart"></canvas>
-          <div id="chartEmpty" style="color:var(--muted);font-size:0.84rem;text-align:center;padding:1rem;display:none">
+          <div id="chartEmpty" style="color:var(--text-muted);font-size:0.84rem;text-align:center;padding:1rem;display:none">
             No cost data yet.
           </div>
         </div>
-
-        <button onclick="loadUsageSummary()" class="btn-ghost btn-sm">Refresh Stats</button>
+        <button class="btn-ghost btn-sm" onclick="loadUsageSummary()">Refresh Stats</button>
       </div>
 
-      <!-- Usage records table -->
       <div class="card">
-        <h2>📋 Usage Records</h2>
-
-        <!-- Filters -->
+        <h2>Usage Records</h2>
         <div class="usage-filters">
           <div class="field">
             <label>Provider</label>
@@ -804,83 +1031,64 @@
             <label>Date To</label>
             <input type="date" id="filterDateTo" />
           </div>
-          <button onclick="loadUsageRecords(1)" style="align-self:flex-end">Filter</button>
-          <button onclick="clearUsageFilters()" class="btn-ghost" style="align-self:flex-end">Reset</button>
+          <button class="btn-primary" onclick="loadUsageRecords(1)" style="align-self:flex-end">Filter</button>
+          <button class="btn-ghost" onclick="clearUsageFilters()" style="align-self:flex-end">Reset</button>
         </div>
-
         <div class="usage-table-wrap">
           <table>
             <thead>
               <tr>
-                <th>Time</th>
-                <th>Model</th>
-                <th>Provider</th>
-                <th>Tokens In</th>
-                <th>Tokens Out</th>
-                <th>Cost (USD)</th>
-                <th>Task</th>
+                <th>Time</th><th>Model</th><th>Provider</th>
+                <th>Tokens In</th><th>Tokens Out</th><th>Cost (USD)</th><th>Task</th>
               </tr>
             </thead>
             <tbody id="usageTableBody">
-              <tr><td colspan="7" style="color:var(--muted);text-align:center;padding:1.5rem">No records yet.</td></tr>
+              <tr><td colspan="7" style="color:var(--text-muted);text-align:center;padding:1.5rem">No records yet.</td></tr>
             </tbody>
           </table>
         </div>
-
         <div class="pagination" id="usagePagination">
-          <button id="usagePrevBtn" onclick="usagePage(-1)" class="btn-ghost btn-sm">← Prev</button>
+          <button id="usagePrevBtn" class="btn-ghost btn-sm" onclick="usagePage(-1)">← Prev</button>
           <span class="page-info" id="usagePageInfo"></span>
-          <button id="usageNextBtn" onclick="usagePage(1)"  class="btn-ghost btn-sm">Next →</button>
+          <button id="usageNextBtn" class="btn-ghost btn-sm" onclick="usagePage(1)">Next →</button>
         </div>
       </div>
     </div>
   </div>
 
-  <!-- ── SETTINGS TAB ──────────────────────────────────────────────────────── -->
+  <!-- ── SETTINGS TAB ─────────────────────────────────────────────────────── -->
   <div id="tab-settings" class="tab-panel">
     <div class="container">
       <div class="card">
 
-        <!-- ── 1. 模型設定 ──────────────────────────────────────────────── -->
+        <!-- Model Settings -->
         <div class="settings-section">
-          <h3>🤖 模型設定</h3>
-
-          <!-- Ollama 狀態 -->
+          <h3>Model Settings</h3>
           <div class="ollama-status">
-            <span id="ollamaDot" class="ollama-dot" title="Ollama 連線狀態"></span>
-            <span id="ollamaLabel" class="ollama-label">檢查中…</span>
+            <span id="ollamaDot" class="ollama-dot"></span>
+            <span id="ollamaLabel" class="ollama-label">Checking…</span>
             <span id="ollamaUrl" class="ollama-url"></span>
           </div>
-
-          <!-- 已安裝模型列表 -->
-          <div style="font-size:0.8rem;color:var(--muted);margin-bottom:0.5rem">已安裝模型</div>
+          <div style="font-size:0.76rem;color:var(--text-muted);margin-bottom:0.5rem;font-weight:500">Installed Models</div>
           <div class="model-list" id="modelList">
-            <div style="color:var(--muted);font-size:0.82rem">載入中…</div>
+            <div style="color:var(--text-muted);font-size:0.82rem">Loading…</div>
           </div>
-
-          <!-- 模型下拉選擇 -->
           <div class="row" style="margin-bottom:0.85rem">
             <div class="field">
-              <label>Orchestrator 模型（Gemma）</label>
-              <select id="sel_orchestrator_model">
-                <option value="">⚠️ Ollama 離線</option>
-              </select>
+              <label>Orchestrator Model (Gemma)</label>
+              <select id="sel_orchestrator_model"><option value="">⚠️ Ollama offline</option></select>
             </div>
             <div class="field">
-              <label>Executor 模型（Qwen）</label>
-              <select id="sel_executor_model">
-                <option value="">⚠️ Ollama 離線</option>
-              </select>
+              <label>Executor Model (Qwen)</label>
+              <select id="sel_executor_model"><option value="">⚠️ Ollama offline</option></select>
             </div>
           </div>
-
           <div class="row" style="margin-bottom:0.85rem">
             <div class="field">
-              <label>Claude 模型（Escalation）</label>
+              <label>Claude Model (Escalation)</label>
               <input type="text" id="inp_claude_model" placeholder="claude-opus-4-6" />
             </div>
           </div>
-
           <div class="row" style="margin-bottom:1.25rem">
             <div class="field">
               <label>Orchestrator Ollama URL</label>
@@ -891,19 +1099,17 @@
               <input type="text" id="inp_qwen_base_url" placeholder="http://localhost:11434" />
             </div>
           </div>
-
-          <!-- Pull 新模型 -->
-          <div style="font-size:0.8rem;color:var(--muted);margin-bottom:0.5rem">Pull 新模型</div>
+          <div style="font-size:0.76rem;color:var(--text-muted);margin-bottom:0.5rem;font-weight:500">Pull New Model</div>
           <div class="pull-row">
             <div class="field">
-              <label>模型名稱（如 llama3:8b）</label>
+              <label>Model name (e.g. llama3:8b)</label>
               <input type="text" id="pullModelName" placeholder="gemma3:12b" />
             </div>
-            <button onclick="pullModel()" id="pullBtn">⬇ Pull</button>
+            <button class="btn-primary" onclick="pullModel()" id="pullBtn">⬇ Pull</button>
           </div>
           <div class="progress-wrap" id="pullProgress">
             <div class="progress-label">
-              <span id="pullStatusText">準備中…</span>
+              <span id="pullStatusText">Preparing…</span>
               <span id="pullPct">0%</span>
             </div>
             <div class="progress-bar-outer">
@@ -912,91 +1118,74 @@
           </div>
         </div>
 
-        <!-- ── 2. 參數設定 ─────────────────────────────────────────────── -->
+        <!-- Parameter Settings -->
         <div class="settings-section">
-          <h3>🔧 參數設定</h3>
-
+          <h3>Parameter Settings</h3>
           <div class="param-row">
             <div class="param-field">
-              <label>
-                Escalation Confidence Threshold
+              <label>Escalation Confidence Threshold
                 <span class="param-value" id="val_escalation_threshold">0.60</span>
               </label>
-              <input type="range" id="rng_escalation_threshold"
-                     min="0" max="1" step="0.05" value="0.6"
-                     oninput="document.getElementById('val_escalation_threshold').textContent=parseFloat(this.value).toFixed(2)" />
+              <input type="range" id="rng_escalation_threshold" min="0" max="1" step="0.05" value="0.6"
+                oninput="document.getElementById('val_escalation_threshold').textContent=parseFloat(this.value).toFixed(2)" />
             </div>
             <div class="param-field">
-              <label>
-                Escalation Failure Limit
+              <label>Escalation Failure Limit
                 <span class="param-value" id="val_escalation_failure_limit">3</span>
               </label>
-              <input type="range" id="rng_escalation_failure_limit"
-                     min="1" max="10" step="1" value="3"
-                     oninput="document.getElementById('val_escalation_failure_limit').textContent=this.value" />
+              <input type="range" id="rng_escalation_failure_limit" min="1" max="10" step="1" value="3"
+                oninput="document.getElementById('val_escalation_failure_limit').textContent=this.value" />
             </div>
           </div>
-
           <div class="param-row">
             <div class="param-field">
-              <label>
-                Gemma Max Tokens
+              <label>Gemma Max Tokens
                 <span class="param-value" id="val_gemma_max_tokens">4096</span>
               </label>
-              <input type="range" id="rng_gemma_max_tokens"
-                     min="512" max="8192" step="256" value="4096"
-                     oninput="document.getElementById('val_gemma_max_tokens').textContent=this.value" />
+              <input type="range" id="rng_gemma_max_tokens" min="512" max="8192" step="256" value="4096"
+                oninput="document.getElementById('val_gemma_max_tokens').textContent=this.value" />
             </div>
             <div class="param-field">
-              <label>
-                Qwen Max Tokens
+              <label>Qwen Max Tokens
                 <span class="param-value" id="val_qwen_max_tokens">4096</span>
               </label>
-              <input type="range" id="rng_qwen_max_tokens"
-                     min="512" max="8192" step="256" value="4096"
-                     oninput="document.getElementById('val_qwen_max_tokens').textContent=this.value" />
+              <input type="range" id="rng_qwen_max_tokens" min="512" max="8192" step="256" value="4096"
+                oninput="document.getElementById('val_qwen_max_tokens').textContent=this.value" />
             </div>
           </div>
-
           <div class="param-row">
             <div class="param-field">
-              <label>
-                Skill Match Threshold
+              <label>Skill Match Threshold
                 <span class="param-value" id="val_skill_match_threshold">0.40</span>
               </label>
-              <input type="range" id="rng_skill_match_threshold"
-                     min="0" max="1" step="0.05" value="0.4"
-                     oninput="document.getElementById('val_skill_match_threshold').textContent=parseFloat(this.value).toFixed(2)" />
+              <input type="range" id="rng_skill_match_threshold" min="0" max="1" step="0.05" value="0.4"
+                oninput="document.getElementById('val_skill_match_threshold').textContent=parseFloat(this.value).toFixed(2)" />
             </div>
             <div class="param-field">
-              <label>
-                Skill Promotion Threshold
+              <label>Skill Promotion Threshold
                 <span class="param-value" id="val_skill_promotion_threshold">5</span>
               </label>
-              <input type="range" id="rng_skill_promotion_threshold"
-                     min="1" max="50" step="1" value="5"
-                     oninput="document.getElementById('val_skill_promotion_threshold').textContent=this.value" />
+              <input type="range" id="rng_skill_promotion_threshold" min="1" max="50" step="1" value="5"
+                oninput="document.getElementById('val_skill_promotion_threshold').textContent=this.value" />
             </div>
           </div>
         </div>
 
-        <!-- ── 3. 儲存 ────────────────────────────────────────────────── -->
         <div class="settings-save-row">
-          <button onclick="saveSettings()" id="saveSettingsBtn">💾 儲存設定</button>
+          <button class="btn-primary" onclick="saveSettings()" id="saveSettingsBtn">Save Settings</button>
           <span class="settings-msg" id="settingsMsg"></span>
         </div>
-
       </div>
     </div>
   </div>
 
-  <!-- Approval FAB -->
+  <!-- ── Approval FAB ─────────────────────────────────────────────────────── -->
   <button id="approvalFab" onclick="openApprovalModal()">
-    ⚠️ Approvals needed
+    ⚠️ Approvals
     <span class="fab-badge" id="approvalCount">0</span>
   </button>
 
-  <!-- Approval Modal -->
+  <!-- ── Approval Modal ───────────────────────────────────────────────────── -->
   <div id="approvalOverlay" onclick="maybeCloseModal(event)">
     <div id="approvalModal">
       <button class="modal-close" onclick="closeApprovalModal()">✕ Close</button>
@@ -1012,115 +1201,105 @@
   <script>
     const API = '';
 
-    // ── WebSocket 串流 ─────────────────────────────────────────────────────
-
+    // ── WebSocket ───────────────────────────────────────────────────────────
     let _ws = null;
-    let _activeCalls = {};   // round+tool → card element
+    let _activeCalls = {};
     let _currentTaskId = null;
 
     function initWS() {
       const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-      const url   = `${proto}://${location.host}/ws`;
-      _ws = new WebSocket(url);
-
-      _ws.onopen = () => {
-        document.getElementById('wsBadge').classList.add('connected');
-      };
+      _ws = new WebSocket(`${proto}://${location.host}/ws`);
+      _ws.onopen  = () => document.getElementById('wsBadge').classList.add('connected');
       _ws.onclose = () => {
         document.getElementById('wsBadge').classList.remove('connected');
-        // Auto-reconnect after 3 s
         setTimeout(initWS, 3000);
       };
-      _ws.onerror = () => {
-        _ws.close();
-      };
+      _ws.onerror = () => _ws.close();
       _ws.onmessage = (evt) => {
         try {
           const data = JSON.parse(evt.data);
-          // Only show events for the current running task
           if (_currentTaskId && data.task_id && data.task_id !== _currentTaskId) return;
-          if (data.event === 'tool_call')    handleToolCall(data);
-          if (data.event === 'tool_result')  handleToolResult(data);
+          if (data.event === 'tool_call')     handleToolCall(data);
+          if (data.event === 'tool_result')   handleToolResult(data);
           if (data.type  === 'pull_progress') handlePullProgress(data);
-        } catch (e) { /* ignore bad frames */ }
+        } catch (e) { /* ignore */ }
       };
     }
 
-    function clearStream() {
-      _activeCalls = {};
-      const log = document.getElementById('streamLog');
-      log.innerHTML = '<div class="stream-empty">等待工具呼叫…</div>';
+    // ── Chat Helpers ────────────────────────────────────────────────────────
+    function appendToChat(el) {
+      const chat = document.getElementById('chatMessages');
+      chat.appendChild(el);
+      chat.scrollTop = chat.scrollHeight;
+      return el;
     }
 
+    function addUserMessage(text) {
+      const el = document.createElement('div');
+      el.className = 'msg-user';
+      el.textContent = text;
+      return appendToChat(el);
+    }
+
+    function addAgentMessage(html, asText = true) {
+      const el = document.createElement('div');
+      el.className = 'msg-agent';
+      if (asText) el.textContent = html;
+      else el.innerHTML = html;
+      return appendToChat(el);
+    }
+
+    // ── Tool Call / Result (stream → chat) ──────────────────────────────────
     function handleToolCall(data) {
-      const log = document.getElementById('streamCard');
-      log.style.display = 'block';
+      const key     = `${data.round}-${data.tool}`;
+      const argsStr = data.args ? JSON.stringify(data.args, null, 2) : '(no args)';
 
-      const streamLog = document.getElementById('streamLog');
-      // Remove placeholder
-      const ph = streamLog.querySelector('.stream-empty');
-      if (ph) ph.remove();
-
-      const key = `${data.round}-${data.tool}`;
       const card = document.createElement('div');
       card.className = 'tool-call-card';
       card.id = `tc-${key}`;
-
-      const argsStr = data.args
-        ? JSON.stringify(data.args, null, 2)
-        : '(無參數)';
-
       card.innerHTML = `
         <div class="tool-call-header">
-          <span>🔧 工具呼叫：</span>
+          <span>🔧</span>
           <span class="tool-call-name">${escHtml(data.tool || '')}</span>
         </div>
         <div class="tool-call-args">${escHtml(argsStr)}</div>
         <div class="tool-result-row" id="tcr-${escHtml(key)}">
-          <span class="tool-result-icon loader" style="width:12px;height:12px;border-width:2px"></span>
-          <span style="color:var(--muted);font-size:0.8rem">執行中…</span>
+          <span class="tool-result-icon loader" style="width:11px;height:11px;border-width:2px;margin-right:4px"></span>
+          <span style="color:var(--text-muted);font-size:0.76rem">Running…</span>
         </div>`;
-
-      streamLog.appendChild(card);
-      _activeCalls[key] = key;
-      // Scroll to bottom
-      streamLog.scrollTop = streamLog.scrollHeight;
+      appendToChat(card);
+      _activeCalls[key] = true;
     }
 
     function handleToolResult(data) {
-      const key = `${data.round}-${data.tool}`;
-      const card = document.getElementById(`tc-${key}`);
-      if (!card) return;
-
+      const key       = `${data.round}-${data.tool}`;
+      const card      = document.getElementById(`tc-${key}`);
       const resultRow = document.getElementById(`tcr-${key}`);
-      if (!resultRow) return;
+      if (!card || !resultRow) return;
 
       const success = data.success !== false;
       card.classList.add(success ? 'success' : 'failure');
 
       const icon  = success ? '✅' : '❌';
-      const label = success ? '輸出：' : '錯誤：';
+      const label = success ? 'Output:' : 'Error:';
       const text  = data.error
         ? escHtml(data.error)
-        : (data.output ? escHtml(data.output) : '（完成）');
+        : (data.output ? escHtml(data.output) : '(done)');
 
       resultRow.innerHTML = `
         <span class="tool-result-icon">${icon}</span>
-        <div class="tool-result-output"><strong>${label}</strong> ${text}</div>`;
+        <div class="tool-result-output"><strong style="font-family:inherit;font-size:0.75rem">${label}</strong> ${text}</div>`;
 
-      // Scroll to bottom
-      const streamLog = document.getElementById('streamLog');
-      streamLog.scrollTop = streamLog.scrollHeight;
+      const chat = document.getElementById('chatMessages');
+      chat.scrollTop = chat.scrollHeight;
     }
 
-    // ── Tab navigation ─────────────────────────────────────────────────────
-    function switchTab(name) {
+    // ── Tab Navigation ──────────────────────────────────────────────────────
+    function switchTab(name, btn) {
       document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
       document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
-      event.currentTarget.classList.add('active');
+      btn.classList.add('active');
       document.getElementById('tab-' + name).classList.add('active');
-
-      // Lazy-load data on first switch
       if (name === 'skills')   loadSkills();
       if (name === 'tools')    loadTools();
       if (name === 'memory')   loadMemory();
@@ -1128,92 +1307,108 @@
       if (name === 'settings') loadSettings();
     }
 
-    // ── Task execution ─────────────────────────────────────────────────────
-
+    // ── Task Execution ──────────────────────────────────────────────────────
     async function runTask() {
-      const goal = document.getElementById('goal').value.trim();
-      if (!goal) { toast('Please enter a goal.'); return; }
+      const goalEl   = document.getElementById('goal');
+      const goal     = goalEl.value.trim();
+      if (!goal) { toast('Please describe your task.'); return; }
       const priority = parseInt(document.getElementById('priority').value) || 5;
 
       const btn = document.getElementById('runBtn');
       btn.disabled = true;
-      btn.innerHTML = '<span class="loader"></span>Running…';
+      btn.textContent = '…';
 
-      // 清空上一次的串流記錄
-      clearStream();
-      _currentTaskId = null;
+      addUserMessage(goal);
+      goalEl.value = '';
+      goalEl.style.height = 'auto';
+
+      // Thinking indicator
+      const thinkingEl = addAgentMessage('⏳ Working on it…');
+      _currentTaskId   = null;
+      _activeCalls     = {};
 
       try {
-        const res = await fetch(`${API}/run`, {
-          method: 'POST',
+        const res  = await fetch(`${API}/run`, {
+          method:  'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ goal, priority, context: {} }),
+          body:    JSON.stringify({ goal, priority, context: {} }),
         });
         const data = await res.json();
-        _currentTaskId = data.task_id;   // 設定當前任務 ID，讓串流只顯示此任務的事件
-        showResult(data);
-        await loadTaskStatus(data.task_id);
+        _currentTaskId = data.task_id;
+        document.getElementById('resultTaskId').textContent = data.task_id;
+        const se = document.getElementById('resultStatus');
+        se.textContent = data.status;
+        se.className   = 'status-badge status-' + data.status;
+        document.getElementById('resultSummary').textContent = data.message || '(processing…)';
+
+        await loadTaskStatus(data.task_id, thinkingEl);
       } catch (e) {
+        thinkingEl.textContent = '❌ Error: ' + e.message;
         toast('Error: ' + e.message, true);
       } finally {
-        btn.disabled = false;
-        btn.textContent = 'Run Task';
-        _currentTaskId = null;
+        btn.disabled    = false;
+        btn.textContent = '↑';
+        _currentTaskId  = null;
       }
     }
 
-    function showResult(data) {
-      const card = document.getElementById('resultCard');
-      card.style.display = 'block';
-      document.getElementById('resultTaskId').textContent = data.task_id;
-      const statusEl = document.getElementById('resultStatus');
-      statusEl.textContent = data.status;
-      statusEl.className = 'status-badge status-' + data.status;
-      document.getElementById('resultSummary').textContent = data.message || '(processing…)';
-    }
-
-    async function loadTaskStatus(taskId) {
+    async function loadTaskStatus(taskId, thinkingEl) {
       try {
-        const res = await fetch(`${API}/tasks/${taskId}`);
+        const res  = await fetch(`${API}/tasks/${taskId}`);
         const data = await res.json();
+
         const statusEl = document.getElementById('resultStatus');
         statusEl.textContent = data.status;
-        statusEl.className = 'status-badge status-' + data.status;
+        statusEl.className   = 'status-badge status-' + data.status;
+
         if (data.summary) document.getElementById('resultSummary').textContent = data.summary;
+
+        const summary = data.summary || data.message || '';
+
+        // Remove thinking bubble and add final result at bottom
+        if (thinkingEl && thinkingEl.parentNode) thinkingEl.remove();
+
+        let resultHTML = escHtml(summary || 'Task ' + data.status + '.');
         if (data.subtasks && data.subtasks.length) {
+          resultHTML += '<ul class="chat-subtasks">' +
+            data.subtasks.map(st =>
+              `<li><span class="status-badge status-${st.status}" style="flex-shrink:0">${st.status}</span>
+               <span>${escHtml(st.description)}</span>
+               <span style="color:var(--text-muted);font-size:0.78rem;margin-left:auto">${(st.confidence * 100).toFixed(0)}%</span>
+              </li>`
+            ).join('') + '</ul>';
           document.getElementById('subtaskSection').style.display = 'block';
-          document.getElementById('subtaskList').innerHTML = data.subtasks.map(st => `
-            <li>
-              <span class="status-badge status-${st.status}" style="flex-shrink:0">${st.status}</span>
-              <span class="subtask-desc">${escHtml(st.description)}</span>
-              <span class="subtask-conf">${(st.confidence * 100).toFixed(0)}%</span>
-            </li>
-          `).join('');
+          document.getElementById('subtaskList').innerHTML = data.subtasks.map(st =>
+            `<li>
+               <span class="status-badge status-${st.status}" style="flex-shrink:0">${st.status}</span>
+               <span class="subtask-desc">${escHtml(st.description)}</span>
+               <span class="subtask-conf">${(st.confidence*100).toFixed(0)}%</span>
+             </li>`
+          ).join('');
         }
+        addAgentMessage(resultHTML, false);
+
       } catch (e) { /* silently ignore */ }
     }
 
-    // ── Skills ─────────────────────────────────────────────────────────────
-
+    // ── Skills ──────────────────────────────────────────────────────────────
     async function loadSkills() {
       try {
-        const res = await fetch(`${API}/skills`);
+        const res  = await fetch(`${API}/skills`);
         const data = await res.json();
         const grid = document.getElementById('skillsGrid');
         if (!data.skills || !data.skills.length) {
-          grid.innerHTML = '<div style="color:var(--muted);font-size:0.88rem">No skills yet.</div>';
+          grid.innerHTML = '<div style="color:var(--text-muted);font-size:0.875rem">No skills yet.</div>';
           return;
         }
         grid.innerHTML = data.skills.map(s => `
           <div class="skill-card">
             <div class="skill-name">${escHtml(s.name)}</div>
             <div class="skill-desc">${escHtml(s.description)}</div>
-            <div class="skill-stats">✓ ${s.success_count}  ✗ ${s.failure_count}  · ${s.status}</div>
+            <div class="skill-stats">✓ ${s.success_count} &nbsp; ✗ ${s.failure_count} &nbsp; · ${s.status}</div>
           </div>
         `).join('');
-      } catch (e) {
-        toast('Could not load skills: ' + e.message, true);
-      }
+      } catch (e) { toast('Could not load skills: ' + e.message, true); }
     }
 
     async function generateSkill() {
@@ -1221,46 +1416,41 @@
       const desc = document.getElementById('skillDesc').value.trim();
       if (!name || !desc) { toast('Skill name and description required.'); return; }
       try {
-        const res = await fetch(`${API}/skills/generate?name=${encodeURIComponent(name)}&description=${encodeURIComponent(desc)}`, {
-          method: 'POST',
-        });
+        const res  = await fetch(
+          `${API}/skills/generate?name=${encodeURIComponent(name)}&description=${encodeURIComponent(desc)}`,
+          { method: 'POST' }
+        );
         const data = await res.json();
         toast(data.message || 'Skill generated!');
         await loadSkills();
-      } catch (e) {
-        toast('Error: ' + e.message, true);
-      }
+      } catch (e) { toast('Error: ' + e.message, true); }
     }
 
-    // ── Tools ──────────────────────────────────────────────────────────────
-
+    // ── Tools ────────────────────────────────────────────────────────────────
     async function loadTools() {
       try {
-        const res = await fetch(`${API}/tools`);
+        const res  = await fetch(`${API}/tools`);
         const data = await res.json();
         const grid = document.getElementById('toolsGrid');
         if (!data.tools || !data.tools.length) {
-          grid.innerHTML = '<div style="color:var(--muted);font-size:0.88rem">No tools registered.</div>';
+          grid.innerHTML = '<div style="color:var(--text-muted);font-size:0.875rem">No tools registered.</div>';
           return;
         }
         grid.innerHTML = data.tools.map(t => `
-          <div class="tool-card">
+          <div class="tool-panel-card">
             <div class="tool-name">${escHtml(t.name)}</div>
             <div class="tool-desc">${escHtml(t.description)}</div>
             <div class="risk-${t.risk_level}">${t.risk_level === 'high' ? '⚠️ HIGH RISK' : '✅ low risk'}</div>
           </div>
         `).join('');
-      } catch (e) {
-        toast('Could not load tools: ' + e.message, true);
-      }
+      } catch (e) { toast('Could not load tools: ' + e.message, true); }
     }
 
-    // ── Approvals ──────────────────────────────────────────────────────────
-
+    // ── Approvals ────────────────────────────────────────────────────────────
     async function pollApprovals() {
       try {
-        const res  = await fetch(`${API}/approvals`);
-        const data = await res.json();
+        const res   = await fetch(`${API}/approvals`);
+        const data  = await res.json();
         const count = (data.approvals || []).length;
         const fab   = document.getElementById('approvalFab');
         document.getElementById('approvalCount').textContent = count;
@@ -1268,16 +1458,11 @@
         if (document.getElementById('approvalOverlay').classList.contains('open')) {
           renderApprovals(data.approvals || []);
         }
-      } catch (e) { /* silently ignore poll errors */ }
+      } catch (e) { /* ignore */ }
     }
 
-    function openApprovalModal() {
-      document.getElementById('approvalOverlay').classList.add('open');
-      refreshApprovals();
-    }
-    function closeApprovalModal() {
-      document.getElementById('approvalOverlay').classList.remove('open');
-    }
+    function openApprovalModal()  { document.getElementById('approvalOverlay').classList.add('open'); refreshApprovals(); }
+    function closeApprovalModal() { document.getElementById('approvalOverlay').classList.remove('open'); }
     function maybeCloseModal(e) {
       if (e.target === document.getElementById('approvalOverlay')) closeApprovalModal();
     }
@@ -1287,9 +1472,7 @@
         const res  = await fetch(`${API}/approvals`);
         const data = await res.json();
         renderApprovals(data.approvals || []);
-      } catch (e) {
-        toast('Could not load approvals: ' + e.message, true);
-      }
+      } catch (e) { toast('Could not load approvals: ' + e.message, true); }
     }
 
     function renderApprovals(approvals) {
@@ -1304,8 +1487,8 @@
           <div class="approval-meta">Task: <code>${escHtml(a.task_id)}</code> &nbsp;·&nbsp; ${new Date(a.created_at).toLocaleTimeString()}</div>
           <div class="tool-args">${escHtml(JSON.stringify(a.args, null, 2))}</div>
           <div class="approval-actions">
-            <button class="btn-approve" onclick="resolveApproval('${escHtml(a.id)}', true)">✅ 批准</button>
-            <button class="btn-reject"  onclick="resolveApproval('${escHtml(a.id)}', false)">❌ 拒絕</button>
+            <button class="btn-approve" onclick="resolveApproval('${escHtml(a.id)}', true)">✅ Approve</button>
+            <button class="btn-reject"  onclick="resolveApproval('${escHtml(a.id)}', false)">❌ Reject</button>
           </div>
         </div>
       `).join('');
@@ -1318,13 +1501,12 @@
         if (!res.ok) { const err = await res.json(); toast(err.detail || 'Failed', true); return; }
         const el = document.getElementById(`approval-${approvalId}`);
         if (el) { el.style.opacity = '0.4'; el.style.transition = 'opacity 0.3s'; setTimeout(() => el.remove(), 350); }
-        toast(approved ? '✅ 已批准，任務繼續執行' : '❌ 已拒絕，Agent 將嘗試替代方案');
+        toast(approved ? '✅ Approved — task continuing' : '❌ Rejected — agent will try alternative');
         setTimeout(refreshApprovals, 400);
       } catch (e) { toast('Error: ' + e.message, true); }
     }
 
-    // ── Memory ─────────────────────────────────────────────────────────────
-
+    // ── Memory ───────────────────────────────────────────────────────────────
     let _memCurrentPage = 1;
     let _memTotalPages  = 1;
 
@@ -1337,24 +1519,18 @@
 
         const list   = document.getElementById('memoryList');
         const status = document.getElementById('memoryStatus');
-        status.textContent = `${data.total} memory records`;
+        status.textContent = `${data.total} records`;
 
         if (!data.items || !data.items.length) {
-          list.innerHTML = '<li style="color:var(--muted);font-size:0.88rem;padding:1rem 0">No memories yet — run a task to populate memory.</li>';
+          list.innerHTML = '<li style="color:var(--text-muted);font-size:0.875rem;padding:1rem 0">No memories yet — run a task to populate memory.</li>';
           document.getElementById('memoryPagination').style.display = 'none';
           return;
         }
-
         list.innerHTML = data.items.map(m => {
           const typeClass = 'type-' + (m.type || 'unknown');
-          const label = {
-            task_result: 'Task Result',
-            user_preference: 'User Pref',
-            system_context: 'System',
-            conversation: 'Convo',
-          }[m.type] || m.type;
-          const time   = m.timestamp ? new Date(m.timestamp).toLocaleString() : '';
-          const snippet = escHtml((m.content || '').slice(0, 120)) + ((m.content || '').length > 120 ? '…' : '');
+          const label     = { task_result: 'Task Result', user_preference: 'User Pref', system_context: 'System', conversation: 'Convo' }[m.type] || m.type;
+          const time      = m.timestamp ? new Date(m.timestamp).toLocaleString() : '';
+          const snippet   = escHtml((m.content || '').slice(0, 120)) + ((m.content || '').length > 120 ? '…' : '');
           return `
             <li class="memory-item" id="mem-${escHtml(m.id)}">
               <div class="memory-body">
@@ -1368,22 +1544,18 @@
             </li>`;
         }).join('');
 
-        // Pagination
-        const pg  = document.getElementById('memoryPagination');
+        const pg   = document.getElementById('memoryPagination');
         const info = document.getElementById('memPageInfo');
-        pg.style.display = data.total_pages > 1 ? 'flex' : 'none';
+        pg.style.display  = data.total_pages > 1 ? 'flex' : 'none';
         info.textContent  = `Page ${data.page} / ${data.total_pages}  (${data.total} total)`;
         document.getElementById('memPrevBtn').disabled = page <= 1;
         document.getElementById('memNextBtn').disabled = page >= data.total_pages;
-
-      } catch (e) {
-        toast('Could not load memories: ' + e.message, true);
-      }
+      } catch (e) { toast('Could not load memories: ' + e.message, true); }
     }
 
     function memPage(delta) {
-      const newPage = _memCurrentPage + delta;
-      if (newPage >= 1 && newPage <= _memTotalPages) loadMemory(newPage);
+      const n = _memCurrentPage + delta;
+      if (n >= 1 && n <= _memTotalPages) loadMemory(n);
     }
 
     async function deleteMemory(id) {
@@ -1406,58 +1578,50 @@
       } catch (e) { toast('Error: ' + e.message, true); }
     }
 
-    // ── Usage ──────────────────────────────────────────────────────────────
-
-    let _usagePage      = 1;
+    // ── Usage ────────────────────────────────────────────────────────────────
+    let _usagePage       = 1;
     let _usageTotalPages = 1;
 
     async function loadUsageSummary() {
       try {
         const res  = await fetch(`${API}/usage/summary`);
         const data = await res.json();
-
-        document.getElementById('statTotalCalls').textContent    = fmt(data.total_calls);
-        document.getElementById('statCommCalls').textContent     = fmt(data.commercial_calls);
-        document.getElementById('statTotalCost').textContent     = '$' + (data.total_cost_usd || 0).toFixed(4);
-        document.getElementById('statCommCost').textContent      = '$' + (data.commercial_cost_usd || 0).toFixed(4);
-        document.getElementById('statTokensIn').textContent      = fmtK(data.total_tokens_in);
-        document.getElementById('statTokensOut').textContent     = fmtK(data.total_tokens_out);
-        document.getElementById('statEscalations').textContent   = fmt(data.escalation_count);
-
+        document.getElementById('statTotalCalls').textContent   = fmt(data.total_calls);
+        document.getElementById('statCommCalls').textContent    = fmt(data.commercial_calls);
+        document.getElementById('statTotalCost').textContent    = '$' + (data.total_cost_usd || 0).toFixed(4);
+        document.getElementById('statCommCost').textContent     = '$' + (data.commercial_cost_usd || 0).toFixed(4);
+        document.getElementById('statTokensIn').textContent     = fmtK(data.total_tokens_in);
+        document.getElementById('statTokensOut').textContent    = fmtK(data.total_tokens_out);
+        document.getElementById('statEscalations').textContent  = fmt(data.escalation_count);
         drawChart(data.cost_by_day || []);
-      } catch (e) {
-        console.error('Usage summary error:', e);
-      }
+      } catch (e) { console.error('Usage summary error:', e); }
     }
 
     async function loadUsageRecords(page) {
       _usagePage = page || _usagePage;
-      const provider  = document.getElementById('filterProvider').value;
-      const dateFrom  = document.getElementById('filterDateFrom').value;
-      const dateTo    = document.getElementById('filterDateTo').value;
-
-      const params = new URLSearchParams({ page: _usagePage, page_size: 20 });
-      if (provider)  params.set('provider',  provider);
-      if (dateFrom)  params.set('date_from', dateFrom);
-      if (dateTo)    params.set('date_to',   dateTo);
-
+      const provider = document.getElementById('filterProvider').value;
+      const dateFrom = document.getElementById('filterDateFrom').value;
+      const dateTo   = document.getElementById('filterDateTo').value;
+      const params   = new URLSearchParams({ page: _usagePage, page_size: 20 });
+      if (provider) params.set('provider',  provider);
+      if (dateFrom) params.set('date_from', dateFrom);
+      if (dateTo)   params.set('date_to',   dateTo);
       try {
         const res  = await fetch(`${API}/usage?${params}`);
         const data = await res.json();
         _usageTotalPages = data.total_pages || 1;
-
         const tbody = document.getElementById('usageTableBody');
         if (!data.items || !data.items.length) {
-          tbody.innerHTML = '<tr><td colspan="7" style="color:var(--muted);text-align:center;padding:1.5rem">No records found.</td></tr>';
+          tbody.innerHTML = '<tr><td colspan="7" style="color:var(--text-muted);text-align:center;padding:1.5rem">No records found.</td></tr>';
         } else {
           tbody.innerHTML = data.items.map(r => {
-            const pClass   = 'provider-' + (r.model_provider || 'ollama');
-            const pLabel   = (r.model_provider || 'ollama').toUpperCase();
-            const timeStr  = r.created_at ? new Date(r.created_at).toLocaleString() : '';
-            const costStr  = r.cost_usd > 0 ? '$' + r.cost_usd.toFixed(6) : '—';
-            const desc     = escHtml((r.task_description || '').slice(0, 60));
+            const pClass  = 'provider-' + (r.model_provider || 'ollama');
+            const pLabel  = (r.model_provider || 'ollama').toUpperCase();
+            const timeStr = r.created_at ? new Date(r.created_at).toLocaleString() : '';
+            const costStr = r.cost_usd > 0 ? '$' + r.cost_usd.toFixed(6) : '—';
+            const desc    = escHtml((r.task_description || '').slice(0, 60));
             return `<tr>
-              <td style="font-size:0.76rem;color:var(--muted)">${timeStr}</td>
+              <td style="font-size:0.76rem;color:var(--text-muted)">${timeStr}</td>
               <td style="font-family:monospace;font-size:0.76rem">${escHtml(r.model || '')}</td>
               <td><span class="provider-badge ${pClass}">${pLabel}</span></td>
               <td>${fmt(r.tokens_in)}</td>
@@ -1467,209 +1631,134 @@
             </tr>`;
           }).join('');
         }
-
-        // Pagination info
-        const info = document.getElementById('usagePageInfo');
-        info.textContent = `Page ${data.page} / ${data.total_pages}  (${data.total} records)`;
+        document.getElementById('usagePageInfo').textContent   = `Page ${data.page} / ${data.total_pages}  (${data.total} records)`;
         document.getElementById('usagePrevBtn').disabled = _usagePage <= 1;
         document.getElementById('usageNextBtn').disabled = _usagePage >= _usageTotalPages;
-
-      } catch (e) {
-        toast('Could not load usage: ' + e.message, true);
-      }
+      } catch (e) { toast('Could not load usage: ' + e.message, true); }
     }
 
     function usagePage(delta) {
-      const newPage = _usagePage + delta;
-      if (newPage >= 1 && newPage <= _usageTotalPages) loadUsageRecords(newPage);
+      const n = _usagePage + delta;
+      if (n >= 1 && n <= _usageTotalPages) loadUsageRecords(n);
     }
 
     function clearUsageFilters() {
-      document.getElementById('filterProvider').value  = '';
-      document.getElementById('filterDateFrom').value  = '';
-      document.getElementById('filterDateTo').value    = '';
+      document.getElementById('filterProvider').value = '';
+      document.getElementById('filterDateFrom').value = '';
+      document.getElementById('filterDateTo').value   = '';
       loadUsageRecords(1);
     }
 
-    // ── Chart ──────────────────────────────────────────────────────────────
-
+    // ── Chart (light-theme colors) ───────────────────────────────────────────
     function drawChart(data) {
-      const canvas  = document.getElementById('usageChart');
-      const empty   = document.getElementById('chartEmpty');
-      const ctx     = canvas.getContext('2d');
-
-      // Fill last 30 days with zeros
-      const days = 30;
-      const today = new Date();
+      const canvas = document.getElementById('usageChart');
+      const empty  = document.getElementById('chartEmpty');
+      const ctx    = canvas.getContext('2d');
+      const days   = 30;
+      const today  = new Date();
       const allDays = [];
       for (let i = days - 1; i >= 0; i--) {
-        const d = new Date(today);
-        d.setDate(d.getDate() - i);
+        const d = new Date(today); d.setDate(d.getDate() - i);
         allDays.push(d.toISOString().slice(0, 10));
       }
       const lookup = {};
       (data || []).forEach(d => { lookup[d.date] = d.cost; });
       const values = allDays.map(d => lookup[d] || 0);
       const maxVal = Math.max(...values, 0.000001);
-
-      if (maxVal === 0.000001) {
-        canvas.style.display = 'none';
-        empty.style.display  = 'block';
-        return;
-      }
-      canvas.style.display = 'block';
-      empty.style.display  = 'none';
-
-      // Resize canvas to actual CSS size
-      const W = canvas.offsetWidth || 800;
-      const H = 160;
-      canvas.width  = W;
-      canvas.height = H;
-
-      const PAD_L = 55, PAD_R = 16, PAD_T = 16, PAD_B = 32;
-      const chartW = W - PAD_L - PAD_R;
-      const chartH = H - PAD_T - PAD_B;
-
+      if (maxVal === 0.000001) { canvas.style.display='none'; empty.style.display='block'; return; }
+      canvas.style.display='block'; empty.style.display='none';
+      const W = canvas.offsetWidth || 800, H = 160;
+      canvas.width = W; canvas.height = H;
+      const PAD_L=55, PAD_R=16, PAD_T=16, PAD_B=32;
+      const chartW = W-PAD_L-PAD_R, chartH = H-PAD_T-PAD_B;
       ctx.clearRect(0, 0, W, H);
-
-      // Grid lines
-      const gridLines = 4;
-      ctx.strokeStyle = '#2d3148';
-      ctx.lineWidth   = 1;
-      for (let i = 0; i <= gridLines; i++) {
-        const y = PAD_T + (chartH / gridLines) * i;
-        ctx.beginPath();
-        ctx.moveTo(PAD_L, y);
-        ctx.lineTo(PAD_L + chartW, y);
-        ctx.stroke();
-        // Y label
-        const val = maxVal * (1 - i / gridLines);
-        ctx.fillStyle = '#8888aa';
-        ctx.font = '10px system-ui';
-        ctx.textAlign = 'right';
-        ctx.fillText('$' + val.toFixed(4), PAD_L - 6, y + 4);
+      // Grid
+      ctx.strokeStyle = '#e5e0d8'; ctx.lineWidth = 1;
+      for (let i = 0; i <= 4; i++) {
+        const y = PAD_T + (chartH/4)*i;
+        ctx.beginPath(); ctx.moveTo(PAD_L, y); ctx.lineTo(PAD_L+chartW, y); ctx.stroke();
+        ctx.fillStyle='#9b9b9b'; ctx.font='10px system-ui'; ctx.textAlign='right';
+        ctx.fillText('$'+(maxVal*(1-i/4)).toFixed(4), PAD_L-6, y+4);
       }
-
-      // X axis labels (every 5 days)
-      ctx.textAlign = 'center';
+      ctx.textAlign='center';
       for (let i = 0; i < days; i += 5) {
-        const x = PAD_L + (i / (days - 1)) * chartW;
-        ctx.fillStyle = '#8888aa';
-        ctx.fillText(allDays[i].slice(5), x, H - 8);
+        const x = PAD_L + (i/(days-1))*chartW;
+        ctx.fillStyle='#9b9b9b'; ctx.fillText(allDays[i].slice(5), x, H-8);
       }
-
-      // Filled area
-      const pts = values.map((v, i) => ({
-        x: PAD_L + (i / (days - 1)) * chartW,
-        y: PAD_T + chartH - (v / maxVal) * chartH,
+      const pts = values.map((v,i) => ({
+        x: PAD_L + (i/(days-1))*chartW,
+        y: PAD_T + chartH - (v/maxVal)*chartH,
       }));
-
-      ctx.beginPath();
-      ctx.moveTo(pts[0].x, PAD_T + chartH);
+      // Fill
+      ctx.beginPath(); ctx.moveTo(pts[0].x, PAD_T+chartH);
       pts.forEach(p => ctx.lineTo(p.x, p.y));
-      ctx.lineTo(pts[pts.length - 1].x, PAD_T + chartH);
-      ctx.closePath();
-      ctx.fillStyle = 'rgba(124,106,247,0.15)';
-      ctx.fill();
-
+      ctx.lineTo(pts[pts.length-1].x, PAD_T+chartH); ctx.closePath();
+      ctx.fillStyle='rgba(124,92,191,0.1)'; ctx.fill();
       // Line
-      ctx.beginPath();
-      pts.forEach((p, i) => i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y));
-      ctx.strokeStyle = '#7c6af7';
-      ctx.lineWidth   = 2;
-      ctx.lineJoin    = 'round';
-      ctx.stroke();
-
+      ctx.beginPath(); pts.forEach((p,i) => i===0 ? ctx.moveTo(p.x,p.y) : ctx.lineTo(p.x,p.y));
+      ctx.strokeStyle='#7c5cbf'; ctx.lineWidth=2; ctx.lineJoin='round'; ctx.stroke();
       // Dots
-      ctx.fillStyle = '#7c6af7';
-      pts.forEach(p => {
-        if (values[pts.indexOf(p)] > 0) {
-          ctx.beginPath();
-          ctx.arc(p.x, p.y, 3, 0, Math.PI * 2);
-          ctx.fill();
-        }
-      });
+      ctx.fillStyle='#7c5cbf';
+      pts.forEach((p,i) => { if (values[i]>0) { ctx.beginPath(); ctx.arc(p.x,p.y,3,0,Math.PI*2); ctx.fill(); } });
     }
 
-    // ── Toast ──────────────────────────────────────────────────────────────
-
+    // ── Toast ────────────────────────────────────────────────────────────────
     function toast(msg, isError = false) {
       const fab    = document.getElementById('approvalFab');
       const toastEl = document.getElementById('toast');
-      toastEl.style.bottom = fab.style.display !== 'none' ? '4.5rem' : '1.5rem';
-      toastEl.textContent  = msg;
+      toastEl.style.bottom    = fab.style.display !== 'none' ? '4.5rem' : '1.5rem';
+      toastEl.textContent     = msg;
       toastEl.style.borderColor = isError ? 'var(--error)' : 'var(--border)';
       toastEl.classList.add('show');
       setTimeout(() => toastEl.classList.remove('show'), 3000);
     }
 
     function escHtml(s) {
-      return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+      return String(s).replace(/[&<>"']/g, c =>
+        ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c])
+      );
     }
-
     function fmt(n)  { return (n || 0).toLocaleString(); }
     function fmtK(n) {
       n = n || 0;
-      if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M';
-      if (n >= 1_000)     return (n / 1_000).toFixed(1) + 'K';
+      if (n >= 1_000_000) return (n/1_000_000).toFixed(1)+'M';
+      if (n >= 1_000)     return (n/1_000).toFixed(1)+'K';
       return String(n);
     }
 
-    // ── Settings ───────────────────────────────────────────────────────────
-
-    let _ollamaModels   = [];   // cache from Ollama
+    // ── Settings ─────────────────────────────────────────────────────────────
+    let _ollamaModels   = [];
     let _settingsLoaded = false;
 
-    // Load settings values from API and populate the UI
     async function loadSettings() {
       try {
         const res  = await fetch(`${API}/settings`);
         const data = await res.json();
         if (!data.success) { toast('Settings load error: ' + data.error, true); return; }
-
         const s = data.data;
-
-        // Text inputs
         _setInput('inp_claude_model',   s.claude_model?.value   ?? '');
         _setInput('inp_gemma_base_url', s.gemma_base_url?.value ?? '');
         _setInput('inp_qwen_base_url',  s.qwen_base_url?.value  ?? '');
-
-        // Sliders
-        _setSlider('escalation_threshold',     s.escalation_threshold?.value     ?? 0.6);
-        _setSlider('escalation_failure_limit', s.escalation_failure_limit?.value ?? 3);
-        _setSlider('gemma_max_tokens',         s.gemma_max_tokens?.value         ?? 4096);
-        _setSlider('qwen_max_tokens',          s.qwen_max_tokens?.value          ?? 4096);
-        _setSlider('skill_match_threshold',    s.skill_match_threshold?.value    ?? 0.4);
-        _setSlider('skill_promotion_threshold',s.skill_promotion_threshold?.value?? 5);
-
+        _setSlider('escalation_threshold',      s.escalation_threshold?.value      ?? 0.6);
+        _setSlider('escalation_failure_limit',  s.escalation_failure_limit?.value  ?? 3);
+        _setSlider('gemma_max_tokens',          s.gemma_max_tokens?.value          ?? 4096);
+        _setSlider('qwen_max_tokens',           s.qwen_max_tokens?.value           ?? 4096);
+        _setSlider('skill_match_threshold',     s.skill_match_threshold?.value     ?? 0.4);
+        _setSlider('skill_promotion_threshold', s.skill_promotion_threshold?.value ?? 5);
         _settingsLoaded = true;
-
-        // Refresh Ollama status + models (will also populate dropdowns)
         await refreshOllamaStatus();
-        await loadOllamaModels(
-          s.orchestrator_model?.value ?? '',
-          s.executor_model?.value     ?? ''
-        );
-      } catch (e) {
-        toast('Cannot load settings: ' + e.message, true);
-      }
+        await loadOllamaModels(s.orchestrator_model?.value ?? '', s.executor_model?.value ?? '');
+      } catch (e) { toast('Cannot load settings: ' + e.message, true); }
     }
 
-    function _setInput(id, val) {
-      const el = document.getElementById(id);
-      if (el) el.value = val;
-    }
-
+    function _setInput(id, val) { const el = document.getElementById(id); if (el) el.value = val; }
     function _setSlider(key, val) {
       const rng = document.getElementById('rng_' + key);
       const lbl = document.getElementById('val_' + key);
       if (!rng || !lbl) return;
-      rng.value = val;
-      // Format label: floats get 2 decimal places
+      rng.value     = val;
       lbl.textContent = String(val).includes('.') ? parseFloat(val).toFixed(2) : String(val);
     }
-
-    // ── Ollama ────────────────────────────────────────────────────────────────
 
     async function refreshOllamaStatus() {
       try {
@@ -1678,20 +1767,19 @@
         const dot  = document.getElementById('ollamaDot');
         const lbl  = document.getElementById('ollamaLabel');
         const url  = document.getElementById('ollamaUrl');
-
         if (data.data?.online) {
-          dot.className  = 'ollama-dot online';
-          lbl.textContent = '● Online';
+          dot.className   = 'ollama-dot online';
+          lbl.textContent = 'Online';
           lbl.style.color = 'var(--success)';
         } else {
           dot.className   = 'ollama-dot offline';
-          lbl.textContent = '● Offline';
+          lbl.textContent = 'Offline';
           lbl.style.color = 'var(--error)';
         }
         if (url) url.textContent = data.data?.url ?? '';
       } catch (e) {
         const dot = document.getElementById('ollamaDot');
-        if (dot) { dot.className = 'ollama-dot offline'; }
+        if (dot) dot.className = 'ollama-dot offline';
       }
     }
 
@@ -1699,46 +1787,32 @@
       const list    = document.getElementById('modelList');
       const selOrch = document.getElementById('sel_orchestrator_model');
       const selExec = document.getElementById('sel_executor_model');
-
       try {
         const res  = await fetch(`${API}/settings/ollama/models`);
         const data = await res.json();
         _ollamaModels = (data.data?.models ?? []);
-
         if (!data.success || !_ollamaModels.length) {
-          list.innerHTML = '<div style="color:var(--muted);font-size:0.82rem">No models installed or Ollama offline.</div>';
-          _setOfflineDropdowns(selOrch, selExec);
-          return;
+          list.innerHTML = '<div style="color:var(--text-muted);font-size:0.82rem">No models installed or Ollama offline.</div>';
+          _setOfflineDropdowns(selOrch, selExec); return;
         }
-
-        // Render chips
         list.innerHTML = _ollamaModels.map(m => `
           <div class="model-chip">
             <div>
               <div class="model-chip-name">${escHtml(m.name)}</div>
-              <div class="model-chip-size">${m.size != null ? m.size + ' GB' : ''} ${m.family ? '· ' + escHtml(m.family) : ''}</div>
+              <div class="model-chip-size">${m.size != null ? m.size+' GB' : ''}${m.family ? ' · '+escHtml(m.family) : ''}</div>
             </div>
             <button class="model-chip-del" title="Delete" onclick="deleteModel('${escHtml(m.name)}')">✕</button>
           </div>
         `).join('');
-
-        // Populate dropdowns
         const opts = _ollamaModels.map(m =>
-          `<option value="${escHtml(m.name)}">${escHtml(m.name)}${m.size != null ? ' (' + m.size + ' GB)' : ''}</option>`
+          `<option value="${escHtml(m.name)}">${escHtml(m.name)}${m.size!=null?' ('+m.size+' GB)':''}</option>`
         ).join('');
-        selOrch.innerHTML = opts;
-        selExec.innerHTML = opts;
-        selOrch.disabled  = false;
-        selExec.disabled  = false;
-
-        // Restore saved selections
-        if (selectedOrch && [...selOrch.options].some(o => o.value === selectedOrch))
-          selOrch.value = selectedOrch;
-        if (selectedExec && [...selExec.options].some(o => o.value === selectedExec))
-          selExec.value = selectedExec;
-
+        selOrch.innerHTML = opts; selExec.innerHTML = opts;
+        selOrch.disabled  = false; selExec.disabled = false;
+        if (selectedOrch && [...selOrch.options].some(o => o.value === selectedOrch)) selOrch.value = selectedOrch;
+        if (selectedExec && [...selExec.options].some(o => o.value === selectedExec)) selExec.value = selectedExec;
       } catch (e) {
-        list.innerHTML = `<div style="color:var(--error);font-size:0.82rem">Failed to load models: ${escHtml(e.message)}</div>`;
+        list.innerHTML = `<div style="color:var(--error);font-size:0.82rem">Failed to load: ${escHtml(e.message)}</div>`;
         _setOfflineDropdowns(selOrch, selExec);
       }
     }
@@ -1746,43 +1820,34 @@
     function _setOfflineDropdowns(...sels) {
       sels.forEach(s => {
         if (!s) return;
-        s.innerHTML  = '<option value="">⚠️ Ollama 離線</option>';
-        s.disabled   = true;
+        s.innerHTML = '<option value="">⚠️ Ollama offline</option>';
+        s.disabled  = true;
       });
     }
 
     async function deleteModel(name) {
-      if (!confirm(`刪除模型 "${name}"？`)) return;
+      if (!confirm(`Delete model "${name}"?`)) return;
       try {
         const res  = await fetch(`${API}/settings/ollama/models/${encodeURIComponent(name)}`, { method: 'DELETE' });
         const data = await res.json();
-        if (data.success) {
-          toast(`已刪除 ${name}`);
-          await loadOllamaModels();
-        } else {
-          toast('刪除失敗：' + data.error, true);
-        }
-      } catch (e) {
-        toast('Error: ' + e.message, true);
-      }
+        if (data.success) { toast(`Deleted ${name}`); await loadOllamaModels(); }
+        else toast('Delete failed: ' + data.error, true);
+      } catch (e) { toast('Error: ' + e.message, true); }
     }
 
     async function pullModel() {
       const name = document.getElementById('pullModelName').value.trim();
-      if (!name) { toast('請輸入模型名稱', true); return; }
-
+      if (!name) { toast('Please enter a model name', true); return; }
       const btn      = document.getElementById('pullBtn');
       const wrap     = document.getElementById('pullProgress');
       const bar      = document.getElementById('pullBar');
       const statusTx = document.getElementById('pullStatusText');
       const pctTx    = document.getElementById('pullPct');
-
       btn.disabled = true;
       wrap.classList.add('active');
       bar.style.width     = '0%';
-      statusTx.textContent = '開始 pull…';
+      statusTx.textContent = 'Starting pull…';
       pctTx.textContent    = '0%';
-
       try {
         const res  = await fetch(`${API}/settings/ollama/pull`, {
           method:  'POST',
@@ -1790,77 +1855,51 @@
           body:    JSON.stringify({ model: name }),
         });
         const data = await res.json();
-        if (!data.success) {
-          toast('Pull 失敗：' + data.error, true);
-          btn.disabled = false;
-          return;
-        }
-        // Progress comes via WebSocket; btn re-enabled on completion
-      } catch (e) {
-        toast('Error: ' + e.message, true);
-        btn.disabled = false;
-      }
+        if (!data.success) { toast('Pull failed: ' + data.error, true); btn.disabled = false; }
+      } catch (e) { toast('Error: ' + e.message, true); btn.disabled = false; }
     }
 
-    // Handle pull_progress WS events (called from _ws.onmessage)
     function handlePullProgress(data) {
-      if (document.getElementById('tab-settings').classList.contains('active') === false) return;
-
+      if (!document.getElementById('tab-settings').classList.contains('active')) return;
       const bar      = document.getElementById('pullBar');
       const statusTx = document.getElementById('pullStatusText');
       const pctTx    = document.getElementById('pullPct');
       const btn      = document.getElementById('pullBtn');
       const wrap     = document.getElementById('pullProgress');
-
       if (!bar) return;
-
-      const pct    = data.percent ?? 0;
-      const status = data.status  ?? '';
-
-      bar.style.width      = pct + '%';
-      pctTx.textContent    = pct + '%';
-      statusTx.textContent = status;
-
-      if (status === 'success') {
-        statusTx.textContent = '✅ Pull 完成！';
+      bar.style.width      = (data.percent ?? 0) + '%';
+      pctTx.textContent    = (data.percent ?? 0) + '%';
+      statusTx.textContent = data.status ?? '';
+      if (data.status === 'success') {
+        statusTx.textContent = '✅ Pull complete!';
         btn.disabled = false;
-        toast(`✅ ${data.model} pull 成功！`);
-        setTimeout(async () => {
-          wrap.classList.remove('active');
-          await loadOllamaModels();
-        }, 1500);
-      } else if (status === 'error') {
-        statusTx.textContent = '❌ Pull 失敗：' + (data.error ?? '');
+        toast(`✅ ${data.model} pulled successfully!`);
+        setTimeout(async () => { wrap.classList.remove('active'); await loadOllamaModels(); }, 1500);
+      } else if (data.status === 'error') {
+        statusTx.textContent = '❌ Pull failed: ' + (data.error ?? '');
         btn.disabled = false;
-        toast('Pull 失敗', true);
+        toast('Pull failed', true);
       }
     }
-
-    // ── Save settings ─────────────────────────────────────────────────────────
 
     async function saveSettings() {
       const btn = document.getElementById('saveSettingsBtn');
       const msg = document.getElementById('settingsMsg');
-      btn.disabled = true;
-      msg.className = 'settings-msg';
-
+      btn.disabled = true; msg.className = 'settings-msg';
       const payload = {
-        orchestrator_model:       document.getElementById('sel_orchestrator_model').value,
-        executor_model:           document.getElementById('sel_executor_model').value,
-        claude_model:             document.getElementById('inp_claude_model').value.trim(),
-        gemma_base_url:           document.getElementById('inp_gemma_base_url').value.trim(),
-        qwen_base_url:            document.getElementById('inp_qwen_base_url').value.trim(),
-        escalation_threshold:     document.getElementById('rng_escalation_threshold').value,
-        escalation_failure_limit: document.getElementById('rng_escalation_failure_limit').value,
-        gemma_max_tokens:         document.getElementById('rng_gemma_max_tokens').value,
-        qwen_max_tokens:          document.getElementById('rng_qwen_max_tokens').value,
-        skill_match_threshold:    document.getElementById('rng_skill_match_threshold').value,
-        skill_promotion_threshold:document.getElementById('rng_skill_promotion_threshold').value,
+        orchestrator_model:        document.getElementById('sel_orchestrator_model').value,
+        executor_model:            document.getElementById('sel_executor_model').value,
+        claude_model:              document.getElementById('inp_claude_model').value.trim(),
+        gemma_base_url:            document.getElementById('inp_gemma_base_url').value.trim(),
+        qwen_base_url:             document.getElementById('inp_qwen_base_url').value.trim(),
+        escalation_threshold:      document.getElementById('rng_escalation_threshold').value,
+        escalation_failure_limit:  document.getElementById('rng_escalation_failure_limit').value,
+        gemma_max_tokens:          document.getElementById('rng_gemma_max_tokens').value,
+        qwen_max_tokens:           document.getElementById('rng_qwen_max_tokens').value,
+        skill_match_threshold:     document.getElementById('rng_skill_match_threshold').value,
+        skill_promotion_threshold: document.getElementById('rng_skill_promotion_threshold').value,
       };
-
-      // Remove empty values (e.g. offline model selects)
       Object.keys(payload).forEach(k => { if (payload[k] === '') delete payload[k]; });
-
       try {
         const res  = await fetch(`${API}/settings`, {
           method:  'POST',
@@ -1869,10 +1908,10 @@
         });
         const data = await res.json();
         if (data.success) {
-          msg.textContent = '✅ 設定已套用，下次任務立即生效';
+          msg.textContent = '✅ Settings applied — effective on next task';
           msg.className   = 'settings-msg show';
         } else {
-          msg.textContent = '❌ ' + (data.error ?? '儲存失敗');
+          msg.textContent = '❌ ' + (data.error ?? 'Save failed');
           msg.className   = 'settings-msg show err';
         }
       } catch (e) {
@@ -1884,15 +1923,13 @@
       }
     }
 
-    // ── Init ───────────────────────────────────────────────────────────────
-
+    // ── Init ─────────────────────────────────────────────────────────────────
     window.onload = () => {
-      initWS();              // 建立 WebSocket 串流連線
+      initWS();
       loadSkills();
       loadTools();
       pollApprovals();
       setInterval(pollApprovals, 3000);
-      // Ping Ollama every 10 s (only matters when Settings tab is open)
       setInterval(() => {
         if (document.getElementById('tab-settings').classList.contains('active')) {
           refreshOllamaStatus();
