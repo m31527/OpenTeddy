@@ -132,6 +132,12 @@ class RunRequest(BaseModel):
     context: Dict[str, Any] = Field(default_factory=dict)
     priority: int = Field(default=5, ge=1, le=10)
     session_id: Optional[str] = None
+    task_id: Optional[str] = Field(
+        default=None,
+        description="Client-supplied task id so the UI can cancel mid-flight "
+                    "via POST /tasks/{id}/cancel. If omitted, the server "
+                    "generates one.",
+    )
 
 
 class Session(BaseModel):
