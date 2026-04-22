@@ -155,7 +155,7 @@ class Orchestrator:
                 )
             else:
                 # 全部地端完成 → 用 Gemma 讀取工具記錄，產出中文完成報告
-                summary = await self._gemma_summarize(req.goal, tool_log_text)
+                summary = await self._gemma_summarize(req.goal, tool_log_text, task_id=req.id)
 
             # 6. 任務完成後自動執行確認指令，把結果附加到 summary
             confirmation_output = await self._run_confirmation_checks(req.goal)
@@ -218,7 +218,11 @@ class Orchestrator:
             f"Available skills: {json.dumps(skill_names)}\n\n"
             "Output the sub-task plan now."
         )
-        raw_plan = await self._gemma_complete(prompt, system_prompt)
+        raw_plan = await self._gemma_complete(
+            prompt, system_prompt,
+            task_id=req.id,
+            task_description=f"[plan] {req.goal[:100]}",
+        )
         subtasks  = self._parse_plan(raw_plan, req.id, req.goal)
 
         if not subtasks:
@@ -301,7 +305,7 @@ class Orchestrator:
 
         return None  # 沒有匹配的驗證規則
 
-    async def _gemma_summarize(self, goal: str, tool_log: str) -> str:
+    async def _gemma_summarize(self, goal: str, tool_log: str, task_id: str = "") -> str:
         """用 Gemma 讀取工具執行記錄，產出結構化的繁體中文完成報告。"""
         system_prompt = """\
 你是一個任務執行報告生成器。根據提供的工具執行記錄，生成清楚的繁體中文完成報告。
@@ -322,7 +326,11 @@ class Orchestrator:
             f"工具執行記錄：\n{tool_log}\n\n"
             "請根據以上記錄生成完成報告。"
         )
-        result = await self._gemma_complete(prompt, system_prompt)
+        result = await self._gemma_complete(
+            prompt, system_prompt,
+            task_id=task_id,
+            task_description=f"[summary] {goal[:100]}",
+        )
         # Fallback if Gemma returns empty
         if not result or result.strip() in ("[]", ""):
             lines = [f"任務已完成：{goal}", "", tool_log[:1000]]
@@ -367,7 +375,8 @@ class Orchestrator:
         return "\n".join(output_parts) if len(output_parts) > 1 else ""
 
     async def _gemma_complete(
-        self, prompt: str, system: Optional[str] = None
+        self, prompt: str, system: Optional[str] = None,
+        task_id: str = "", task_description: str = "[orchestrator]",
     ) -> str:
         payload = {
             "model":   config.gemma_model,
@@ -390,12 +399,12 @@ class Orchestrator:
             if tokens_in or tokens_out:
                 try:
                     await self.tracker.record_usage(
-                        task_id="",
+                        task_id=task_id,
                         model=config.gemma_model,
                         model_provider="ollama",
                         tokens_in=tokens_in,
                         tokens_out=tokens_out,
-                        task_description="[orchestrator plan]",
+                        task_description=task_description,
                     )
                 except Exception:  # noqa: BLE001
                     pass

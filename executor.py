@@ -80,7 +80,9 @@ class Executor:
 
         # 2. Qwen with function calling
         result, confidence, skill_hint, skill_desc = await self._qwen_execute(
-            subtask.description, context, task_id=subtask.parent_task_id
+            subtask.description, context,
+            task_id=subtask.parent_task_id,
+            subtask_id=subtask.id,
         )
         subtask.result = result
         subtask.confidence = confidence
@@ -107,6 +109,7 @@ class Executor:
         description: str,
         context: Dict,
         task_id: str = "unknown",
+        subtask_id: str = "",
     ) -> Tuple[str, float, Optional[str], Optional[str]]:
         """
         Multi-turn Qwen chat with Ollama function calling.
@@ -145,6 +148,22 @@ class Executor:
             except Exception as exc:  # noqa: BLE001
                 logger.error("Qwen chat call failed (round %d): %s", round_idx, exc)
                 return f"Executor error: {exc}", 0.0, None, None
+
+            # ── Record Qwen usage ─────────────────────────────────────────────
+            _tokens_in  = data.get("prompt_eval_count", 0) or 0
+            _tokens_out = data.get("eval_count", 0) or 0
+            try:
+                await self.tracker.record_usage(
+                    task_id=task_id,
+                    model=config.qwen_model,
+                    model_provider="ollama",
+                    tokens_in=_tokens_in,
+                    tokens_out=_tokens_out,
+                    task_description=description,
+                    cost_usd=0.0,
+                )
+            except Exception:  # noqa: BLE001
+                pass
 
             message = data.get("message", {})
             tool_calls: List[Dict[str, Any]] = message.get("tool_calls") or []
@@ -237,7 +256,22 @@ class Executor:
                 },
             )
             resp.raise_for_status()
-            raw_text = resp.json().get("message", {}).get("content", "")
+            _final_data = resp.json()
+            _tokens_in  = _final_data.get("prompt_eval_count", 0) or 0
+            _tokens_out = _final_data.get("eval_count", 0) or 0
+            try:
+                await self.tracker.record_usage(
+                    task_id=task_id,
+                    model=config.qwen_model,
+                    model_provider="ollama",
+                    tokens_in=_tokens_in,
+                    tokens_out=_tokens_out,
+                    task_description=description,
+                    cost_usd=0.0,
+                )
+            except Exception:  # noqa: BLE001
+                pass
+            raw_text = _final_data.get("message", {}).get("content", "")
         except Exception as exc:  # noqa: BLE001
             return f"Executor error (forced final): {exc}", 0.0, None, None
 
