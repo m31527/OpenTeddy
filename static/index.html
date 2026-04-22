@@ -234,6 +234,126 @@
     }
     #toast.show { opacity: 1; }
 
+    /* ── Approval Banner ────────────────────────────────────────────────── */
+    #approval-banner {
+      display: none;
+      position: fixed;
+      top: 0; left: 0; right: 0;
+      z-index: 9999;
+      background: #d97757;
+      color: white;
+      padding: 14px 24px;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 15px;
+      font-weight: 600;
+      box-shadow: 0 2px 12px rgba(0,0,0,0.2);
+      animation: banner-pulse 2s infinite;
+    }
+    #approval-banner.visible { display: flex; }
+    @keyframes banner-pulse {
+      0%, 100% { background: #d97757; }
+      50%       { background: #c4623e; }
+    }
+    #approval-banner .banner-btn {
+      background: white;
+      color: #d97757;
+      border: none;
+      border-radius: 8px;
+      padding: 6px 16px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+    #approval-banner .banner-btn:hover { background: #f5f5f5; }
+
+    /* Push sticky header/tab-bar down when banner is visible */
+    body.has-banner header    { top: 53px; }
+    body.has-banner .tab-bar  { top: 106px; }
+    body.has-banner .chat-layout { height: calc(100vh - 159px); }
+
+    /* ── Approval Card (in-chat) ─────────────────────────────────────────── */
+    .approval-card {
+      background: #fff8f0;
+      border: 2.5px solid #d97757;
+      border-radius: 16px;
+      padding: 20px;
+      margin: 4px 0;
+      box-shadow: 0 4px 20px rgba(217, 119, 87, 0.25);
+      align-self: stretch;
+      animation: pulse-border 2s infinite;
+    }
+    @keyframes pulse-border {
+      0%, 100% { box-shadow: 0 4px 20px rgba(217, 119, 87, 0.25); }
+      50%       { box-shadow: 0 4px 28px rgba(217, 119, 87, 0.5); }
+    }
+    .approval-card .approval-header {
+      font-size: 16px;
+      font-weight: 600;
+      color: #c4623e;
+      margin-bottom: 10px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .approval-card .approval-command {
+      background: #1a1a1a;
+      color: #f0ede8;
+      border-radius: 8px;
+      padding: 10px 14px;
+      font-family: monospace;
+      font-size: 13px;
+      margin: 10px 0;
+      word-break: break-all;
+      white-space: pre-wrap;
+      max-height: 140px;
+      overflow-y: auto;
+    }
+    .approval-card .approval-card-meta {
+      font-size: 0.74rem;
+      color: var(--text-muted);
+      margin-bottom: 10px;
+    }
+    .approval-card .approval-card-actions {
+      display: flex;
+      gap: 10px;
+      margin-top: 14px;
+    }
+    .approval-card .btn-card-approve {
+      flex: 1;
+      padding: 10px;
+      font-size: 15px;
+      font-weight: 600;
+      background: #1a1a1a;
+      color: white;
+      border: none;
+      border-radius: 10px;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    .approval-card .btn-card-approve:hover { background: #333; }
+    .approval-card .btn-card-reject {
+      flex: 1;
+      padding: 10px;
+      font-size: 15px;
+      font-weight: 600;
+      background: transparent;
+      color: #cc3333;
+      border: 2px solid #cc3333;
+      border-radius: 10px;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    .approval-card .btn-card-reject:hover { background: #fff0f0; }
+    .approval-card.resolved {
+      opacity: 0.55;
+      animation: none;
+      border-color: var(--border);
+      box-shadow: none;
+    }
+
     /* ── Approval FAB ────────────────────────────────────────────────────── */
     #approvalFab {
       position: fixed;
@@ -845,6 +965,12 @@
 </head>
 <body>
 
+  <!-- ── Approval Banner ────────────────────────────────────────────────── -->
+  <div id="approval-banner">
+    <span>⚠️ 有 <span id="banner-count">0</span> 個操作需要你確認</span>
+    <button class="banner-btn" onclick="openApprovalModal()">查看並確認 →</button>
+  </div>
+
   <!-- ── Header ──────────────────────────────────────────────────────────── -->
   <header>
     <div class="logo-wrap">
@@ -1185,6 +1311,8 @@
     let _ws = null;
     let _activeCalls = {};
     let _currentTaskId = null;
+    // Map of tool-call key → { timer30, timer90 } for stuck-detection UI
+    let _stuckTimers = {};
 
     function initWS() {
       const proto = location.protocol === 'https:' ? 'wss' : 'ws';
@@ -1199,9 +1327,10 @@
         try {
           const data = JSON.parse(evt.data);
           if (_currentTaskId && data.task_id && data.task_id !== _currentTaskId) return;
-          if (data.event === 'tool_call')     handleToolCall(data);
-          if (data.event === 'tool_result')   handleToolResult(data);
-          if (data.type  === 'pull_progress') handlePullProgress(data);
+          if (data.event === 'tool_call')         handleToolCall(data);
+          if (data.event === 'tool_result')       handleToolResult(data);
+          if (data.type  === 'pull_progress')     handlePullProgress(data);
+          if (data.type  === 'approval_required') handleApprovalRequired(data);
         } catch (e) { /* ignore */ }
       };
     }
@@ -1246,9 +1375,31 @@
         <div class="tool-result-row" id="tcr-${escHtml(key)}">
           <span class="tool-result-icon loader" style="width:11px;height:11px;border-width:2px;margin-right:4px"></span>
           <span style="color:var(--text-muted);font-size:0.76rem">Running…</span>
-        </div>`;
+        </div>
+        <div id="stuck-${escHtml(key)}" style="display:none;font-size:0.72rem;margin-top:4px;padding:3px 6px;border-radius:4px;background:var(--accent-light);color:var(--warning)"></div>`;
       appendToChat(card);
       _activeCalls[key] = true;
+
+      // ── Stuck-detection timers ─────────────────────────────────────────────
+      const stuckEl = document.getElementById(`stuck-${key}`);
+      const t30 = setTimeout(() => {
+        if (!_activeCalls[key]) return;
+        if (stuckEl) {
+          stuckEl.textContent = '⏱️ 執行較慢 (30s+)…';
+          stuckEl.style.display = 'block';
+        }
+      }, 30_000);
+
+      const t90 = setTimeout(() => {
+        if (!_activeCalls[key]) return;
+        if (stuckEl) {
+          stuckEl.textContent = '⚠️ 執行超時 (90s+)，若繼續卡住將自動升級到 Claude…';
+          stuckEl.style.background = 'var(--error)';
+          stuckEl.style.color = '#fff';
+        }
+      }, 90_000);
+
+      _stuckTimers[key] = { t30, t90 };
     }
 
     function handleToolResult(data) {
@@ -1256,6 +1407,16 @@
       const card      = document.getElementById(`tc-${key}`);
       const resultRow = document.getElementById(`tcr-${key}`);
       if (!card || !resultRow) return;
+
+      // Clear stuck-detection timers and hide the hint
+      if (_stuckTimers[key]) {
+        clearTimeout(_stuckTimers[key].t30);
+        clearTimeout(_stuckTimers[key].t90);
+        delete _stuckTimers[key];
+      }
+      const stuckEl = document.getElementById(`stuck-${key}`);
+      if (stuckEl) stuckEl.style.display = 'none';
+      delete _activeCalls[key];
 
       const success = data.success !== false;
       card.classList.add(success ? 'success' : 'failure');
@@ -1429,16 +1590,82 @@
     // ── Approvals ────────────────────────────────────────────────────────────
     async function pollApprovals() {
       try {
-        const res   = await fetch(`${API}/approvals`);
-        const data  = await res.json();
-        const count = (data.approvals || []).length;
-        const fab   = document.getElementById('approvalFab');
+        const res    = await fetch(`${API}/approvals`);
+        const data   = await res.json();
+        const count  = (data.approvals || []).length;
+        const fab    = document.getElementById('approvalFab');
+        const banner = document.getElementById('approval-banner');
         document.getElementById('approvalCount').textContent = count;
+        document.getElementById('banner-count').textContent  = count;
         fab.style.display = count > 0 ? 'flex' : 'none';
+        if (count > 0) {
+          banner.classList.add('visible');
+          document.body.classList.add('has-banner');
+        } else {
+          banner.classList.remove('visible');
+          document.body.classList.remove('has-banner');
+        }
         if (document.getElementById('approvalOverlay').classList.contains('open')) {
           renderApprovals(data.approvals || []);
         }
       } catch (e) { /* ignore */ }
+    }
+
+    // ── In-chat Approval Card ─────────────────────────────────────────────────
+    function handleApprovalRequired(data) {
+      const approvalId = data.approval_id || data.id || '';
+      const toolName   = data.tool_name   || data.tool || 'Unknown Tool';
+      const args       = data.args        || {};
+      const taskId     = data.task_id     || '';
+      const argsStr    = JSON.stringify(args, null, 2);
+
+      const card = document.createElement('div');
+      card.className = 'approval-card';
+      card.id = `chat-approval-${escHtml(approvalId)}`;
+      card.innerHTML = `
+        <div class="approval-header">⚠️ 需要你的確認</div>
+        <div style="font-size:0.9rem;color:var(--text-secondary);margin-bottom:6px">
+          工具 <strong>${escHtml(toolName)}</strong> 需要執行以下操作：
+        </div>
+        <div class="approval-command">${escHtml(argsStr)}</div>
+        <div class="approval-card-meta">Task: <code>${escHtml(taskId)}</code></div>
+        <div class="approval-card-actions">
+          <button class="btn-card-approve"
+            onclick="resolveChatApproval('${escHtml(approvalId)}', true, this)">✅ 批准</button>
+          <button class="btn-card-reject"
+            onclick="resolveChatApproval('${escHtml(approvalId)}', false, this)">❌ 拒絕</button>
+        </div>`;
+      appendToChat(card);
+      pollApprovals();
+    }
+
+    async function resolveChatApproval(approvalId, approved, btn) {
+      const action = approved ? 'approve' : 'reject';
+      const card   = document.getElementById(`chat-approval-${approvalId}`);
+      if (btn) btn.disabled = true;
+      try {
+        const res = await fetch(`${API}/approvals/${approvalId}/${action}`, { method: 'POST' });
+        if (!res.ok) {
+          const err = await res.json();
+          toast(err.detail || 'Failed', true);
+          if (btn) btn.disabled = false;
+          return;
+        }
+        if (card) {
+          card.classList.add('resolved');
+          const actionsDiv = card.querySelector('.approval-card-actions');
+          if (actionsDiv) {
+            actionsDiv.innerHTML = `<span style="color:${approved ? 'var(--success)' : 'var(--error)'};font-weight:600">
+              ${approved ? '✅ 已批准 — 任務繼續執行' : '❌ 已拒絕 — 代理將嘗試其他方案'}
+            </span>`;
+          }
+        }
+        toast(approved ? '✅ 已批准 — 任務繼續執行' : '❌ 已拒絕 — 代理將嘗試其他方案');
+        setTimeout(pollApprovals, 400);
+      } catch (e) {
+        toast('Error: ' + e.message, true);
+        if (btn) btn.disabled = false;
+      }
     }
 
     function openApprovalModal()  { document.getElementById('approvalOverlay').classList.add('open'); refreshApprovals(); }

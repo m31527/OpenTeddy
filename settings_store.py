@@ -91,6 +91,13 @@ SETTINGS_META: dict[str, dict[str, Any]] = {
         "min":         1,
         "max":         50,
     },
+    "subtask_timeout": {
+        "label":       "Subtask Timeout (seconds)",
+        "description": "Seconds before a hung subtask is auto-escalated to Claude (0 = disabled)",
+        "type":        "int",
+        "min":         0,
+        "max":         600,
+    },
 }
 
 
@@ -108,6 +115,7 @@ def _defaults_from_config() -> dict[str, str]:
         "qwen_max_tokens":          str(config.qwen_max_tokens),
         "skill_match_threshold":    str(getattr(config, "skill_match_threshold", "0.4")),
         "skill_promotion_threshold": str(config.skill_promotion_threshold),
+        "subtask_timeout":           str(config.subtask_timeout),
     }
 
 
@@ -253,6 +261,10 @@ class SettingsStore:
         v6 = _int("skill_promotion_threshold")
         if v6 is not None:
             config.skill_promotion_threshold = v6
+
+        v7 = _int("subtask_timeout")
+        if v7 is not None:
+            config.subtask_timeout = v7
 
         logger.info("Config updated from SettingsStore.")
 

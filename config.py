@@ -69,6 +69,10 @@ class Config:
     escalation_failure_limit: int = field(
         default_factory=lambda: int(os.getenv("ESCALATION_FAILURE_LIMIT", "3"))
     )
+    # Max seconds to wait for a single subtask before treating it as hung
+    subtask_timeout: int = field(
+        default_factory=lambda: int(os.getenv("SUBTASK_TIMEOUT", "120"))
+    )
 
     # ── API server ───────────────────────────────────────────────────────────
     api_host: str = field(
@@ -157,6 +161,10 @@ class Config:
         v6 = _i("skill_promotion_threshold")
         if v6 is not None:
             self.skill_promotion_threshold = v6
+
+        v7 = _i("subtask_timeout")
+        if v7 is not None:
+            self.subtask_timeout = v7
 
 
 # Module-level singleton

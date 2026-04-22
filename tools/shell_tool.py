@@ -16,6 +16,19 @@ from tool_registry import RiskLevel, make_result
 
 logger = logging.getLogger(__name__)
 
+# ── Output truncation limits ───────────────────────────────────────────────────
+MAX_OUTPUT_LINES = 200
+MAX_OUTPUT_CHARS = 8000
+
+# ── Docker-specific timeouts (seconds) ────────────────────────────────────────
+_DOCKER_TIMEOUTS: List[Tuple[str, int]] = [
+    ("docker compose up",    180),
+    ("docker-compose up",    180),
+    ("docker compose build", 300),
+    ("docker-compose build", 300),
+    ("docker build",         300),
+]
+
 # ── Risk detection ─────────────────────────────────────────────────────────────
 
 _HIGH_RISK_PATTERNS: List[str] = [
@@ -47,6 +60,41 @@ def _is_high_risk(command: str) -> bool:
     return bool(_HIGH_RISK_RE.search(command))
 
 
+def _sanitize_command(cmd: str) -> str:
+    """Rewrite known problematic commands to be safe for non-interactive execution.
+
+    - ``docker compose logs`` without ``--tail`` → add ``--tail=50 --no-color``
+      (prevents infinite blocking when a container is still running)
+    """
+    if ("docker compose logs" in cmd or "docker-compose logs" in cmd):
+        if "--tail" not in cmd:
+            cmd = cmd.replace("docker compose logs", "docker compose logs --tail=50 --no-color")
+            cmd = cmd.replace("docker-compose logs", "docker-compose logs --tail=50 --no-color")
+    return cmd
+
+
+def _docker_timeout(cmd: str, default: int) -> int:
+    """Return a command-specific timeout for known long-running Docker operations."""
+    for pattern, t in _DOCKER_TIMEOUTS:
+        if pattern in cmd:
+            return t
+    return default
+
+
+def _truncate_output(text: str) -> str:
+    """Truncate stdout/stderr to avoid overwhelming the model context."""
+    lines = text.split("\n")
+    if len(lines) > MAX_OUTPUT_LINES:
+        text = "\n".join(lines[:MAX_OUTPUT_LINES]) + (
+            f"\n... [截斷，共 {len(lines)} 行，只顯示前 {MAX_OUTPUT_LINES} 行]"
+        )
+    if len(text) > MAX_OUTPUT_CHARS:
+        text = text[:MAX_OUTPUT_CHARS] + (
+            f"\n... [截斷，共 {len(text)} 字元，只顯示前 {MAX_OUTPUT_CHARS} 字元]"
+        )
+    return text
+
+
 # ── Tool implementation ────────────────────────────────────────────────────────
 
 async def execute_shell(
@@ -59,7 +107,20 @@ async def execute_shell(
     Returns {success, result: {stdout, stderr, exit_code}, error, duration_ms}.
     Risk is determined dynamically; the registry receives LOW by default but
     shell_tool re-checks at call time (registry handles the gate for HIGH entries).
+
+    Applies three safety measures automatically:
+    1. ``_sanitize_command`` rewrites dangerous/blocking variants (e.g. docker logs).
+    2. ``_docker_timeout`` overrides the timeout for known long-running Docker ops.
+    3. ``_truncate_output`` caps stdout/stderr to avoid context overflow.
     """
+    command = _sanitize_command(command)
+    effective_timeout = _docker_timeout(command, timeout)
+    if effective_timeout != timeout:
+        logger.info(
+            "execute_shell: overriding timeout %ds → %ds for command: %s",
+            timeout, effective_timeout, command[:80],
+        )
+
     start = time.monotonic()
     try:
         proc = await asyncio.create_subprocess_shell(
@@ -70,7 +131,7 @@ async def execute_shell(
         )
         try:
             stdout_bytes, stderr_bytes = await asyncio.wait_for(
-                proc.communicate(), timeout=float(timeout)
+                proc.communicate(), timeout=float(effective_timeout)
             )
         except asyncio.TimeoutError:
             proc.kill()
@@ -78,18 +139,22 @@ async def execute_shell(
             duration_ms = int((time.monotonic() - start) * 1000)
             return make_result(
                 False,
-                error=f"Command timed out after {timeout}s",
+                error=f"Command timed out after {effective_timeout}s",
                 duration_ms=duration_ms,
             )
 
         exit_code = proc.returncode or 0
         duration_ms = int((time.monotonic() - start) * 1000)
         success = exit_code == 0
+
+        stdout = _truncate_output(stdout_bytes.decode(errors="replace"))
+        stderr = _truncate_output(stderr_bytes.decode(errors="replace"))
+
         return make_result(
             success,
             result={
-                "stdout": stdout_bytes.decode(errors="replace"),
-                "stderr": stderr_bytes.decode(errors="replace"),
+                "stdout": stdout,
+                "stderr": stderr,
                 "exit_code": exit_code,
             },
             error=None if success else f"Exit code {exit_code}",

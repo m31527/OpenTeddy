@@ -27,6 +27,16 @@ Your job: complete the task accurately and completely.
 Be concise but thorough.  If you need to write code, write it.
 """
 
+_SYSTEM_PROMPT_TIMEOUT = """\
+You are Teddy-Prime, an expert AI assistant acting as the escalation layer in \
+OpenTeddy — a self-growing multi-agent system.
+The junior agent (Qwen) got STUCK and timed out while executing the task below — \
+it did not return a result at all.
+Your job: provide the correct, complete solution directly.
+Do NOT ask "can you run this?" — just give the answer, the command, or the code.
+If this involves Docker or shell operations, provide the exact commands to run.
+"""
+
 
 class EscalationAgent:
     """Claude-based escalation handler."""
@@ -41,19 +51,32 @@ class EscalationAgent:
         Updates and returns the subtask.
         Records token usage to usage_records.
         """
+        # Detect whether escalation was triggered by a timeout/hang
+        error_text = subtask.error or ""
+        is_timeout = "超時" in error_text or "timed out" in error_text.lower()
+
         logger.info(
-            "Escalating subtask %s to Claude (confidence was %.2f)",
+            "Escalating subtask %s to Claude (confidence was %.2f, timeout=%s)",
             subtask.id,
             subtask.confidence,
+            is_timeout,
         )
         subtask.status = TaskStatus.ESCALATED
         await self.tracker.update_subtask(subtask)
 
+        system_prompt = _SYSTEM_PROMPT_TIMEOUT if is_timeout else _SYSTEM_PROMPT
+
         prior_attempt = subtask.result or "(none)"
+        timeout_note  = (
+            f"\n\nNote: The junior agent timed out — it never returned a result. "
+            f"Error: {error_text}"
+        ) if is_timeout else ""
+
         user_message = (
             f"Task description: {subtask.description}\n\n"
             f"Context: {str(context)[:3000]}\n\n"
-            f"Previous attempt result: {prior_attempt}\n\n"
+            f"Previous attempt result: {prior_attempt}"
+            f"{timeout_note}\n\n"
             "Please provide the correct, complete answer."
         )
 
@@ -61,7 +84,7 @@ class EscalationAgent:
             response = await self._claude.messages.create(
                 model=config.claude_model,
                 max_tokens=2048,
-                system=_SYSTEM_PROMPT,
+                system=system_prompt,
                 messages=[{"role": "user", "content": user_message}],
             )
             result_text = response.content[0].text.strip()

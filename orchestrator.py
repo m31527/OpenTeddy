@@ -240,13 +240,38 @@ class Orchestrator:
 
     async def _run_subtask(self, st: SubTask, context: Dict[str, Any]) -> SubTask:
         """Execute one subtask with retry; only escalate to Claude after all retries fail.
-        On success, appends a verification result if a matching check exists."""
+
+        Each attempt is wrapped with ``asyncio.wait_for(timeout=subtask_timeout)``
+        so that a hung local model (Qwen tool-call freeze) is detected and
+        immediately escalated to Claude instead of blocking forever.
+
+        On success, appends a verification result if a matching check exists.
+        """
         max_local_retries = getattr(config, 'escalation_failure_limit', 3)
+        subtask_timeout   = getattr(config, 'subtask_timeout', 120)
+        escalation_threshold = getattr(config, 'escalation_confidence_threshold', 0.6)
 
         for attempt in range(max_local_retries):
-            st = await self.executor.execute(st, context)
+            try:
+                st = await asyncio.wait_for(
+                    self.executor.execute(st, context),
+                    timeout=float(subtask_timeout),
+                )
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "Subtask %s timed out after %ds on attempt %d/%d — escalating to Claude.",
+                    st.id, subtask_timeout, attempt + 1, max_local_retries,
+                )
+                st.status = TaskStatus.FAILED
+                st.error  = (
+                    f"地端模型執行超時（>{subtask_timeout}s），自動升級到 Claude"
+                )
+                await self.tracker.update_subtask(st)
+                # 超時直接升級，不再重試
+                st = await self.escalation.resolve(st, context)
+                return st
+
             confidence = getattr(st, 'confidence', 1.0)
-            escalation_threshold = getattr(config, 'escalation_confidence_threshold', 0.6)
 
             if st.status != TaskStatus.FAILED and confidence >= escalation_threshold:
                 # 地端成功 → 嘗試執行驗證指令
