@@ -84,6 +84,16 @@ class Tracker:
             except Exception:  # noqa: BLE001
                 pass  # Column already exists — safe to ignore
 
+        # The session_id index has to live here (not in SCHEMA_SQL) because
+        # on pre-existing DBs the column is only added by the ALTER above.
+        try:
+            await self.db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_tasks_session ON tasks(session_id)"
+            )
+            await self.db.commit()
+        except Exception:  # noqa: BLE001
+            pass
+
     async def close(self) -> None:
         if self._db:
             await self._db.close()

@@ -188,7 +188,9 @@ CREATE TABLE IF NOT EXISTS tasks (
     session_id  TEXT
 );
 
-CREATE INDEX IF NOT EXISTS idx_tasks_session ON tasks(session_id);
+-- NOTE: the session_id index is created in tracker._migrate_usage_columns,
+-- not here, because on a pre-existing DB the column is only added during
+-- migration (ALTER TABLE runs after executescript).
 
 CREATE TABLE IF NOT EXISTS subtasks (
     id             TEXT PRIMARY KEY,
