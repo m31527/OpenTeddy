@@ -795,13 +795,13 @@
       line-height: 1.55;
     }
 
-    /* Tool execution card */
+    /* Tool execution card — collapsible */
     .tool-call-card {
       background: var(--bg-secondary);
       border: 1px solid var(--border);
       border-left: 3px solid var(--purple);
       border-radius: 8px;
-      padding: 9px 13px;
+      padding: 7px 12px;
       font-size: 0.82rem;
       align-self: stretch;
       transition: border-left-color 0.25s;
@@ -814,10 +814,35 @@
       gap: 0.45rem;
       font-weight: 600;
       color: var(--text-secondary);
-      margin-bottom: 0.3rem;
       font-size: 0.82rem;
+      cursor: pointer;
+      user-select: none;
     }
+    .tool-call-chevron {
+      display: inline-block;
+      font-size: 0.7rem;
+      color: var(--text-muted);
+      transition: transform 0.18s ease-out;
+      width: 10px;
+      text-align: center;
+    }
+    .tool-call-card.expanded .tool-call-chevron { transform: rotate(90deg); }
     .tool-call-name { color: var(--purple); font-family: 'Courier New', monospace; }
+    .tool-call-summary {
+      color: var(--text-muted);
+      font-weight: 400;
+      font-size: 0.75rem;
+      font-family: 'Courier New', monospace;
+      margin-left: auto;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 50%;
+    }
+    .tool-call-card.success .tool-call-summary { color: var(--success); }
+    .tool-call-card.failure .tool-call-summary { color: var(--error); }
+    .tool-call-body { display: none; margin-top: 0.4rem; }
+    .tool-call-card.expanded .tool-call-body { display: block; }
     .tool-call-args {
       font-family: 'Courier New', monospace;
       font-size: 0.75rem;
@@ -827,7 +852,7 @@
       background: var(--surface);
       border-radius: 4px;
       padding: 0.3rem 0.55rem;
-      max-height: 75px;
+      max-height: 120px;
       overflow-y: auto;
     }
     .tool-result-row {
@@ -847,8 +872,66 @@
       border-radius: 4px;
       padding: 0.3rem 0.55rem;
       flex: 1;
-      max-height: 95px;
+      max-height: 220px;
       overflow-y: auto;
+    }
+
+    /* Markdown-rendered summary body */
+    .md-body {
+      line-height: 1.55;
+      color: var(--text-primary);
+      word-break: break-word;
+    }
+    .md-body h2,
+    .md-body h3,
+    .md-body h4 {
+      margin: 0.8rem 0 0.35rem;
+      font-weight: 600;
+      color: var(--text-primary);
+      line-height: 1.3;
+    }
+    .md-body h2 { font-size: 1.05rem; }
+    .md-body h3 { font-size: 0.95rem; }
+    .md-body h4 { font-size: 0.88rem; color: var(--text-secondary); }
+    .md-body p { margin: 0 0 0.55rem; }
+    .md-body p:last-child { margin-bottom: 0; }
+    .md-body strong { font-weight: 600; color: var(--text-primary); }
+    .md-body ul.md-list {
+      margin: 0.35rem 0 0.6rem 1.1rem;
+      padding: 0;
+      list-style: disc;
+    }
+    .md-body ul.md-list li {
+      margin: 0.15rem 0;
+      line-height: 1.5;
+    }
+    .md-body .md-inline-code {
+      font-family: 'Courier New', monospace;
+      font-size: 0.85em;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      padding: 1px 5px;
+      color: var(--purple);
+      word-break: break-all;
+    }
+    .md-body pre.md-pre {
+      font-family: 'Courier New', monospace;
+      font-size: 0.78rem;
+      line-height: 1.5;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 0.6rem 0.8rem;
+      margin: 0.5rem 0;
+      overflow-x: auto;
+      white-space: pre;
+      color: var(--text-secondary);
+    }
+    .md-body hr.md-hr {
+      border: none;
+      border-top: 1px solid var(--border);
+      margin: 0.7rem 0;
     }
 
     /* Subtask list inside chat result */
@@ -1359,24 +1442,34 @@
     }
 
     // ── Tool Call / Result (stream → chat) ──────────────────────────────────
+    function toggleToolCard(header) {
+      const card = header.closest('.tool-call-card');
+      if (card) card.classList.toggle('expanded');
+    }
+
     function handleToolCall(data) {
       const key     = `${data.round}-${data.tool}`;
       const argsStr = data.args ? JSON.stringify(data.args, null, 2) : '(no args)';
 
       const card = document.createElement('div');
-      card.className = 'tool-call-card';
+      // Start expanded while running so the user sees progress; auto-collapse on success.
+      card.className = 'tool-call-card expanded';
       card.id = `tc-${key}`;
       card.innerHTML = `
-        <div class="tool-call-header">
+        <div class="tool-call-header" onclick="toggleToolCard(this)">
+          <span class="tool-call-chevron">▸</span>
           <span>🔧</span>
           <span class="tool-call-name">${escHtml(data.tool || '')}</span>
+          <span class="tool-call-summary" id="tcs-${escHtml(key)}">running…</span>
         </div>
-        <div class="tool-call-args">${escHtml(argsStr)}</div>
-        <div class="tool-result-row" id="tcr-${escHtml(key)}">
-          <span class="tool-result-icon loader" style="width:11px;height:11px;border-width:2px;margin-right:4px"></span>
-          <span style="color:var(--text-muted);font-size:0.76rem">Running…</span>
-        </div>
-        <div id="stuck-${escHtml(key)}" style="display:none;font-size:0.72rem;margin-top:4px;padding:3px 6px;border-radius:4px;background:var(--accent-light);color:var(--warning)"></div>`;
+        <div class="tool-call-body">
+          <div class="tool-call-args">${escHtml(argsStr)}</div>
+          <div class="tool-result-row" id="tcr-${escHtml(key)}">
+            <span class="tool-result-icon loader" style="width:11px;height:11px;border-width:2px;margin-right:4px"></span>
+            <span style="color:var(--text-muted);font-size:0.76rem">Running…</span>
+          </div>
+          <div id="stuck-${escHtml(key)}" style="display:none;font-size:0.72rem;margin-top:4px;padding:3px 6px;border-radius:4px;background:var(--accent-light);color:var(--warning)"></div>
+        </div>`;
       appendToChat(card);
       _activeCalls[key] = true;
 
@@ -1406,6 +1499,7 @@
       const key       = `${data.round}-${data.tool}`;
       const card      = document.getElementById(`tc-${key}`);
       const resultRow = document.getElementById(`tcr-${key}`);
+      const summaryEl = document.getElementById(`tcs-${key}`);
       if (!card || !resultRow) return;
 
       // Clear stuck-detection timers and hide the hint
@@ -1423,13 +1517,21 @@
 
       const icon  = success ? '✅' : '❌';
       const label = success ? 'Output:' : 'Error:';
-      const text  = data.error
-        ? escHtml(data.error)
-        : (data.output ? escHtml(data.output) : '(done)');
+      const raw   = data.error || data.output || '';
+      const text  = raw ? escHtml(raw) : '(done)';
 
       resultRow.innerHTML = `
         <span class="tool-result-icon">${icon}</span>
         <div class="tool-result-output"><strong style="font-family:inherit;font-size:0.75rem">${label}</strong> ${text}</div>`;
+
+      // Update the collapsed summary line and auto-collapse on success.
+      if (summaryEl) {
+        const firstLine = (raw || (success ? 'done' : 'error')).split('\n')[0].trim().slice(0, 120);
+        summaryEl.textContent = firstLine || (success ? 'done' : 'error');
+      }
+      if (success) {
+        card.classList.remove('expanded');  // fold away noisy output
+      }  // on failure: keep expanded so the user sees the error
 
       const chat = document.getElementById('chatMessages');
       chat.scrollTop = chat.scrollHeight;
@@ -1502,14 +1604,19 @@
         statusEl.textContent = data.status;
         statusEl.className   = 'status-badge status-' + data.status;
 
-        if (data.summary) document.getElementById('resultSummary').textContent = data.summary;
+        if (data.summary) {
+          document.getElementById('resultSummary').innerHTML =
+            '<div class="md-body">' + renderMarkdown(data.summary) + '</div>';
+        }
 
         const summary = data.summary || data.message || '';
 
         // Remove thinking bubble and add final result at bottom
         if (thinkingEl && thinkingEl.parentNode) thinkingEl.remove();
 
-        let resultHTML = escHtml(summary || 'Task ' + data.status + '.');
+        let resultHTML = '<div class="md-body">' +
+          (summary ? renderMarkdown(summary) : escHtml('Task ' + data.status + '.')) +
+          '</div>';
         if (data.subtasks && data.subtasks.length) {
           resultHTML += '<ul class="chat-subtasks">' +
             data.subtasks.map(st =>
@@ -1924,6 +2031,77 @@
       return String(s).replace(/[&<>"']/g, c =>
         ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c])
       );
+    }
+
+    // Minimal, safe markdown renderer for summaries from the agents.
+    // Block-level: fenced code, headings, horizontal rule, bullet lists, paragraphs.
+    // Inline: bold **text**, `code`. Everything is HTML-escaped.
+    function renderMarkdown(text) {
+      if (!text) return '';
+      let src = String(text).replace(/\r\n/g, '\n');
+
+      // 1) Lift fenced code blocks so their contents survive verbatim.
+      const codeBlocks = [];
+      src = src.replace(/```(?:[\w-]*\n)?([\s\S]*?)```/g, (_, code) => {
+        codeBlocks.push(code.replace(/\n+$/, ''));
+        return `\n\n§§CB${codeBlocks.length - 1}§§\n\n`;
+      });
+
+      // 2) Escape HTML everywhere else.
+      src = escHtml(src);
+
+      const inline = (s) => s
+        .replace(/\*\*([^*\n]+?)\*\*/g, '<strong>$1</strong>')
+        .replace(/`([^`\n]+?)`/g, '<code class="md-inline-code">$1</code>');
+
+      // 3) Walk blocks separated by blank lines and render each by type.
+      const blocks = src.split(/\n{2,}/);
+      const out = [];
+      for (const raw of blocks) {
+        const block = raw.replace(/^\n+|\n+$/g, '');
+        if (!block) continue;
+
+        // Code-block placeholder
+        const cb = block.match(/^§§CB(\d+)§§$/);
+        if (cb) {
+          out.push(`<pre class="md-pre">${escHtml(codeBlocks[+cb[1]])}</pre>`);
+          continue;
+        }
+
+        // Horizontal rule
+        if (/^---+\s*$/.test(block)) { out.push('<hr class="md-hr">'); continue; }
+
+        // Headings (single-line blocks)
+        let m;
+        if ((m = block.match(/^#### (.+)$/))) { out.push(`<h4>${inline(m[1])}</h4>`); continue; }
+        if ((m = block.match(/^### (.+)$/)))  { out.push(`<h4>${inline(m[1])}</h4>`); continue; }
+        if ((m = block.match(/^## (.+)$/)))   { out.push(`<h3>${inline(m[1])}</h3>`); continue; }
+        if ((m = block.match(/^# (.+)$/)))    { out.push(`<h2>${inline(m[1])}</h2>`); continue; }
+
+        // Mixed block: split into <ul> runs vs paragraph runs line-by-line.
+        const lines = block.split('\n');
+        let listBuf = [];
+        let textBuf = [];
+        const flushList = () => {
+          if (!listBuf.length) return;
+          out.push(`<ul class="md-list">${listBuf.map(l => `<li>${inline(l)}</li>`).join('')}</ul>`);
+          listBuf = [];
+        };
+        const flushText = () => {
+          if (!textBuf.length) return;
+          out.push(`<p>${textBuf.map(inline).join('<br>')}</p>`);
+          textBuf = [];
+        };
+        for (const line of lines) {
+          const li = line.match(/^[ \t]*[\*\-][ \t]+(.+)$/);
+          if (li) { flushText(); listBuf.push(li[1]); }
+          else    { flushList(); textBuf.push(line); }
+        }
+        flushList();
+        flushText();
+      }
+
+      return out.join('\n');
     }
     function fmt(n)  { return (n || 0).toLocaleString(); }
     function fmtK(n) {
