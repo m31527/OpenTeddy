@@ -1499,6 +1499,36 @@
       _stuckTimers[key] = { t30, t90 };
     }
 
+    // Mark any tool cards still in "Running..." state as cancelled.
+    // Runs when a task ends — handles the case where the orchestrator
+    // cancelled the executor coroutine (e.g. subtask timeout → Claude
+    // escalation) before the tool_result WebSocket event could fire.
+    function cancelStragglers(reason) {
+      for (const key of Object.keys(_activeCalls)) {
+        const card   = document.getElementById(`tc-${key}`);
+        const row    = document.getElementById(`tcr-${key}`);
+        const sumEl  = document.getElementById(`tcs-${key}`);
+        const stuck  = document.getElementById(`stuck-${key}`);
+        if (_stuckTimers[key]) {
+          clearTimeout(_stuckTimers[key].t30);
+          clearTimeout(_stuckTimers[key].t90);
+          delete _stuckTimers[key];
+        }
+        if (stuck) stuck.style.display = 'none';
+        if (card) {
+          card.classList.add('failure');
+          card.classList.remove('expanded');  // fold away since there's no output
+        }
+        if (row) {
+          row.innerHTML = `
+            <span class="tool-result-icon">⏱️</span>
+            <div class="tool-result-output"><strong style="font-family:inherit;font-size:0.75rem">Status:</strong> ${escHtml(reason)}</div>`;
+        }
+        if (sumEl) sumEl.textContent = 'cancelled';
+      }
+      _activeCalls = {};
+    }
+
     function handleToolResult(data) {
       const idx       = data.call_idx ?? 0;
       const key       = `${data.round}-${idx}-${data.tool}`;
@@ -1615,6 +1645,13 @@
         }
 
         const summary = data.summary || data.message || '';
+
+        // Task reached a terminal state → sweep up any tool cards that
+        // never received a tool_result (usually because the executor
+        // coroutine was cancelled by subtask_timeout → Claude escalation).
+        if (data.status && data.status !== 'running' && data.status !== 'pending') {
+          cancelStragglers('已取消（任務提前結束，可能已升級到 Claude）');
+        }
 
         // Remove thinking bubble and add final result at bottom
         if (thinkingEl && thinkingEl.parentNode) thinkingEl.remove();

@@ -8,6 +8,7 @@ Reports confidence so the Orchestrator can decide on escalation.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -258,9 +259,29 @@ class Executor:
                     "task_id": task_id,
                 })
 
-                tool_result = await self.registry.execute(
-                    tool_name, args, task_id=task_id
-                )
+                try:
+                    tool_result = await self.registry.execute(
+                        tool_name, args, task_id=task_id
+                    )
+                except asyncio.CancelledError:
+                    # Orchestrator cancelled us (usually subtask timeout).
+                    # Fire-and-forget a cancellation event via create_task
+                    # so awaiting it won't re-raise CancelledError, then
+                    # re-raise so asyncio.wait_for completes cleanly.
+                    try:
+                        asyncio.create_task(self._push_event({
+                            "event": "tool_result",
+                            "round": round_idx,
+                            "call_idx": call_idx,
+                            "tool": tool_name,
+                            "success": False,
+                            "error": "Cancelled (subtask timeout / escalated)",
+                            "output": "",
+                            "task_id": task_id,
+                        }))
+                    except Exception:  # noqa: BLE001
+                        pass
+                    raise
 
                 logger.info(
                     "Tool result tool=%s success=%s duration_ms=%s",
