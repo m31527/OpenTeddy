@@ -11,7 +11,7 @@ import os
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator, Optional
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -49,6 +49,36 @@ escalation_agent: EscalationAgent
 orchestrator:     Orchestrator
 memory_manager:   MemoryManager
 
+# ── WebSocket connection manager ──────────────────────────────────────────────
+
+class _WSManager:
+    """Tracks all active WebSocket connections and broadcasts events."""
+
+    def __init__(self) -> None:
+        self._connections: set[WebSocket] = set()
+
+    async def connect(self, ws: WebSocket) -> None:
+        await ws.accept()
+        self._connections.add(ws)
+
+    def disconnect(self, ws: WebSocket) -> None:
+        self._connections.discard(ws)
+
+    async def broadcast(self, data: dict) -> None:
+        """Send a JSON event to every connected client (fire-and-forget per client)."""
+        import json as _json
+        dead: set[WebSocket] = set()
+        msg = _json.dumps(data, ensure_ascii=False)
+        for ws in list(self._connections):
+            try:
+                await ws.send_text(msg)
+            except Exception:  # noqa: BLE001
+                dead.add(ws)
+        self._connections -= dead
+
+
+ws_manager = _WSManager()
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator:  # type: ignore[type-arg]
@@ -74,7 +104,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:  # type: ignore[type-arg]
     await memory_manager.open()
 
     skill_factory    = SkillFactory(tracker)
-    executor         = Executor(tracker, skill_factory, registry=tool_registry)
+    executor         = Executor(
+        tracker,
+        skill_factory,
+        registry=tool_registry,
+        ws_callback=ws_manager.broadcast,   # ← 接線 WebSocket 廣播
+    )
     escalation_agent = EscalationAgent(tracker)
     orchestrator     = Orchestrator(
         tracker, executor, escalation_agent, skill_factory,
@@ -116,6 +151,20 @@ if os.path.isdir(_static_dir):
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
+
+@app.websocket("/ws")
+async def websocket_endpoint(ws: WebSocket) -> None:
+    """WebSocket endpoint — streams tool_call / tool_result events to the UI."""
+    await ws_manager.connect(ws)
+    try:
+        # Keep the connection alive; client sends pings if needed
+        while True:
+            await ws.receive_text()
+    except WebSocketDisconnect:
+        ws_manager.disconnect(ws)
+    except Exception:  # noqa: BLE001
+        ws_manager.disconnect(ws)
+
 
 @app.get("/", include_in_schema=False)
 async def root() -> FileResponse:

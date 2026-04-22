@@ -425,12 +425,80 @@
     .provider-anthropic { background: #1e3a5f; color: #60a5fa; }
     .provider-ollama    { background: #1a3d2e; color: var(--success); }
     .task-desc-cell { max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+
+    /* ── Agent 串流面板 ───────────────────────────────────────────────────── */
+    #streamCard h2 { color: var(--warning); }
+    .stream-empty { color: var(--muted); font-size: 0.85rem; text-align: center; padding: 1rem 0; }
+    .tool-call-card {
+      background: #1a1d2a;
+      border: 1px solid var(--border);
+      border-left: 3px solid #4b5563;
+      border-radius: 8px;
+      padding: 0.8rem 1rem;
+      margin-bottom: 0.55rem;
+      font-size: 0.87rem;
+      transition: border-left-color 0.3s;
+    }
+    .tool-call-card.success { border-left-color: var(--success); }
+    .tool-call-card.failure { border-left-color: var(--error); }
+    .tool-call-header {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      font-weight: 700;
+      color: #94a3b8;
+      margin-bottom: 0.35rem;
+    }
+    .tool-call-name { color: var(--warning); font-family: 'Courier New', monospace; }
+    .tool-call-args {
+      font-family: 'Courier New', monospace;
+      font-size: 0.79rem;
+      color: var(--muted);
+      white-space: pre-wrap;
+      word-break: break-all;
+      background: var(--bg);
+      border-radius: 4px;
+      padding: 0.35rem 0.6rem;
+      max-height: 80px;
+      overflow-y: auto;
+    }
+    .tool-result-row {
+      display: flex;
+      align-items: flex-start;
+      gap: 0.4rem;
+      margin-top: 0.4rem;
+    }
+    .tool-result-icon { font-size: 1rem; flex-shrink: 0; }
+    .tool-result-output {
+      font-family: 'Courier New', monospace;
+      font-size: 0.79rem;
+      color: var(--text);
+      white-space: pre-wrap;
+      word-break: break-all;
+      background: var(--bg);
+      border-radius: 4px;
+      padding: 0.35rem 0.6rem;
+      flex: 1;
+      max-height: 100px;
+      overflow-y: auto;
+    }
+    .ws-badge {
+      display: inline-block;
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: var(--muted);
+      margin-right: 4px;
+      vertical-align: middle;
+      transition: background 0.3s;
+    }
+    .ws-badge.connected { background: var(--success); }
   </style>
 </head>
 <body>
   <header>
     <h1>🐻 OpenTeddy</h1>
     <span class="badge">Multi-Agent System</span>
+    <span id="wsBadge" class="ws-badge" title="WebSocket 連線狀態"></span>
   </header>
 
   <!-- Tab bar -->
@@ -457,6 +525,14 @@
             <input type="number" id="priority" value="5" min="1" max="10" />
           </div>
           <button id="runBtn" onclick="runTask()">Run Task</button>
+        </div>
+      </div>
+
+      <!-- Agent 串流：工具呼叫即時顯示 -->
+      <div class="card" id="streamCard" style="display:none">
+        <h2>⚡ Agent 串流</h2>
+        <div id="streamLog" style="max-height:420px;overflow-y:auto">
+          <div class="stream-empty">等待工具呼叫…</div>
         </div>
       </div>
 
@@ -645,6 +721,106 @@
   <script>
     const API = '';
 
+    // ── WebSocket 串流 ─────────────────────────────────────────────────────
+
+    let _ws = null;
+    let _activeCalls = {};   // round+tool → card element
+    let _currentTaskId = null;
+
+    function initWS() {
+      const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+      const url   = `${proto}://${location.host}/ws`;
+      _ws = new WebSocket(url);
+
+      _ws.onopen = () => {
+        document.getElementById('wsBadge').classList.add('connected');
+      };
+      _ws.onclose = () => {
+        document.getElementById('wsBadge').classList.remove('connected');
+        // Auto-reconnect after 3 s
+        setTimeout(initWS, 3000);
+      };
+      _ws.onerror = () => {
+        _ws.close();
+      };
+      _ws.onmessage = (evt) => {
+        try {
+          const data = JSON.parse(evt.data);
+          // Only show events for the current running task
+          if (_currentTaskId && data.task_id && data.task_id !== _currentTaskId) return;
+          if (data.event === 'tool_call')   handleToolCall(data);
+          if (data.event === 'tool_result') handleToolResult(data);
+        } catch (e) { /* ignore bad frames */ }
+      };
+    }
+
+    function clearStream() {
+      _activeCalls = {};
+      const log = document.getElementById('streamLog');
+      log.innerHTML = '<div class="stream-empty">等待工具呼叫…</div>';
+    }
+
+    function handleToolCall(data) {
+      const log = document.getElementById('streamCard');
+      log.style.display = 'block';
+
+      const streamLog = document.getElementById('streamLog');
+      // Remove placeholder
+      const ph = streamLog.querySelector('.stream-empty');
+      if (ph) ph.remove();
+
+      const key = `${data.round}-${data.tool}`;
+      const card = document.createElement('div');
+      card.className = 'tool-call-card';
+      card.id = `tc-${key}`;
+
+      const argsStr = data.args
+        ? JSON.stringify(data.args, null, 2)
+        : '(無參數)';
+
+      card.innerHTML = `
+        <div class="tool-call-header">
+          <span>🔧 工具呼叫：</span>
+          <span class="tool-call-name">${escHtml(data.tool || '')}</span>
+        </div>
+        <div class="tool-call-args">${escHtml(argsStr)}</div>
+        <div class="tool-result-row" id="tcr-${escHtml(key)}">
+          <span class="tool-result-icon loader" style="width:12px;height:12px;border-width:2px"></span>
+          <span style="color:var(--muted);font-size:0.8rem">執行中…</span>
+        </div>`;
+
+      streamLog.appendChild(card);
+      _activeCalls[key] = key;
+      // Scroll to bottom
+      streamLog.scrollTop = streamLog.scrollHeight;
+    }
+
+    function handleToolResult(data) {
+      const key = `${data.round}-${data.tool}`;
+      const card = document.getElementById(`tc-${key}`);
+      if (!card) return;
+
+      const resultRow = document.getElementById(`tcr-${key}`);
+      if (!resultRow) return;
+
+      const success = data.success !== false;
+      card.classList.add(success ? 'success' : 'failure');
+
+      const icon  = success ? '✅' : '❌';
+      const label = success ? '輸出：' : '錯誤：';
+      const text  = data.error
+        ? escHtml(data.error)
+        : (data.output ? escHtml(data.output) : '（完成）');
+
+      resultRow.innerHTML = `
+        <span class="tool-result-icon">${icon}</span>
+        <div class="tool-result-output"><strong>${label}</strong> ${text}</div>`;
+
+      // Scroll to bottom
+      const streamLog = document.getElementById('streamLog');
+      streamLog.scrollTop = streamLog.scrollHeight;
+    }
+
     // ── Tab navigation ─────────────────────────────────────────────────────
     function switchTab(name) {
       document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
@@ -670,6 +846,10 @@
       btn.disabled = true;
       btn.innerHTML = '<span class="loader"></span>Running…';
 
+      // 清空上一次的串流記錄
+      clearStream();
+      _currentTaskId = null;
+
       try {
         const res = await fetch(`${API}/run`, {
           method: 'POST',
@@ -677,6 +857,7 @@
           body: JSON.stringify({ goal, priority, context: {} }),
         });
         const data = await res.json();
+        _currentTaskId = data.task_id;   // 設定當前任務 ID，讓串流只顯示此任務的事件
         showResult(data);
         await loadTaskStatus(data.task_id);
       } catch (e) {
@@ -684,6 +865,7 @@
       } finally {
         btn.disabled = false;
         btn.textContent = 'Run Task';
+        _currentTaskId = null;
       }
     }
 
@@ -1143,6 +1325,7 @@
     // ── Init ───────────────────────────────────────────────────────────────
 
     window.onload = () => {
+      initWS();              // 建立 WebSocket 串流連線
       loadSkills();
       loadTools();
       pollApprovals();
