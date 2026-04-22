@@ -52,6 +52,14 @@ class Config:
         default_factory=lambda: os.getenv("SKILLS_DIR", "skills")
     )
 
+    # ── Token limits ────────────────────────────────────────────────────────
+    gemma_max_tokens: int = field(
+        default_factory=lambda: int(os.getenv("GEMMA_MAX_TOKENS", "4096"))
+    )
+    qwen_max_tokens: int = field(
+        default_factory=lambda: int(os.getenv("QWEN_MAX_TOKENS", "4096"))
+    )
+
     # ── Escalation thresholds ────────────────────────────────────────────────
     # If Qwen confidence < this value, escalate to Claude
     escalation_confidence_threshold: float = field(

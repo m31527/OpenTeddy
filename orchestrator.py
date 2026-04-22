@@ -48,6 +48,12 @@ _PLAN_SYSTEM_BASE = """\
 - 包含驗證步驟：做完每個重要操作後，加入一個子任務執行指令確認結果
 - 子任務數量控制在 10 個以下
 
+【重要輸出規則】：
+- 最多拆 3-5 個子任務，不要超過 5 個
+- 每個子任務描述不超過 50 字
+- 輸出純 JSON 陣列，不要加任何說明文字、markdown、code block
+- 格式範例：[{"description":"執行 git clone https://github.com/xxx","skill_hint":null,"order":0}]
+
 只輸出 JSON 陣列，不要其他文字。每個元素包含：
   - "description": string  (具體操作描述，寫明要執行的指令或操作)
   - "skill_hint": string or null  (技能名稱，如果有對應技能則填入)
@@ -213,7 +219,7 @@ class Orchestrator:
             "Output the sub-task plan now."
         )
         raw_plan = await self._gemma_complete(prompt, system_prompt)
-        subtasks  = self._parse_plan(raw_plan, req.id)
+        subtasks  = self._parse_plan(raw_plan, req.id, req.goal)
 
         if not subtasks:
             # Fallback: single subtask = the whole goal
@@ -368,7 +374,7 @@ class Orchestrator:
             "prompt":  prompt,
             "system":  system or _PLAN_SYSTEM_BASE,
             "stream":  False,
-            "options": {"temperature": 0.1, "num_predict": 1024},
+            "options": {"temperature": 0.1, "num_predict": config.gemma_max_tokens},
         }
         try:
             resp = await self._http.post(
@@ -400,33 +406,110 @@ class Orchestrator:
             return "[]"
 
     @staticmethod
-    def _parse_plan(raw: str, task_id: str) -> List[SubTask]:
-        match = re.search(r"\[.*\]", raw, re.DOTALL)
-        if not match:
-            return []
-        try:
-            items = json.loads(match.group())
-        except json.JSONDecodeError:
-            return []
+    def _parse_plan(raw: str, task_id: str, goal: str = "") -> List[SubTask]:
+        """Parse Gemma's plan output into SubTask list.
 
-        subtasks = []
-        for item in items[:10]:
-            if not isinstance(item, dict):
-                continue
-            desc = item.get("description", "").strip()
-            if not desc:
-                continue
-            subtasks.append(
+        Tries multiple strategies to handle truncated or malformed JSON output:
+        1. Direct JSON parse of the full response
+        2. Slice from first '[' to last ']' (handles leading/trailing prose)
+        3. Greedy regex match for a JSON array (handles code fences etc.)
+        4. Extract individual JSON objects even from a truncated array
+        5. Fallback: single subtask from the original goal so Qwen always runs
+        """
+
+        def _build_subtasks(items: list) -> List[SubTask]:
+            subtasks: List[SubTask] = []
+            for item in items[:10]:
+                if not isinstance(item, dict):
+                    continue
+                desc = item.get("description", "").strip()
+                if not desc:
+                    continue
+                subtasks.append(
+                    SubTask(
+                        parent_task_id=task_id,
+                        description=desc,
+                        skill_hint=item.get("skill_hint") or None,
+                        agent=AgentRole.EXECUTOR,
+                        order=int(item.get("order", len(subtasks))),
+                    )
+                )
+            subtasks.sort(key=lambda s: s.order)
+            return subtasks
+
+        # ── Strategy 1: direct parse ─────────────────────────────────────────
+        try:
+            items = json.loads(raw.strip())
+            if isinstance(items, list):
+                result = _build_subtasks(items)
+                if result:
+                    return result
+        except json.JSONDecodeError:
+            pass
+
+        # ── Strategy 2: first '[' … last ']' ────────────────────────────────
+        start = raw.find("[")
+        end   = raw.rfind("]")
+        if start != -1 and end != -1 and end > start:
+            try:
+                items = json.loads(raw[start : end + 1])
+                if isinstance(items, list):
+                    result = _build_subtasks(items)
+                    if result:
+                        return result
+            except json.JSONDecodeError:
+                pass
+
+        # ── Strategy 3: greedy regex (handles markdown fences) ───────────────
+        match = re.search(r"\[.*\]", raw, re.DOTALL)
+        if match:
+            try:
+                items = json.loads(match.group())
+                if isinstance(items, list):
+                    result = _build_subtasks(items)
+                    if result:
+                        return result
+            except json.JSONDecodeError:
+                pass
+
+        # ── Strategy 4: extract individual objects from truncated array ───────
+        obj_matches = re.findall(r'\{[^{}]*"description"[^{}]*\}', raw, re.DOTALL)
+        if obj_matches:
+            items = []
+            for i, obj_str in enumerate(obj_matches):
+                try:
+                    obj = json.loads(obj_str)
+                    if "order" not in obj:
+                        obj["order"] = i
+                    items.append(obj)
+                except json.JSONDecodeError:
+                    pass
+            if items:
+                result = _build_subtasks(items)
+                if result:
+                    logger.warning(
+                        "Parsed %d subtasks from truncated JSON via object extraction.",
+                        len(result),
+                    )
+                    return result
+
+        # ── Strategy 5: fallback — at least let Qwen run something ───────────
+        logger.warning(
+            "Could not parse Gemma plan JSON (raw length=%d); "
+            "falling back to single subtask from goal.",
+            len(raw),
+        )
+        if goal:
+            return [
                 SubTask(
                     parent_task_id=task_id,
-                    description=desc,
-                    skill_hint=item.get("skill_hint") or None,
+                    description=f"執行用戶的原始請求: {goal}",
+                    skill_hint=None,
                     agent=AgentRole.EXECUTOR,
-                    order=int(item.get("order", len(subtasks))),
+                    order=0,
                 )
-            )
-        subtasks.sort(key=lambda s: s.order)
-        return subtasks
+            ]
+        return []
 
     @staticmethod
     def _derive_status(subtasks: List[SubTask]) -> TaskStatus:

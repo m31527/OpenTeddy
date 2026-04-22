@@ -130,7 +130,7 @@ class Executor:
                 "messages": messages,
                 "system": _SYSTEM_PROMPT,
                 "stream": False,
-                "options": {"temperature": 0.2, "num_predict": 1024},
+                "options": {"temperature": 0.2, "num_predict": config.qwen_max_tokens},
             }
             if tools:
                 payload["tools"] = tools
@@ -233,7 +233,7 @@ class Executor:
                     "messages": messages,
                     "system": _SYSTEM_PROMPT,
                     "stream": False,
-                    "options": {"temperature": 0.2, "num_predict": 512},
+                    "options": {"temperature": 0.2, "num_predict": config.qwen_max_tokens},
                 },
             )
             resp.raise_for_status()
