@@ -30,6 +30,7 @@ from models import (
     TaskStatus,
 )
 from orchestrator import Orchestrator
+from settings_store import SETTINGS_META, settings_store
 from skill_factory import SkillFactory
 from tool_registry import tool_registry
 from tracker import Tracker
@@ -89,6 +90,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:  # type: ignore[type-arg]
         config.validate()
     except ValueError as exc:
         logger.warning("Config warning: %s", exc)
+
+    # ── Settings store (must init before config.reload_from_store) ─────────────
+    try:
+        await settings_store.init()
+        await config.reload_from_store(settings_store)
+        logger.info("Settings loaded from DB.")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("SettingsStore init warning: %s", exc)
 
     # Auto-register all tools
     try:
@@ -329,6 +338,210 @@ async def get_usage(
 async def get_usage_summary() -> dict:
     """Aggregated usage statistics (totals, cost by model, cost by day)."""
     return await tracker.get_usage_summary()
+
+
+# ── Settings endpoints ────────────────────────────────────────────────────────
+
+@app.get("/settings")
+async def get_settings() -> dict:
+    """Return all settings values, metadata, and current config snapshot."""
+    try:
+        values = await settings_store.get_all()
+        result = {}
+        for key, meta in SETTINGS_META.items():
+            result[key] = {
+                **meta,
+                "value": values.get(key, ""),
+            }
+        return {"success": True, "data": result, "error": None}
+    except Exception as exc:  # noqa: BLE001
+        logger.error("GET /settings error: %s", exc)
+        return {"success": False, "data": None, "error": str(exc)}
+
+
+@app.post("/settings")
+async def update_settings(body: dict) -> dict:
+    """Persist new setting values and hot-reload config — no restart needed."""
+    try:
+        # Validate keys
+        unknown = [k for k in body if k not in SETTINGS_META]
+        if unknown:
+            return {
+                "success": False,
+                "data": None,
+                "error": f"Unknown setting keys: {unknown}",
+            }
+
+        await settings_store.update_many({k: str(v) for k, v in body.items()})
+        await config.reload_from_store(settings_store)
+
+        # Return fresh values
+        values = await settings_store.get_all()
+        result = {}
+        for key, meta in SETTINGS_META.items():
+            result[key] = {**meta, "value": values.get(key, "")}
+
+        logger.info("Settings updated: %s", list(body.keys()))
+        return {"success": True, "data": result, "error": None}
+    except Exception as exc:  # noqa: BLE001
+        logger.error("POST /settings error: %s", exc)
+        return {"success": False, "data": None, "error": str(exc)}
+
+
+# ── Ollama management endpoints ───────────────────────────────────────────────
+
+def _ollama_url() -> str:
+    """Use the currently configured Ollama base URL."""
+    return config.gemma_base_url.rstrip("/")
+
+
+@app.get("/settings/ollama/status")
+async def ollama_status() -> dict:
+    """Ping Ollama to check whether it is reachable."""
+    import httpx as _httpx
+
+    url = _ollama_url()
+    try:
+        async with _httpx.AsyncClient(timeout=5) as client:
+            resp = await client.get(f"{url}/api/tags")
+            online = resp.status_code == 200
+    except Exception:  # noqa: BLE001
+        online = False
+
+    return {"success": True, "data": {"online": online, "url": url}, "error": None}
+
+
+@app.get("/settings/ollama/models")
+async def list_ollama_models() -> dict:
+    """Return the list of locally installed Ollama models with size and family info."""
+    import httpx as _httpx
+
+    url = _ollama_url()
+    try:
+        async with _httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(f"{url}/api/tags")
+            resp.raise_for_status()
+            raw = resp.json()
+
+        models = []
+        for m in raw.get("models", []):
+            details = m.get("details", {})
+            size_bytes = m.get("size", 0)
+            size_gb = round(size_bytes / 1_073_741_824, 2) if size_bytes else None
+            models.append({
+                "name":   m.get("name", ""),
+                "size":   size_gb,
+                "family": details.get("family", ""),
+                "format": details.get("format", ""),
+                "modified_at": m.get("modified_at", ""),
+            })
+
+        return {"success": True, "data": {"models": models}, "error": None}
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Ollama model list error: %s", exc)
+        return {"success": False, "data": {"models": []}, "error": str(exc)}
+
+
+@app.post("/settings/ollama/pull")
+async def pull_ollama_model(body: dict) -> dict:
+    """Trigger an Ollama model pull; streams progress to WebSocket clients."""
+    import asyncio as _asyncio
+    import httpx as _httpx
+    import json as _json
+
+    model_name: str = (body.get("model") or "").strip()
+    if not model_name:
+        return {"success": False, "data": None, "error": "model name required"}
+
+    url = _ollama_url()
+
+    async def _stream_pull() -> None:
+        try:
+            async with _httpx.AsyncClient(timeout=None) as client:
+                async with client.stream(
+                    "POST",
+                    f"{url}/api/pull",
+                    json={"name": model_name, "stream": True},
+                ) as resp:
+                    async for line in resp.aiter_lines():
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            chunk = _json.loads(line)
+                        except _json.JSONDecodeError:
+                            continue
+
+                        completed = chunk.get("completed", 0) or 0
+                        total     = chunk.get("total", 0) or 0
+                        pct       = int(completed / total * 100) if total else 0
+
+                        await ws_manager.broadcast({
+                            "type":      "pull_progress",
+                            "model":     model_name,
+                            "status":    chunk.get("status", ""),
+                            "completed": completed,
+                            "total":     total,
+                            "percent":   pct,
+                        })
+
+                        if chunk.get("status") == "success":
+                            break
+
+            # Signal completion
+            await ws_manager.broadcast({
+                "type":    "pull_progress",
+                "model":   model_name,
+                "status":  "success",
+                "percent": 100,
+            })
+        except Exception as exc:  # noqa: BLE001
+            logger.error("Ollama pull error for '%s': %s", model_name, exc)
+            await ws_manager.broadcast({
+                "type":   "pull_progress",
+                "model":  model_name,
+                "status": "error",
+                "error":  str(exc),
+            })
+
+    # Fire-and-forget; client tracks progress via WebSocket
+    import asyncio as _asyncio
+    _asyncio.create_task(_stream_pull())
+
+    return {
+        "success": True,
+        "data":    {"model": model_name, "message": "Pull started, track via WebSocket"},
+        "error":   None,
+    }
+
+
+@app.delete("/settings/ollama/models/{name:path}")
+async def delete_ollama_model(name: str) -> dict:
+    """Delete a locally installed Ollama model."""
+    import httpx as _httpx
+
+    url = _ollama_url()
+    try:
+        async with _httpx.AsyncClient(timeout=30) as client:
+            resp = await client.request(
+                "DELETE",
+                f"{url}/api/delete",
+                json={"name": name},
+            )
+            if resp.status_code not in (200, 204):
+                return {
+                    "success": False,
+                    "data":    None,
+                    "error":   f"Ollama returned {resp.status_code}: {resp.text}",
+                }
+        return {
+            "success": True,
+            "data":    {"deleted": name},
+            "error":   None,
+        }
+    except Exception as exc:  # noqa: BLE001
+        logger.error("Ollama delete error: %s", exc)
+        return {"success": False, "data": None, "error": str(exc)}
 
 
 # ── CLI entry point ───────────────────────────────────────────────────────────

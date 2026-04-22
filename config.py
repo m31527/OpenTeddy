@@ -87,6 +87,10 @@ class Config:
     max_skill_tokens: int = field(
         default_factory=lambda: int(os.getenv("MAX_SKILL_TOKENS", "2048"))
     )
+    # Minimum similarity score to reuse an existing skill (0.0–1.0)
+    skill_match_threshold: float = field(
+        default_factory=lambda: float(os.getenv("SKILL_MATCH_THRESHOLD", "0.4"))
+    )
 
     def validate(self) -> None:
         """Raise ValueError for obviously broken configuration."""
@@ -95,6 +99,64 @@ class Config:
                 "ANTHROPIC_API_KEY is required for Claude escalation. "
                 "Set it in your .env file."
             )
+
+    async def reload_from_store(self, store: "SettingsStore") -> None:  # type: ignore[name-defined]  # noqa: F821
+        """Pull all settings from the DB store into this config instance.
+
+        This is the hot-reload path — called at startup and after POST /settings.
+        No server restart required.
+        """
+        settings = await store.get_all()
+
+        def _s(k: str) -> str | None:
+            return settings.get(k)
+
+        def _f(k: str) -> float | None:
+            try:
+                return float(settings[k])
+            except (KeyError, ValueError, TypeError):
+                return None
+
+        def _i(k: str) -> int | None:
+            try:
+                return int(settings[k])
+            except (KeyError, ValueError, TypeError):
+                return None
+
+        if _s("orchestrator_model"):
+            self.gemma_model = settings["orchestrator_model"]
+        if _s("executor_model"):
+            self.qwen_model = settings["executor_model"]
+        if _s("claude_model"):
+            self.claude_model = settings["claude_model"]
+        if _s("gemma_base_url"):
+            self.gemma_base_url = settings["gemma_base_url"]
+        if _s("qwen_base_url"):
+            self.qwen_base_url = settings["qwen_base_url"]
+
+        v = _f("escalation_threshold")
+        if v is not None:
+            self.escalation_confidence_threshold = v
+
+        v2 = _i("escalation_failure_limit")
+        if v2 is not None:
+            self.escalation_failure_limit = v2
+
+        v3 = _i("gemma_max_tokens")
+        if v3 is not None:
+            self.gemma_max_tokens = v3
+
+        v4 = _i("qwen_max_tokens")
+        if v4 is not None:
+            self.qwen_max_tokens = v4
+
+        v5 = _f("skill_match_threshold")
+        if v5 is not None:
+            self.skill_match_threshold = v5
+
+        v6 = _i("skill_promotion_threshold")
+        if v6 is not None:
+            self.skill_promotion_threshold = v6
 
 
 # Module-level singleton

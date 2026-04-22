@@ -426,6 +426,142 @@
     .provider-ollama    { background: #1a3d2e; color: var(--success); }
     .task-desc-cell { max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
 
+    /* ── Settings panel ──────────────────────────────────────────────────── */
+    .settings-section {
+      margin-bottom: 1.75rem;
+    }
+    .settings-section h3 {
+      font-size: 0.95rem;
+      font-weight: 700;
+      color: var(--accent);
+      margin-bottom: 1rem;
+      padding-bottom: 0.5rem;
+      border-bottom: 1px solid var(--border);
+    }
+    .ollama-status {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      margin-bottom: 1rem;
+      font-size: 0.88rem;
+    }
+    .ollama-dot {
+      width: 10px; height: 10px;
+      border-radius: 50%;
+      background: var(--muted);
+      flex-shrink: 0;
+      transition: background 0.3s;
+    }
+    .ollama-dot.online  { background: var(--success); }
+    .ollama-dot.offline { background: var(--error); }
+    .ollama-label { color: var(--text); }
+    .ollama-url   { color: var(--muted); font-size: 0.78rem; margin-left: 0.25rem; }
+
+    .model-list {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+      gap: 0.5rem;
+      margin-bottom: 1rem;
+    }
+    .model-chip {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.55rem 0.85rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    .model-chip-name  { font-size: 0.82rem; font-weight: 600; color: var(--text); word-break: break-all; }
+    .model-chip-size  { font-size: 0.72rem; color: var(--muted); white-space: nowrap; }
+    .model-chip-del {
+      background: transparent;
+      border: none;
+      color: var(--muted);
+      font-size: 0.85rem;
+      cursor: pointer;
+      padding: 0.1rem 0.3rem;
+      border-radius: 4px;
+      line-height: 1;
+      flex-shrink: 0;
+    }
+    .model-chip-del:hover { color: var(--error); background: #3d1a1a; }
+
+    .pull-row {
+      display: flex;
+      gap: 0.65rem;
+      align-items: flex-end;
+      flex-wrap: wrap;
+      margin-bottom: 0.75rem;
+    }
+    .pull-row .field { flex: 1; min-width: 180px; }
+    .progress-wrap {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.65rem 0.85rem;
+      display: none;
+    }
+    .progress-wrap.active { display: block; }
+    .progress-label {
+      font-size: 0.8rem;
+      color: var(--muted);
+      margin-bottom: 0.4rem;
+      display: flex;
+      justify-content: space-between;
+    }
+    .progress-bar-outer {
+      background: var(--border);
+      border-radius: 999px;
+      height: 8px;
+      overflow: hidden;
+    }
+    .progress-bar-inner {
+      background: var(--accent);
+      height: 100%;
+      border-radius: 999px;
+      width: 0%;
+      transition: width 0.3s ease;
+    }
+
+    .param-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1rem;
+      margin-bottom: 0.85rem;
+    }
+    @media (max-width: 600px) { .param-row { grid-template-columns: 1fr; } }
+    .param-field label {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.8rem;
+      color: var(--muted);
+      margin-bottom: 0.35rem;
+    }
+    .param-field label .param-value {
+      color: var(--accent);
+      font-weight: 700;
+    }
+    input[type=range] {
+      width: 100%;
+      accent-color: var(--accent);
+      cursor: pointer;
+    }
+    .settings-save-row {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      margin-top: 1.5rem;
+    }
+    .settings-msg {
+      font-size: 0.88rem;
+      color: var(--success);
+      display: none;
+    }
+    .settings-msg.show { display: block; }
+    .settings-msg.err  { color: var(--error); }
+
     /* ── Agent 串流面板 ───────────────────────────────────────────────────── */
     #streamCard h2 { color: var(--warning); }
     .stream-empty { color: var(--muted); font-size: 0.85rem; text-align: center; padding: 1rem 0; }
@@ -508,6 +644,7 @@
     <button class="tab-btn" onclick="switchTab('tools')">🛠 Tools</button>
     <button class="tab-btn" onclick="switchTab('memory')">🧠 Memory</button>
     <button class="tab-btn" onclick="switchTab('usage')">📊 Usage</button>
+    <button class="tab-btn" onclick="switchTab('settings')" style="margin-left:auto">⚙ Settings</button>
   </div>
 
   <!-- ── TASKS TAB ─────────────────────────────────────────────────────────── -->
@@ -699,6 +836,160 @@
     </div>
   </div>
 
+  <!-- ── SETTINGS TAB ──────────────────────────────────────────────────────── -->
+  <div id="tab-settings" class="tab-panel">
+    <div class="container">
+      <div class="card">
+
+        <!-- ── 1. 模型設定 ──────────────────────────────────────────────── -->
+        <div class="settings-section">
+          <h3>🤖 模型設定</h3>
+
+          <!-- Ollama 狀態 -->
+          <div class="ollama-status">
+            <span id="ollamaDot" class="ollama-dot" title="Ollama 連線狀態"></span>
+            <span id="ollamaLabel" class="ollama-label">檢查中…</span>
+            <span id="ollamaUrl" class="ollama-url"></span>
+          </div>
+
+          <!-- 已安裝模型列表 -->
+          <div style="font-size:0.8rem;color:var(--muted);margin-bottom:0.5rem">已安裝模型</div>
+          <div class="model-list" id="modelList">
+            <div style="color:var(--muted);font-size:0.82rem">載入中…</div>
+          </div>
+
+          <!-- 模型下拉選擇 -->
+          <div class="row" style="margin-bottom:0.85rem">
+            <div class="field">
+              <label>Orchestrator 模型（Gemma）</label>
+              <select id="sel_orchestrator_model">
+                <option value="">⚠️ Ollama 離線</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>Executor 模型（Qwen）</label>
+              <select id="sel_executor_model">
+                <option value="">⚠️ Ollama 離線</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="row" style="margin-bottom:0.85rem">
+            <div class="field">
+              <label>Claude 模型（Escalation）</label>
+              <input type="text" id="inp_claude_model" placeholder="claude-opus-4-6" />
+            </div>
+          </div>
+
+          <div class="row" style="margin-bottom:1.25rem">
+            <div class="field">
+              <label>Orchestrator Ollama URL</label>
+              <input type="text" id="inp_gemma_base_url" placeholder="http://localhost:11434" />
+            </div>
+            <div class="field">
+              <label>Executor Ollama URL</label>
+              <input type="text" id="inp_qwen_base_url" placeholder="http://localhost:11434" />
+            </div>
+          </div>
+
+          <!-- Pull 新模型 -->
+          <div style="font-size:0.8rem;color:var(--muted);margin-bottom:0.5rem">Pull 新模型</div>
+          <div class="pull-row">
+            <div class="field">
+              <label>模型名稱（如 llama3:8b）</label>
+              <input type="text" id="pullModelName" placeholder="gemma3:12b" />
+            </div>
+            <button onclick="pullModel()" id="pullBtn">⬇ Pull</button>
+          </div>
+          <div class="progress-wrap" id="pullProgress">
+            <div class="progress-label">
+              <span id="pullStatusText">準備中…</span>
+              <span id="pullPct">0%</span>
+            </div>
+            <div class="progress-bar-outer">
+              <div class="progress-bar-inner" id="pullBar"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ── 2. 參數設定 ─────────────────────────────────────────────── -->
+        <div class="settings-section">
+          <h3>🔧 參數設定</h3>
+
+          <div class="param-row">
+            <div class="param-field">
+              <label>
+                Escalation Confidence Threshold
+                <span class="param-value" id="val_escalation_threshold">0.60</span>
+              </label>
+              <input type="range" id="rng_escalation_threshold"
+                     min="0" max="1" step="0.05" value="0.6"
+                     oninput="document.getElementById('val_escalation_threshold').textContent=parseFloat(this.value).toFixed(2)" />
+            </div>
+            <div class="param-field">
+              <label>
+                Escalation Failure Limit
+                <span class="param-value" id="val_escalation_failure_limit">3</span>
+              </label>
+              <input type="range" id="rng_escalation_failure_limit"
+                     min="1" max="10" step="1" value="3"
+                     oninput="document.getElementById('val_escalation_failure_limit').textContent=this.value" />
+            </div>
+          </div>
+
+          <div class="param-row">
+            <div class="param-field">
+              <label>
+                Gemma Max Tokens
+                <span class="param-value" id="val_gemma_max_tokens">4096</span>
+              </label>
+              <input type="range" id="rng_gemma_max_tokens"
+                     min="512" max="8192" step="256" value="4096"
+                     oninput="document.getElementById('val_gemma_max_tokens').textContent=this.value" />
+            </div>
+            <div class="param-field">
+              <label>
+                Qwen Max Tokens
+                <span class="param-value" id="val_qwen_max_tokens">4096</span>
+              </label>
+              <input type="range" id="rng_qwen_max_tokens"
+                     min="512" max="8192" step="256" value="4096"
+                     oninput="document.getElementById('val_qwen_max_tokens').textContent=this.value" />
+            </div>
+          </div>
+
+          <div class="param-row">
+            <div class="param-field">
+              <label>
+                Skill Match Threshold
+                <span class="param-value" id="val_skill_match_threshold">0.40</span>
+              </label>
+              <input type="range" id="rng_skill_match_threshold"
+                     min="0" max="1" step="0.05" value="0.4"
+                     oninput="document.getElementById('val_skill_match_threshold').textContent=parseFloat(this.value).toFixed(2)" />
+            </div>
+            <div class="param-field">
+              <label>
+                Skill Promotion Threshold
+                <span class="param-value" id="val_skill_promotion_threshold">5</span>
+              </label>
+              <input type="range" id="rng_skill_promotion_threshold"
+                     min="1" max="50" step="1" value="5"
+                     oninput="document.getElementById('val_skill_promotion_threshold').textContent=this.value" />
+            </div>
+          </div>
+        </div>
+
+        <!-- ── 3. 儲存 ────────────────────────────────────────────────── -->
+        <div class="settings-save-row">
+          <button onclick="saveSettings()" id="saveSettingsBtn">💾 儲存設定</button>
+          <span class="settings-msg" id="settingsMsg"></span>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
   <!-- Approval FAB -->
   <button id="approvalFab" onclick="openApprovalModal()">
     ⚠️ Approvals needed
@@ -748,8 +1039,9 @@
           const data = JSON.parse(evt.data);
           // Only show events for the current running task
           if (_currentTaskId && data.task_id && data.task_id !== _currentTaskId) return;
-          if (data.event === 'tool_call')   handleToolCall(data);
-          if (data.event === 'tool_result') handleToolResult(data);
+          if (data.event === 'tool_call')    handleToolCall(data);
+          if (data.event === 'tool_result')  handleToolResult(data);
+          if (data.type  === 'pull_progress') handlePullProgress(data);
         } catch (e) { /* ignore bad frames */ }
       };
     }
@@ -829,10 +1121,11 @@
       document.getElementById('tab-' + name).classList.add('active');
 
       // Lazy-load data on first switch
-      if (name === 'skills')  loadSkills();
-      if (name === 'tools')   loadTools();
-      if (name === 'memory')  loadMemory();
-      if (name === 'usage')   { loadUsageSummary(); loadUsageRecords(1); }
+      if (name === 'skills')   loadSkills();
+      if (name === 'tools')    loadTools();
+      if (name === 'memory')   loadMemory();
+      if (name === 'usage')    { loadUsageSummary(); loadUsageRecords(1); }
+      if (name === 'settings') loadSettings();
     }
 
     // ── Task execution ─────────────────────────────────────────────────────
@@ -1322,6 +1615,275 @@
       return String(n);
     }
 
+    // ── Settings ───────────────────────────────────────────────────────────
+
+    let _ollamaModels   = [];   // cache from Ollama
+    let _settingsLoaded = false;
+
+    // Load settings values from API and populate the UI
+    async function loadSettings() {
+      try {
+        const res  = await fetch(`${API}/settings`);
+        const data = await res.json();
+        if (!data.success) { toast('Settings load error: ' + data.error, true); return; }
+
+        const s = data.data;
+
+        // Text inputs
+        _setInput('inp_claude_model',   s.claude_model?.value   ?? '');
+        _setInput('inp_gemma_base_url', s.gemma_base_url?.value ?? '');
+        _setInput('inp_qwen_base_url',  s.qwen_base_url?.value  ?? '');
+
+        // Sliders
+        _setSlider('escalation_threshold',     s.escalation_threshold?.value     ?? 0.6);
+        _setSlider('escalation_failure_limit', s.escalation_failure_limit?.value ?? 3);
+        _setSlider('gemma_max_tokens',         s.gemma_max_tokens?.value         ?? 4096);
+        _setSlider('qwen_max_tokens',          s.qwen_max_tokens?.value          ?? 4096);
+        _setSlider('skill_match_threshold',    s.skill_match_threshold?.value    ?? 0.4);
+        _setSlider('skill_promotion_threshold',s.skill_promotion_threshold?.value?? 5);
+
+        _settingsLoaded = true;
+
+        // Refresh Ollama status + models (will also populate dropdowns)
+        await refreshOllamaStatus();
+        await loadOllamaModels(
+          s.orchestrator_model?.value ?? '',
+          s.executor_model?.value     ?? ''
+        );
+      } catch (e) {
+        toast('Cannot load settings: ' + e.message, true);
+      }
+    }
+
+    function _setInput(id, val) {
+      const el = document.getElementById(id);
+      if (el) el.value = val;
+    }
+
+    function _setSlider(key, val) {
+      const rng = document.getElementById('rng_' + key);
+      const lbl = document.getElementById('val_' + key);
+      if (!rng || !lbl) return;
+      rng.value = val;
+      // Format label: floats get 2 decimal places
+      lbl.textContent = String(val).includes('.') ? parseFloat(val).toFixed(2) : String(val);
+    }
+
+    // ── Ollama ────────────────────────────────────────────────────────────────
+
+    async function refreshOllamaStatus() {
+      try {
+        const res  = await fetch(`${API}/settings/ollama/status`);
+        const data = await res.json();
+        const dot  = document.getElementById('ollamaDot');
+        const lbl  = document.getElementById('ollamaLabel');
+        const url  = document.getElementById('ollamaUrl');
+
+        if (data.data?.online) {
+          dot.className  = 'ollama-dot online';
+          lbl.textContent = '● Online';
+          lbl.style.color = 'var(--success)';
+        } else {
+          dot.className   = 'ollama-dot offline';
+          lbl.textContent = '● Offline';
+          lbl.style.color = 'var(--error)';
+        }
+        if (url) url.textContent = data.data?.url ?? '';
+      } catch (e) {
+        const dot = document.getElementById('ollamaDot');
+        if (dot) { dot.className = 'ollama-dot offline'; }
+      }
+    }
+
+    async function loadOllamaModels(selectedOrch = '', selectedExec = '') {
+      const list    = document.getElementById('modelList');
+      const selOrch = document.getElementById('sel_orchestrator_model');
+      const selExec = document.getElementById('sel_executor_model');
+
+      try {
+        const res  = await fetch(`${API}/settings/ollama/models`);
+        const data = await res.json();
+        _ollamaModels = (data.data?.models ?? []);
+
+        if (!data.success || !_ollamaModels.length) {
+          list.innerHTML = '<div style="color:var(--muted);font-size:0.82rem">No models installed or Ollama offline.</div>';
+          _setOfflineDropdowns(selOrch, selExec);
+          return;
+        }
+
+        // Render chips
+        list.innerHTML = _ollamaModels.map(m => `
+          <div class="model-chip">
+            <div>
+              <div class="model-chip-name">${escHtml(m.name)}</div>
+              <div class="model-chip-size">${m.size != null ? m.size + ' GB' : ''} ${m.family ? '· ' + escHtml(m.family) : ''}</div>
+            </div>
+            <button class="model-chip-del" title="Delete" onclick="deleteModel('${escHtml(m.name)}')">✕</button>
+          </div>
+        `).join('');
+
+        // Populate dropdowns
+        const opts = _ollamaModels.map(m =>
+          `<option value="${escHtml(m.name)}">${escHtml(m.name)}${m.size != null ? ' (' + m.size + ' GB)' : ''}</option>`
+        ).join('');
+        selOrch.innerHTML = opts;
+        selExec.innerHTML = opts;
+        selOrch.disabled  = false;
+        selExec.disabled  = false;
+
+        // Restore saved selections
+        if (selectedOrch && [...selOrch.options].some(o => o.value === selectedOrch))
+          selOrch.value = selectedOrch;
+        if (selectedExec && [...selExec.options].some(o => o.value === selectedExec))
+          selExec.value = selectedExec;
+
+      } catch (e) {
+        list.innerHTML = `<div style="color:var(--error);font-size:0.82rem">Failed to load models: ${escHtml(e.message)}</div>`;
+        _setOfflineDropdowns(selOrch, selExec);
+      }
+    }
+
+    function _setOfflineDropdowns(...sels) {
+      sels.forEach(s => {
+        if (!s) return;
+        s.innerHTML  = '<option value="">⚠️ Ollama 離線</option>';
+        s.disabled   = true;
+      });
+    }
+
+    async function deleteModel(name) {
+      if (!confirm(`刪除模型 "${name}"？`)) return;
+      try {
+        const res  = await fetch(`${API}/settings/ollama/models/${encodeURIComponent(name)}`, { method: 'DELETE' });
+        const data = await res.json();
+        if (data.success) {
+          toast(`已刪除 ${name}`);
+          await loadOllamaModels();
+        } else {
+          toast('刪除失敗：' + data.error, true);
+        }
+      } catch (e) {
+        toast('Error: ' + e.message, true);
+      }
+    }
+
+    async function pullModel() {
+      const name = document.getElementById('pullModelName').value.trim();
+      if (!name) { toast('請輸入模型名稱', true); return; }
+
+      const btn      = document.getElementById('pullBtn');
+      const wrap     = document.getElementById('pullProgress');
+      const bar      = document.getElementById('pullBar');
+      const statusTx = document.getElementById('pullStatusText');
+      const pctTx    = document.getElementById('pullPct');
+
+      btn.disabled = true;
+      wrap.classList.add('active');
+      bar.style.width     = '0%';
+      statusTx.textContent = '開始 pull…';
+      pctTx.textContent    = '0%';
+
+      try {
+        const res  = await fetch(`${API}/settings/ollama/pull`, {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({ model: name }),
+        });
+        const data = await res.json();
+        if (!data.success) {
+          toast('Pull 失敗：' + data.error, true);
+          btn.disabled = false;
+          return;
+        }
+        // Progress comes via WebSocket; btn re-enabled on completion
+      } catch (e) {
+        toast('Error: ' + e.message, true);
+        btn.disabled = false;
+      }
+    }
+
+    // Handle pull_progress WS events (called from _ws.onmessage)
+    function handlePullProgress(data) {
+      if (document.getElementById('tab-settings').classList.contains('active') === false) return;
+
+      const bar      = document.getElementById('pullBar');
+      const statusTx = document.getElementById('pullStatusText');
+      const pctTx    = document.getElementById('pullPct');
+      const btn      = document.getElementById('pullBtn');
+      const wrap     = document.getElementById('pullProgress');
+
+      if (!bar) return;
+
+      const pct    = data.percent ?? 0;
+      const status = data.status  ?? '';
+
+      bar.style.width      = pct + '%';
+      pctTx.textContent    = pct + '%';
+      statusTx.textContent = status;
+
+      if (status === 'success') {
+        statusTx.textContent = '✅ Pull 完成！';
+        btn.disabled = false;
+        toast(`✅ ${data.model} pull 成功！`);
+        setTimeout(async () => {
+          wrap.classList.remove('active');
+          await loadOllamaModels();
+        }, 1500);
+      } else if (status === 'error') {
+        statusTx.textContent = '❌ Pull 失敗：' + (data.error ?? '');
+        btn.disabled = false;
+        toast('Pull 失敗', true);
+      }
+    }
+
+    // ── Save settings ─────────────────────────────────────────────────────────
+
+    async function saveSettings() {
+      const btn = document.getElementById('saveSettingsBtn');
+      const msg = document.getElementById('settingsMsg');
+      btn.disabled = true;
+      msg.className = 'settings-msg';
+
+      const payload = {
+        orchestrator_model:       document.getElementById('sel_orchestrator_model').value,
+        executor_model:           document.getElementById('sel_executor_model').value,
+        claude_model:             document.getElementById('inp_claude_model').value.trim(),
+        gemma_base_url:           document.getElementById('inp_gemma_base_url').value.trim(),
+        qwen_base_url:            document.getElementById('inp_qwen_base_url').value.trim(),
+        escalation_threshold:     document.getElementById('rng_escalation_threshold').value,
+        escalation_failure_limit: document.getElementById('rng_escalation_failure_limit').value,
+        gemma_max_tokens:         document.getElementById('rng_gemma_max_tokens').value,
+        qwen_max_tokens:          document.getElementById('rng_qwen_max_tokens').value,
+        skill_match_threshold:    document.getElementById('rng_skill_match_threshold').value,
+        skill_promotion_threshold:document.getElementById('rng_skill_promotion_threshold').value,
+      };
+
+      // Remove empty values (e.g. offline model selects)
+      Object.keys(payload).forEach(k => { if (payload[k] === '') delete payload[k]; });
+
+      try {
+        const res  = await fetch(`${API}/settings`, {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify(payload),
+        });
+        const data = await res.json();
+        if (data.success) {
+          msg.textContent = '✅ 設定已套用，下次任務立即生效';
+          msg.className   = 'settings-msg show';
+        } else {
+          msg.textContent = '❌ ' + (data.error ?? '儲存失敗');
+          msg.className   = 'settings-msg show err';
+        }
+      } catch (e) {
+        msg.textContent = '❌ ' + e.message;
+        msg.className   = 'settings-msg show err';
+      } finally {
+        btn.disabled = false;
+        setTimeout(() => { msg.className = 'settings-msg'; }, 4000);
+      }
+    }
+
     // ── Init ───────────────────────────────────────────────────────────────
 
     window.onload = () => {
@@ -1330,6 +1892,12 @@
       loadTools();
       pollApprovals();
       setInterval(pollApprovals, 3000);
+      // Ping Ollama every 10 s (only matters when Settings tab is open)
+      setInterval(() => {
+        if (document.getElementById('tab-settings').classList.contains('active')) {
+          refreshOllamaStatus();
+        }
+      }, 10000);
     };
   </script>
 </body>
