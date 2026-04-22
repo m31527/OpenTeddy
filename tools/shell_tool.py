@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import re
 import time
 from typing import Any, Dict, List, Optional, Tuple
@@ -73,6 +74,60 @@ def _sanitize_command(cmd: str) -> str:
     return cmd
 
 
+# ── Docker Compose context check ──────────────────────────────────────────────
+
+_COMPOSE_FILENAMES = (
+    "docker-compose.yml",
+    "docker-compose.yaml",
+    "compose.yml",
+    "compose.yaml",
+)
+_COMPOSE_FILE_FLAG_RE = re.compile(r"(?:^|\s)(?:-f|--file)(?:\s+|=)\S+")
+_COMPOSE_CD_RE = re.compile(r"\bcd\s+([^\s&|;]+)")
+
+
+def _docker_compose_context_note(
+    command: str, working_dir: Optional[str],
+) -> Optional[str]:
+    """If a ``docker compose`` command is run without ``-f``, resolve which
+    compose file will actually be used and return a short note. Helps surface
+    the classic "wrong directory" bug where the CLI silently falls back to the
+    shell's CWD compose file.
+
+    Returns ``None`` for non-compose commands or when ``-f`` was given.
+    """
+    if "docker compose" not in command and "docker-compose" not in command:
+        return None
+    if _COMPOSE_FILE_FLAG_RE.search(command):
+        return None
+
+    # Prefer a cd target in the command itself, then working_dir, then CWD.
+    cd_match = _COMPOSE_CD_RE.search(command)
+    if cd_match:
+        resolved_dir = os.path.expanduser(cd_match.group(1))
+        source = "cd in command"
+    elif working_dir:
+        resolved_dir = working_dir
+        source = "working_dir arg"
+    else:
+        resolved_dir = os.getcwd()
+        source = "process cwd"
+
+    for name in _COMPOSE_FILENAMES:
+        path = os.path.join(resolved_dir, name)
+        if os.path.isfile(path):
+            return (
+                f"[shell_tool] docker compose will use: {path} "
+                f"(resolved via {source}). If this is the wrong file, pass "
+                f"-f <path> or cd to the correct directory first."
+            )
+
+    return (
+        f"[shell_tool] WARNING: no compose file found in {resolved_dir} "
+        f"({source}). docker compose will fail or fall back to a parent dir."
+    )
+
+
 def _docker_timeout(cmd: str, default: int) -> int:
     """Return a command-specific timeout for known long-running Docker operations."""
     for pattern, t in _DOCKER_TIMEOUTS:
@@ -121,6 +176,10 @@ async def execute_shell(
             timeout, effective_timeout, command[:80],
         )
 
+    compose_note = _docker_compose_context_note(command, working_dir)
+    if compose_note:
+        logger.info("%s", compose_note)
+
     start = time.monotonic()
     try:
         proc = await asyncio.create_subprocess_shell(
@@ -149,6 +208,9 @@ async def execute_shell(
 
         stdout = _truncate_output(stdout_bytes.decode(errors="replace"))
         stderr = _truncate_output(stderr_bytes.decode(errors="replace"))
+
+        if compose_note:
+            stderr = f"{compose_note}\n{stderr}" if stderr else compose_note
 
         return make_result(
             success,
