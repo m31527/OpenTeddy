@@ -32,6 +32,12 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Match failure markers in the STATUS column of `docker ps` output.
+_DOCKER_UNHEALTHY_RE = re.compile(
+    r"\b(unhealthy|Restarting|Exited \(\d+\)|Dead|Created)\b",
+    re.IGNORECASE,
+)
+
 _PLAN_SYSTEM_BASE = """\
 你是 Teddy-Orch，OpenTeddy 多智能體系統的任務規劃 AI。
 把用戶的目標拆解成具體的、可執行的子任務。
@@ -277,7 +283,21 @@ class Orchestrator:
                 # 地端成功 → 嘗試執行驗證指令
                 verification = await self._verify_subtask(st)
                 if verification:
-                    st.result = (st.result or "") + f"\n\n[驗證結果]\n{verification}"
+                    text, is_healthy = verification
+                    st.result = (st.result or "") + f"\n\n[驗證結果]\n{text}"
+                    if not is_healthy:
+                        logger.info(
+                            "Subtask %s verification detected unhealthy state "
+                            "— escalating to Claude.",
+                            st.id,
+                        )
+                        st.status = TaskStatus.FAILED
+                        st.error = (
+                            "驗證發現容器不健康 / 未正常啟動，自動升級 Claude 診斷"
+                        )
+                        await self.tracker.update_subtask(st)
+                        st = await self.escalation.resolve(st, context)
+                        return st
                     await self.tracker.update_subtask(st)
                 return st
 
@@ -294,8 +314,14 @@ class Orchestrator:
         st = await self.escalation.resolve(st, context)
         return st
 
-    async def _verify_subtask(self, st: SubTask) -> Optional[str]:
-        """根據子任務類型，執行對應的驗證指令，回傳驗證輸出（或 None）。"""
+    async def _verify_subtask(self, st: SubTask) -> Optional[Tuple[str, bool]]:
+        """根據子任務類型執行驗證指令。
+
+        回傳 ``(驗證輸出, is_healthy)``；若沒有匹配的驗證規則回傳 None。
+        對於 ``docker ps``，會額外解析 STATUS 欄並在偵測到 unhealthy /
+        Restarting / Exited 時自動抓取 ``docker logs`` 與 ``docker inspect``，
+        並把 is_healthy 設為 False 以觸發升級。
+        """
         desc = st.description.lower()
 
         # 對應關鍵字 → 驗證指令
@@ -312,23 +338,71 @@ class Orchestrator:
         for keywords, cmd in checks:
             if any(kw in desc for kw in keywords):
                 logger.info("Running verification '%s' for subtask %s", cmd, st.id)
-                try:
-                    proc = await asyncio.create_subprocess_shell(
-                        cmd,
-                        stdout=asyncio.subprocess.PIPE,
-                        stderr=asyncio.subprocess.PIPE,
-                    )
-                    stdout_b, stderr_b = await asyncio.wait_for(
-                        proc.communicate(), timeout=10.0
-                    )
-                    out = stdout_b.decode(errors="replace").strip()
-                    err = stderr_b.decode(errors="replace").strip()
-                    return (out or err or "(no output)")[:800]
-                except Exception as exc:  # noqa: BLE001
-                    logger.debug("Verification command failed (non-fatal): %s", exc)
+                output = await self._run_cmd_capture(cmd, timeout=10.0, max_chars=800)
+                if output is None:
                     return None
+                if "docker ps" in cmd:
+                    return await self._inspect_docker_health(output)
+                return (output, True)
 
         return None  # 沒有匹配的驗證規則
+
+    async def _inspect_docker_health(self, ps_output: str) -> Tuple[str, bool]:
+        """Scan ``docker ps`` output. If any row shows unhealthy/Restarting/
+        Exited, pull logs + inspect and return is_healthy=False."""
+        bad_names: List[str] = []
+        for line in ps_output.splitlines()[1:]:  # skip header
+            if not line.strip():
+                continue
+            if _DOCKER_UNHEALTHY_RE.search(line):
+                parts = line.split()
+                if parts:
+                    bad_names.append(parts[-1])  # container name is last column
+
+        if not bad_names:
+            return (ps_output, True)
+
+        # Collect logs + health state for up to 3 unhealthy containers
+        sections: List[str] = [ps_output, ""]
+        for name in bad_names[:3]:
+            sections.append(f"--- {name} logs (tail=100) ---")
+            logs = await self._run_cmd_capture(
+                f"docker logs --tail=100 --timestamps {name} 2>&1",
+                timeout=15.0,
+                max_chars=1500,
+            )
+            sections.append(logs or "(no log output)")
+            sections.append(f"\n--- {name} health state ---")
+            health = await self._run_cmd_capture(
+                f"docker inspect --format '{{{{json .State.Health}}}}' {name}",
+                timeout=5.0,
+                max_chars=800,
+            )
+            sections.append(health or "(no health state)")
+            sections.append("")
+
+        return ("\n".join(sections), False)
+
+    @staticmethod
+    async def _run_cmd_capture(
+        cmd: str, timeout: float = 10.0, max_chars: int = 800,
+    ) -> Optional[str]:
+        """Run a shell command and return its stdout/stderr, or None on failure."""
+        try:
+            proc = await asyncio.create_subprocess_shell(
+                cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout_b, stderr_b = await asyncio.wait_for(
+                proc.communicate(), timeout=timeout,
+            )
+            out = stdout_b.decode(errors="replace").strip()
+            err = stderr_b.decode(errors="replace").strip()
+            return (out or err or "(no output)")[:max_chars]
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Command '%s' failed (non-fatal): %s", cmd[:80], exc)
+            return None
 
     async def _gemma_summarize(self, goal: str, tool_log: str, task_id: str = "") -> str:
         """用 Gemma 讀取工具執行記錄，產出結構化的繁體中文完成報告。"""

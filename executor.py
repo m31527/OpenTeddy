@@ -26,10 +26,28 @@ logger = logging.getLogger(__name__)
 
 _MAX_TOOL_ROUNDS = 10   # prevent infinite tool-call loops
 
+# Objective failure markers in tool results — override self-reported confidence
+# when present, so Claude takes over instead of a false "completed".
+_FAILURE_SIGNAL_RE = re.compile(
+    r"\b(unhealthy|Restarting|Exited \(\d+\)|Dead|CrashLoopBackOff|"
+    r"Error response from daemon|ERROR \d{4}(?:\s*\(\d+\))?)\b",
+    re.IGNORECASE,
+)
+_FAILURE_CLAMP_CONFIDENCE = 0.3
+
 _SYSTEM_PROMPT = """\
 You are Teddy-Exec, a precise task executor powered by Qwen.
 You receive a sub-task description and any relevant context.
 You have access to tools — use them when needed.
+
+CRITICAL RULE:
+If a tool result contains "unhealthy", "Exited", "Restarting", "Error response",
+"ERROR <code>", or similar failure signals, you MUST:
+  1. Investigate the root cause with follow-up tool calls
+     (e.g. `docker logs --tail=100 <name>`, `docker inspect <name>`).
+  2. NOT report completion while the failure is unresolved — set confidence < 0.5
+     and describe the failure in "result".
+
 After completing the task (or if no tools are needed), output a JSON object:
   {
     "result": "<string: your answer / action result>",
@@ -126,6 +144,7 @@ class Executor:
         ]
 
         tools = self.registry.get_schemas()
+        objective_failure_seen = False
 
         for round_idx in range(_MAX_TOOL_ROUNDS):
             payload: Dict[str, Any] = {
@@ -171,7 +190,7 @@ class Executor:
             # ── No tool calls → final answer ──────────────────────────────────
             if not tool_calls:
                 raw_text = message.get("content", "")
-                return self._parse_qwen_response(raw_text)
+                return self._finalize_response(raw_text, objective_failure_seen)
 
             # ── Process tool calls ────────────────────────────────────────────
             # Add assistant's message (with tool_calls) to history
@@ -215,6 +234,24 @@ class Executor:
                     tool_result.get("success"),
                     tool_result.get("duration_ms"),
                 )
+
+                # ── Objective failure detection ───────────────────────────
+                # Scan tool output for hard failure signals (unhealthy, Exited,
+                # MySQL/Docker errors). If any match, we'll clamp confidence
+                # at the end so Claude escalation kicks in even if Qwen
+                # self-reports high confidence.
+                if not objective_failure_seen:
+                    tool_result_text = json.dumps(
+                        tool_result, ensure_ascii=False
+                    )
+                    if _FAILURE_SIGNAL_RE.search(tool_result_text):
+                        objective_failure_seen = True
+                        logger.info(
+                            "Objective failure signal detected in tool "
+                            "result (tool=%s, task=%s) — will clamp "
+                            "confidence to force escalation.",
+                            tool_name, task_id,
+                        )
 
                 # Push result event to Web UI
                 await self._push_event({
@@ -275,7 +312,7 @@ class Executor:
         except Exception as exc:  # noqa: BLE001
             return f"Executor error (forced final): {exc}", 0.0, None, None
 
-        return self._parse_qwen_response(raw_text)
+        return self._finalize_response(raw_text, objective_failure_seen)
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -312,6 +349,23 @@ class Executor:
 
         logger.info("Executor invoking skill '%s' for subtask %s", best, subtask.id)
         return await self.skill_factory.invoke_skill(best, subtask.id, context)
+
+    @classmethod
+    def _finalize_response(
+        cls,
+        text: str,
+        objective_failure_seen: bool,
+    ) -> Tuple[str, float, Optional[str], Optional[str]]:
+        """Parse Qwen's JSON, then clamp confidence if tools saw hard failures."""
+        result, confidence, skill_hint, skill_desc = cls._parse_qwen_response(text)
+        if objective_failure_seen and confidence > _FAILURE_CLAMP_CONFIDENCE:
+            logger.info(
+                "Clamping self-reported confidence %.2f → %.2f "
+                "(objective failure signal in tool output).",
+                confidence, _FAILURE_CLAMP_CONFIDENCE,
+            )
+            confidence = _FAILURE_CLAMP_CONFIDENCE
+        return result, confidence, skill_hint, skill_desc
 
     @staticmethod
     def _parse_qwen_response(
