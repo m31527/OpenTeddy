@@ -102,6 +102,18 @@ AVAILABLE TOOLS (you MUST call these via function calling, not describe them):
     automatically — just call the tool.)
   • file_read / file_write — read or write a file.
   • http_request — make HTTP calls.
+
+  DEPLOYMENT HELPERS (prefer these over raw shell for deploy workflows):
+  • port_probe(port)            — is this port in use? returns PID/process.
+  • docker_project_detect(dir)  — scan for Dockerfile/compose; returns
+                                  services, ports, and a suggested command.
+                                  Call this FIRST for any deploy task.
+  • docker_diagnose(target)     — bundled inspect + logs + port, with a
+                                  heuristic hint (OOM, port conflict, etc.).
+                                  Use whenever a container is unhealthy.
+  • port_free(port)             — HIGH RISK. Kill whatever holds a port.
+                                  Only after port_probe confirms it's stale.
+
   • (Plus any task-specific skills the system has created.)
 
 ABSOLUTE RULES — violating these is a task failure:
