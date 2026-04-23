@@ -37,6 +37,18 @@ class SkillStatus(str, Enum):
     RETIRED  = "retired"
 
 
+class SessionMode(str, Enum):
+    """Per-session behavior selector (ChatGPT/Claude-style mode switch).
+
+    Each mode ties to a different orchestrator plan prompt and a different
+    executor tool exposure, so the user can declare intent explicitly
+    instead of relying on the model to guess from the task description.
+    """
+    CHAT     = "chat"       # pure text reasoning, no tools exposed
+    CODE     = "code"       # full autonomy: deploy/install/diagnose
+    ANALYTIC = "analytic"   # coming-soon stub (csv/xlsx/json analysis)
+
+
 # ── Core request / response ───────────────────────────────────────────────────
 
 class TaskRequest(BaseModel):
@@ -51,6 +63,12 @@ class TaskRequest(BaseModel):
         description="Logical session / thread this task belongs to. Memory "
                     "retrieval is scoped to this session to prevent "
                     "cross-project contamination.",
+    )
+    mode: SessionMode = Field(
+        default=SessionMode.CODE,
+        description="Which behavior profile to run with. Controls the "
+                    "orchestrator plan prompt and which tools the executor "
+                    "exposes. Default is CODE (full autonomy) for back-compat.",
     )
 
 
@@ -138,11 +156,17 @@ class RunRequest(BaseModel):
                     "via POST /tasks/{id}/cancel. If omitted, the server "
                     "generates one.",
     )
+    mode: Optional[SessionMode] = Field(
+        default=None,
+        description="Override the session's default mode just for this task. "
+                    "Usually omitted — UI reads it from the active session.",
+    )
 
 
 class Session(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     title: str = "New session"
+    mode: SessionMode = SessionMode.CODE
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
@@ -153,6 +177,7 @@ class SessionListResponse(BaseModel):
 
 class CreateSessionRequest(BaseModel):
     title: Optional[str] = None
+    mode: Optional[SessionMode] = None
 
 
 class RunResponse(BaseModel):
@@ -178,9 +203,12 @@ SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS sessions (
     id          TEXT PRIMARY KEY,
     title       TEXT NOT NULL DEFAULT 'New session',
+    mode        TEXT NOT NULL DEFAULT 'code',
     created_at  TEXT NOT NULL,
     updated_at  TEXT NOT NULL
 );
+-- NOTE: for pre-existing DBs the `mode` column is added in
+-- tracker._migrate_usage_columns, same pattern as tasks.session_id.
 
 CREATE TABLE IF NOT EXISTS tasks (
     id          TEXT PRIMARY KEY,

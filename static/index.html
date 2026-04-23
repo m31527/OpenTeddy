@@ -261,6 +261,73 @@
       text-overflow: ellipsis;
     }
 
+    /* Mode switcher (Chat / Code / Analytic) — Claude-style segmented pill */
+    .mode-switch {
+      display: inline-flex;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 3px;
+      gap: 2px;
+      flex-shrink: 0;
+    }
+    .mode-btn {
+      background: transparent;
+      border: none;
+      color: var(--text-secondary);
+      font-size: 0.78rem;
+      font-weight: 500;
+      font-family: inherit;
+      padding: 5px 12px;
+      border-radius: 999px;
+      cursor: pointer;
+      transition: background 0.15s, color 0.15s;
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      line-height: 1;
+    }
+    .mode-btn:hover:not(:disabled) {
+      background: var(--bg-primary);
+      color: var(--text-primary);
+    }
+    .mode-btn.active {
+      background: var(--surface);
+      color: var(--text-primary);
+      box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+    }
+    .mode-btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    .mode-btn .mode-emoji { font-size: 0.9rem; }
+    .mode-beta {
+      font-size: 0.58rem;
+      font-weight: 700;
+      color: var(--warning);
+      background: var(--accent-light);
+      padding: 1px 5px;
+      border-radius: 4px;
+      margin-left: 2px;
+      letter-spacing: 0.04em;
+    }
+
+    /* Mode badge next to each session item in the sidebar */
+    .session-mode-badge {
+      font-size: 0.6rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      padding: 1px 5px;
+      border-radius: 4px;
+      flex-shrink: 0;
+      background: rgba(255,255,255,0.08);
+      color: var(--sidebar-muted);
+    }
+    .session-mode-badge.mode-chat     { color: #93c5fd; background: rgba(147,197,253,0.12); }
+    .session-mode-badge.mode-code     { color: #86efac; background: rgba(134,239,172,0.12); }
+    .session-mode-badge.mode-analytic { color: #c4b5fd; background: rgba(196,181,253,0.12); }
+
     /* ── Container / Cards ───────────────────────────────────────────────── */
     .container { max-width: 960px; margin: 2rem auto; padding: 0 1.25rem; }
     .card {
@@ -1311,6 +1378,17 @@
         <div class="chat-header">
           <button class="hamburger" onclick="toggleSidebar()" aria-label="Open sidebar">☰</button>
           <span class="chat-header-title" id="chatHeaderTitle">New session</span>
+          <div class="mode-switch" id="modeSwitch" role="tablist" aria-label="Session mode">
+            <button type="button" class="mode-btn" data-mode="chat" onclick="changeMode('chat')" title="純文字推理（摘要、翻譯、問答）">
+              <span class="mode-emoji">💬</span><span>Chat</span>
+            </button>
+            <button type="button" class="mode-btn active" data-mode="code" onclick="changeMode('code')" title="寫代碼自主執行（部署、安裝、診斷、修改檔案）">
+              <span class="mode-emoji">💻</span><span>Code</span>
+            </button>
+            <button type="button" class="mode-btn" data-mode="analytic" onclick="changeMode('analytic')" title="分析 csv / xlsx / json 並繪圖（Beta）">
+              <span class="mode-emoji">📊</span><span>Analytic</span><span class="mode-beta">BETA</span>
+            </button>
+          </div>
         </div>
         <div class="chat-layout">
           <div class="chat-messages" id="chatMessages">
@@ -1655,6 +1733,15 @@
     // Session state
     let _currentSessionId = localStorage.getItem('teddy.session_id') || null;
     let _sessionTitles = {};
+    let _sessionModes  = {};  // id → 'chat' | 'code' | 'analytic'
+
+    // Valid mode values — kept in sync with backend SessionMode enum.
+    const MODES = ['chat', 'code', 'analytic'];
+    const MODE_DEFAULT = 'code';
+
+    function currentMode() {
+      return _sessionModes[_currentSessionId] || MODE_DEFAULT;
+    }
 
     function initWS() {
       const proto = location.protocol === 'https:' ? 'wss' : 'ws';
@@ -1706,6 +1793,7 @@
         if (!res.ok) return;
         const data = await res.json();
         _sessionTitles = {};
+        _sessionModes  = {};
         let sessions = data.sessions || [];
 
         if (sessions.length === 0) {
@@ -1723,11 +1811,15 @@
         list.innerHTML = '';
         for (const s of sessions) {
           _sessionTitles[s.id] = s.title;
+          _sessionModes[s.id]  = s.mode || MODE_DEFAULT;
           const item = document.createElement('div');
           item.className = 'session-item' + (s.id === _currentSessionId ? ' active' : '');
           item.dataset.id = s.id;
           const titleHtml = escHtml(s.title || 'Untitled');
+          const mode      = s.mode || MODE_DEFAULT;
+          const modeLabel = { chat: 'Chat', code: 'Code', analytic: 'An.' }[mode] || 'Code';
           item.innerHTML = `
+            <span class="session-mode-badge mode-${escHtml(mode)}" title="Mode: ${escHtml(mode)}">${modeLabel}</span>
             <span class="session-item-title" title="${titleHtml}">${titleHtml}</span>
             <div class="session-item-actions">
               <button class="session-action-btn" title="Rename" onclick="event.stopPropagation(); renameSession('${escHtml(s.id)}')">✎</button>
@@ -1737,6 +1829,7 @@
           list.appendChild(item);
         }
         updateChatHeaderTitle();
+        updateModeSwitchUI();
       } catch (e) {
         console.debug('loadSessions error:', e);
       }
@@ -1747,20 +1840,64 @@
       if (el) el.textContent = _sessionTitles[_currentSessionId] || 'New session';
     }
 
-    async function apiCreateSession(title) {
+    // Reflect the current session's mode in the segmented pill.
+    function updateModeSwitchUI() {
+      const m = currentMode();
+      document.querySelectorAll('.mode-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.mode === m);
+      });
+    }
+
+    // Change the active session's mode. Persists to the server via PATCH
+    // so refreshes / other tabs see the choice.
+    async function changeMode(mode) {
+      if (!MODES.includes(mode)) return;
+      if (!_currentSessionId) return;
+      const prev = currentMode();
+      if (prev === mode) return;
+      // Optimistic UI update — revert on failure.
+      _sessionModes[_currentSessionId] = mode;
+      updateModeSwitchUI();
       try {
+        const res = await fetch(`${API}/sessions/${_currentSessionId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ mode }),
+        });
+        if (!res.ok) throw new Error(res.statusText);
+        // Nudge the sidebar badge.
+        const item = document.querySelector(`.session-item[data-id="${_currentSessionId}"] .session-mode-badge`);
+        if (item) {
+          item.className = `session-mode-badge mode-${mode}`;
+          item.textContent = { chat: 'Chat', code: 'Code', analytic: 'An.' }[mode];
+        }
+        const label = { chat: '💬 Chat', code: '💻 Code', analytic: '📊 Analytic (beta)' }[mode];
+        toast(`Mode: ${label}`);
+      } catch (e) {
+        _sessionModes[_currentSessionId] = prev;
+        updateModeSwitchUI();
+        toast('Could not change mode: ' + e.message, true);
+      }
+    }
+
+    async function apiCreateSession(title, mode) {
+      try {
+        const body = { title };
+        if (mode) body.mode = mode;
         const res = await fetch(`${API}/sessions`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ title }),
+          body: JSON.stringify(body),
         });
         if (!res.ok) return null;
         return await res.json();
       } catch { return null; }
     }
 
+    // New sessions inherit the current mode so clicking "+ New chat" while
+    // you're in Code mode keeps you in Code mode (not back to the default).
     async function createNewSession() {
-      const s = await apiCreateSession('New session');
+      const s = await apiCreateSession('New session', currentMode());
       if (!s) { toast('Could not create session', true); return; }
       _currentSessionId = s.id;
       localStorage.setItem('teddy.session_id', s.id);
@@ -1781,6 +1918,7 @@
       });
       showChatPanel();
       updateChatHeaderTitle();
+      updateModeSwitchUI();
       await loadChatHistory();
       closeSidebar();
     }
@@ -2094,6 +2232,10 @@
             priority,
             context: {},
             session_id: _currentSessionId || undefined,
+            // Explicitly sending mode is belt-and-braces — the server would
+            // look it up from the session row anyway, but sending it means
+            // the run definitely matches what the UI just showed.
+            mode: currentMode(),
           }),
           signal: _runAbort.signal,
         });

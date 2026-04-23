@@ -83,7 +83,12 @@ def _preview_tool_output(tool_result: Dict[str, Any]) -> str:
     text = (text or "").strip()
     return text[:_OUTPUT_PREVIEW_CHARS]
 
-_SYSTEM_PROMPT = """\
+# ── Mode-specific executor prompts ────────────────────────────────────────────
+# The orchestrator tells us which mode the user picked. Each mode gets its
+# own system prompt + tool exposure so we don't have to squeeze every
+# possible behavior into one general prompt.
+
+_SYSTEM_PROMPT_CODE = """\
 You are Teddy-Exec, a precise task executor running inside the OpenTeddy
 multi-agent system. You are NOT a chatbot and you are NOT "just a language
 model" — you are an executor with real tool access on a real machine.
@@ -130,6 +135,38 @@ FINAL OUTPUT FORMAT (emit exactly one JSON object, no prose, no markdown):
 """
 
 
+_SYSTEM_PROMPT_CHAT = """\
+You are Teddy-Exec in **Chat mode**. The user wants pure text reasoning —
+summarize, translate, explain, answer, write. No tools are available in
+this mode and none are needed.
+
+Just read the sub-task, think, and reply with the answer. Write in the same
+language the user used. Format with markdown (headings, lists, bold) when it
+improves readability — especially for summaries and structured explanations.
+
+DO NOT mention tools, shell commands, files, or "I would need to…". Just
+answer the question or produce the requested text.
+
+FINAL OUTPUT FORMAT (emit exactly one JSON object, no prose outside it):
+  {
+    "result": "<string: your markdown-formatted answer>",
+    "confidence": <float 0.0–1.0>,
+    "skill_needed": null,
+    "skill_description": null
+  }
+"""
+
+
+# Back-compat alias — existing code might import _SYSTEM_PROMPT.
+_SYSTEM_PROMPT = _SYSTEM_PROMPT_CODE
+
+
+def _system_prompt_for_mode(mode: str) -> str:
+    if mode == "chat": return _SYSTEM_PROMPT_CHAT
+    # analytic currently uses the Code prompt (beta); see orchestrator comment.
+    return _SYSTEM_PROMPT_CODE
+
+
 class Executor:
     """Qwen 3 executor agent with Ollama function-calling support."""
 
@@ -151,27 +188,36 @@ class Executor:
 
     # ── Public API ────────────────────────────────────────────────────────────
 
-    async def execute(self, subtask: SubTask, context: Dict) -> SubTask:
-        """Execute a subtask. Returns the updated subtask with result / status."""
+    async def execute(
+        self, subtask: SubTask, context: Dict, mode: str = "code",
+    ) -> SubTask:
+        """Execute a subtask. Returns the updated subtask with result / status.
+
+        `mode` comes from the session (chat / code / analytic) and flips
+        both the system prompt and the available tool set below.
+        """
         subtask.status = TaskStatus.RUNNING
         await self.tracker.update_subtask(subtask)
 
-        # 1. Try a matching skill first
-        skill_result = await self._try_skill(subtask, context)
-        if skill_result is not None:
-            success, output = skill_result
-            subtask.result = output
-            subtask.confidence = 0.95 if success else 0.2
-            subtask.status = TaskStatus.COMPLETED if success else TaskStatus.FAILED
-            subtask.completed_at = datetime.utcnow()
-            await self.tracker.update_subtask(subtask)
-            return subtask
+        # 1. Try a matching skill first — skills are available in all modes
+        # except pure chat (where tools make no sense).
+        if mode != "chat":
+            skill_result = await self._try_skill(subtask, context)
+            if skill_result is not None:
+                success, output = skill_result
+                subtask.result = output
+                subtask.confidence = 0.95 if success else 0.2
+                subtask.status = TaskStatus.COMPLETED if success else TaskStatus.FAILED
+                subtask.completed_at = datetime.utcnow()
+                await self.tracker.update_subtask(subtask)
+                return subtask
 
         # 2. Qwen with function calling
         result, confidence, skill_hint, skill_desc = await self._qwen_execute(
             subtask.description, context,
             task_id=subtask.parent_task_id,
             subtask_id=subtask.id,
+            mode=mode,
         )
         subtask.result = result
         subtask.confidence = confidence
@@ -199,11 +245,18 @@ class Executor:
         context: Dict,
         task_id: str = "unknown",
         subtask_id: str = "",
+        mode: str = "code",
     ) -> Tuple[str, float, Optional[str], Optional[str]]:
         """
         Multi-turn Qwen chat with Ollama function calling.
         Loop up to _MAX_TOOL_ROUNDS tool calls before forcing a final answer.
+
+        `mode` picks the system prompt and gates whether tools are exposed
+        at all — in chat mode we send no `tools` field so the model is
+        forced into a pure single-turn answer (no accidental shell calls).
         """
+        system_prompt = _system_prompt_for_mode(mode)
+
         messages: List[Dict[str, Any]] = [
             {
                 "role": "user",
@@ -214,14 +267,16 @@ class Executor:
             }
         ]
 
-        tools = self.registry.get_schemas()
+        # Chat mode deliberately hides tools from the model so it can't
+        # accidentally write files / run shell commands while summarizing.
+        tools = [] if mode == "chat" else self.registry.get_schemas()
         objective_failure_seen = False
 
         for round_idx in range(_MAX_TOOL_ROUNDS):
             payload: Dict[str, Any] = {
                 "model": config.qwen_model,
                 "messages": messages,
-                "system": _SYSTEM_PROMPT,
+                "system": system_prompt,
                 "stream": False,
                 "options": {"temperature": 0.2, "num_predict": config.qwen_max_tokens},
             }
