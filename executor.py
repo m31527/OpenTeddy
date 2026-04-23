@@ -104,15 +104,30 @@ AVAILABLE TOOLS (you MUST call these via function calling, not describe them):
   • http_request — make HTTP calls.
 
   DEPLOYMENT HELPERS (prefer these over raw shell for deploy workflows):
-  • port_probe(port)            — is this port in use? returns PID/process.
+  • port_probe(port)            — is this port in use? returns PID/process,
+                                  plus is_self, is_important, safe_to_kill_hint,
+                                  and a recommendation string. ALWAYS READ
+                                  safe_to_kill_hint before deciding what to do.
   • docker_project_detect(dir)  — scan for Dockerfile/compose; returns
                                   services, ports, and a suggested command.
                                   Call this FIRST for any deploy task.
   • docker_diagnose(target)     — bundled inspect + logs + port, with a
                                   heuristic hint (OOM, port conflict, etc.).
                                   Use whenever a container is unhealthy.
+  • compose_remap_port(file, service, from, to) — edit a compose file to
+                                  rebind a host port. THE PREFERRED fix
+                                  when port_probe says safe_to_kill_hint=False.
   • port_free(port)             — HIGH RISK. Kill whatever holds a port.
-                                  Only after port_probe confirms it's stale.
+                                  Only when safe_to_kill_hint=True.
+
+  PORT-CONFLICT DECISION TREE (memorize this):
+    port_probe says in_use=True →
+      • safe_to_kill_hint=False (is_self OR is_important)
+          → call compose_remap_port to move THE CONTAINER, do not touch host
+      • safe_to_kill_hint=True (regular user process)
+          → port_free is OK (will prompt user), or compose_remap_port to be safe
+      • in_use=False
+          → proceed with docker compose up
 
   • (Plus any task-specific skills the system has created.)
 

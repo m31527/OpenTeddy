@@ -79,9 +79,13 @@ class Config:
     escalation_failure_limit: int = field(
         default_factory=lambda: int(os.getenv("ESCALATION_FAILURE_LIMIT", "3"))
     )
-    # Max seconds to wait for a single subtask before treating it as hung
+    # Max seconds to wait for a single subtask before treating it as hung.
+    # 180s is roomy enough for a small-model (Qwen 2.5 3B) multi-tool-call
+    # chain (detect → probe → compose_remap → up → diagnose) without
+    # leaving hung daemons unattended for too long. Raise this further if
+    # you're on a slow machine; lower it if you're running a big model.
     subtask_timeout: int = field(
-        default_factory=lambda: int(os.getenv("SUBTASK_TIMEOUT", "120"))
+        default_factory=lambda: int(os.getenv("SUBTASK_TIMEOUT", "180"))
     )
 
     # ── API server ───────────────────────────────────────────────────────────
