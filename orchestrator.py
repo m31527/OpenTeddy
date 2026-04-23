@@ -103,22 +103,31 @@ docker compose 也可以用 `-f /path/to/docker-compose.yml` 取代 cd。
 
 【部署任務的標準流程 — 很重要】
 如果用戶的目標包含「部署／啟動／架設／跑起來／deploy／serve／install」，
-照以下順序規劃：
+照以下順序規劃（**pre-flight 驗證是重點**，不要直接 up）：
 
   1. **探查專案結構** — 用 docker_project_detect 工具掃描資料夾。
      它會回傳 compose_files、services、exposed_ports、likely_deploy_hint。
      → 子任務例：「用 docker_project_detect 探查 ./agent-workspace/<repo> 的結構」
 
-  2. **檢查 port 衝突** — 如果第 1 步回報有 exposed_ports，先用 port_probe
-     每個要綁的 port 確認沒衝突。有衝突才用 port_free（會跳 approval）。
-     → 子任務例：「用 port_probe 檢查 port 8000 是否被占用」
+  2. **準備 .env** — 如果 detect 回報 env_example_exists=true 且 env_exists=false，
+     `cp .env.example .env`。**接著一定要驗證 .env 沒壞**：
+     → 用 env_file_lint 掃有沒有多行值、重複 key、未封閉引號（會導致 YAML 爆）
 
-  3. **啟動服務** — 按第 1 步回傳的 likely_deploy_hint 執行。
-     有 compose 一律用 docker compose up -d（不要自己寫 Dockerfile）。
-     缺 .env 但有 .env.example 時，先 cp .env.example .env。
+  3. **Pre-flight 驗 compose** — 用 compose_validate 跑 `docker compose config --quiet`
+     驗證 YAML 能解析。**在執行 `up` 之前**一定要過這一關：
+     - valid=true → 繼續下一步
+     - valid=false → 看 diagnosis_hint、error_line、context_snippet 決定修什麼
+       - YAML unmarshal 錯 → 規劃 env_file_lint 找.env 壞的那行，修
+       - missing variable → 補 .env 的 key
+       - syntax → 用 file_read 看原檔，用 file_write 修
+
+  4. **檢查 port 衝突** — 如果第 1 步回報有 exposed_ports，用 port_probe
+     每個要綁的 port，讀 recommendation 欄位決定下一步（見下方 Port 衝突決策樹）。
+
+  5. **啟動服務** — pre-flight 全過了才 up：
      → 子任務例：「cd ./agent-workspace/<repo> && docker compose up -d --build」
 
-  4. **驗證健康** — up 完後用 docker compose ps 確認 status，
+  6. **驗證健康** — up 完後用 docker compose ps 確認 status，
      發現 unhealthy / Restarting / Exited 的 service 立刻用 docker_diagnose
      抓根因（它會一次給 inspect + logs + 診斷 hint）。
      → 子任務例：「用 docker compose ps 驗證所有服務狀態」
