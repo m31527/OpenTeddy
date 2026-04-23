@@ -93,7 +93,17 @@ SETTINGS_META: dict[str, dict[str, Any]] = {
     },
     "subtask_timeout": {
         "label":       "Subtask Timeout (seconds)",
-        "description": "Seconds before a hung subtask is auto-escalated to Claude (0 = disabled)",
+        "description": "Wall-clock hard-stop for a subtask. The real safety net "
+                       "is shell_silence_timeout below; this just caps runaway tasks.",
+        "type":        "int",
+        "min":         60,
+        "max":         3600,
+    },
+    "shell_silence_timeout": {
+        "label":       "Shell Silence Timeout (seconds)",
+        "description": "Kill a shell command after this many seconds of no output. "
+                       "Long builds (docker, pip) stay alive as long as they print progress; "
+                       "truly hung commands are caught in this window. Set 0 to disable.",
         "type":        "int",
         "min":         0,
         "max":         600,
@@ -122,6 +132,7 @@ def _defaults_from_config() -> dict[str, str]:
         "skill_match_threshold":    str(getattr(config, "skill_match_threshold", "0.4")),
         "skill_promotion_threshold": str(config.skill_promotion_threshold),
         "subtask_timeout":           str(config.subtask_timeout),
+        "shell_silence_timeout":     str(config.shell_silence_timeout),
         "agent_workspace_dir":       str(config.agent_workspace_dir),
     }
 
@@ -272,6 +283,10 @@ class SettingsStore:
         v7 = _int("subtask_timeout")
         if v7 is not None:
             config.subtask_timeout = v7
+
+        v8 = _int("shell_silence_timeout")
+        if v8 is not None:
+            config.shell_silence_timeout = v8
 
         if "agent_workspace_dir" in settings and settings["agent_workspace_dir"]:
             config.agent_workspace_dir = settings["agent_workspace_dir"]
