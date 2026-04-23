@@ -38,6 +38,22 @@ _FAILURE_SIGNAL_RE = re.compile(
 _FAILURE_CLAMP_CONFIDENCE = 0.3
 _OUTPUT_PREVIEW_CHARS = 500
 
+# Refusal patterns — Qwen/Gemma sometimes hallucinate "I'm just a language
+# model, I can't run shell commands" even though the tools are exposed via
+# function calling. When we see that pattern in the FINAL answer (not in a
+# tool result), we clamp confidence so Claude escalation takes over instead
+# of marking a useless "I can't help you" response as completed.
+_REFUSAL_SIGNAL_RE = re.compile(
+    r"(?:"
+    r"我是一個 ?AI|我是.{0,6}語言模型|我沒有.{0,8}(?:能力|權限).{0,6}執行|"
+    r"無法.{0,10}(?:直接)?執行|請(?:您|使用者).{0,6}自行執行|"
+    r"I (?:am|'m) (?:just |only )?(?:an? )?(?:AI|language model)|"
+    r"I (?:cannot|can't|don'?t have (?:the )?ability to) (?:execute|run|access)|"
+    r"please (?:run|execute) (?:the )?(?:following )?command(?:s)? (?:yourself|on your own)"
+    r")",
+    re.IGNORECASE,
+)
+
 
 def _preview_tool_output(tool_result: Dict[str, Any]) -> str:
     """Produce a short string preview of a tool result for the Web UI.
@@ -68,26 +84,49 @@ def _preview_tool_output(tool_result: Dict[str, Any]) -> str:
     return text[:_OUTPUT_PREVIEW_CHARS]
 
 _SYSTEM_PROMPT = """\
-You are Teddy-Exec, a precise task executor powered by Qwen.
-You receive a sub-task description and any relevant context.
-You have access to tools — use them when needed.
+You are Teddy-Exec, a precise task executor running inside the OpenTeddy
+multi-agent system. You are NOT a chatbot and you are NOT "just a language
+model" — you are an executor with real tool access on a real machine.
 
-CRITICAL RULE:
-If a tool result contains "unhealthy", "Exited", "Restarting", "Error response",
-"ERROR <code>", or similar failure signals, you MUST:
-  1. Investigate the root cause with follow-up tool calls
-     (e.g. `docker logs --tail=100 <name>`, `docker inspect <name>`).
-  2. NOT report completion while the failure is unresolved — set confidence < 0.5
-     and describe the failure in "result".
+AVAILABLE TOOLS (you MUST call these via function calling, not describe them):
+  • shell_exec_readonly — run read-only shell commands: ls, cat, grep, find,
+    pwd, env, docker ps, docker logs, git status, etc.
+  • shell_exec_write   — run shell commands that change state: git clone,
+    pip install, npm install, docker compose up/build/down, mkdir, mv, cp,
+    file writes, service restarts. (High-risk; the system gates approval
+    automatically — just call the tool.)
+  • file_read / file_write — read or write a file.
+  • http_request — make HTTP calls.
+  • (Plus any task-specific skills the system has created.)
 
-After completing the task (or if no tools are needed), output a JSON object:
+ABSOLUTE RULES — violating these is a task failure:
+
+1. NEVER refuse with "I'm just a language model", "I can't run shell commands",
+   "please run these commands yourself", or any equivalent. You CAN run them.
+   If the sub-task asks you to deploy, install, or clone something, CALL
+   shell_exec_write with the actual command. Do not list commands as text.
+
+2. If a tool result contains "unhealthy", "Exited", "Restarting",
+   "Error response", "ERROR <code>", or similar failure signals, you MUST:
+     (a) Investigate with follow-up tool calls (docker logs --tail=100 <name>,
+         docker inspect <name>, cat <file>).
+     (b) NOT report completion — set confidence < 0.5 and describe the failure
+         in "result". Let Claude escalation take over.
+
+3. Always prefer calling a tool over narrating what you would do. If the
+   sub-task is "執行 git clone https://github.com/foo/bar", you MUST call
+   shell_exec_write with command="git clone https://github.com/foo/bar".
+
+4. Only emit the final JSON (below) AFTER all tool work is done, or when the
+   task is genuinely a pure-reasoning question that needs no tools.
+
+FINAL OUTPUT FORMAT (emit exactly one JSON object, no prose, no markdown):
   {
     "result": "<string: your answer / action result>",
     "confidence": <float 0.0–1.0>,
     "skill_needed": "<string snake_case or null>",
     "skill_description": "<string or null>"
   }
-Output ONLY the JSON object — no prose, no markdown.
 """
 
 
@@ -417,12 +456,23 @@ class Executor:
         text: str,
         objective_failure_seen: bool,
     ) -> Tuple[str, float, Optional[str], Optional[str]]:
-        """Parse Qwen's JSON, then clamp confidence if tools saw hard failures."""
+        """Parse Qwen's JSON, then clamp confidence if tools saw hard failures
+        or Qwen emitted a "I can't do this" refusal instead of calling tools."""
         result, confidence, skill_hint, skill_desc = cls._parse_qwen_response(text)
         if objective_failure_seen and confidence > _FAILURE_CLAMP_CONFIDENCE:
             logger.info(
                 "Clamping self-reported confidence %.2f → %.2f "
                 "(objective failure signal in tool output).",
+                confidence, _FAILURE_CLAMP_CONFIDENCE,
+            )
+            confidence = _FAILURE_CLAMP_CONFIDENCE
+        # Detect hallucinated refusals ("I'm just a language model, I can't
+        # run shell commands") and force escalation — these are never
+        # acceptable final answers for an executor that has tool access.
+        if _REFUSAL_SIGNAL_RE.search(result) and confidence > _FAILURE_CLAMP_CONFIDENCE:
+            logger.warning(
+                "Qwen refused to use tools ('I am a language model…'). "
+                "Clamping confidence %.2f → %.2f so Claude escalation runs.",
                 confidence, _FAILURE_CLAMP_CONFIDENCE,
             )
             confidence = _FAILURE_CLAMP_CONFIDENCE
