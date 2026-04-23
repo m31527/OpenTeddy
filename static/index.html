@@ -259,14 +259,32 @@
       cursor: pointer;
       line-height: 1;
     }
+    .chat-header-title-wrap {
+      display: flex;
+      flex-direction: column;
+      flex: 1;
+      min-width: 0;
+      line-height: 1.25;
+    }
     .chat-header-title {
       font-size: 0.9rem;
       font-weight: 500;
       color: var(--text-primary);
-      flex: 1;
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
+    }
+    .chat-header-workspace {
+      font-size: 0.68rem;
+      color: var(--text-muted);
+      font-family: 'Courier New', monospace;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      cursor: help;
+    }
+    .chat-header-workspace:hover {
+      color: var(--text-secondary);
     }
 
     /* Mode switcher (Chat / Code / Analytic) — Claude-style segmented pill */
@@ -1418,7 +1436,11 @@
       <div id="tab-tasks" class="tab-panel active">
         <div class="chat-header">
           <button class="hamburger" onclick="toggleSidebar()" aria-label="Open sidebar">☰</button>
-          <span class="chat-header-title" id="chatHeaderTitle">New session</span>
+          <div class="chat-header-title-wrap">
+            <span class="chat-header-title" id="chatHeaderTitle">New session</span>
+            <span class="chat-header-workspace" id="chatHeaderWorkspace"
+              title="所有 git clone / build / 檔案寫入都發生在這個目錄底下。看這個位置不對請去 Settings → Agent Workspace 改。">📂 —</span>
+          </div>
           <div class="mode-switch" id="modeSwitch" role="tablist" aria-label="Session mode">
             <button type="button" class="mode-btn" data-mode="chat" onclick="changeMode('chat')" title="純文字推理（摘要、翻譯、問答）">
               <span class="mode-emoji">💬</span><span>Chat</span>
@@ -1917,6 +1939,32 @@
       if (el) el.textContent = _sessionTitles[_currentSessionId] || 'New session';
     }
 
+    // Query /debug/workspace once at startup and show the resolved absolute
+    // path under the session title. Users were getting burned by uvicorn
+    // launching from a surprise cwd — making the path visible kills that
+    // whole bug class. Silent best-effort; nothing breaks if the endpoint
+    // 404s on an older server.
+    async function refreshWorkspaceIndicator() {
+      const el = document.getElementById('chatHeaderWorkspace');
+      if (!el) return;
+      try {
+        const res = await fetch(`${API}/debug/workspace`);
+        if (!res.ok) return;
+        const data = await res.json();
+        const path = data.agent_workspace_dir || '';
+        const n = data.entry_count ?? 0;
+        el.textContent = `📂 ${path} · ${n} items`;
+        el.title =
+          `Agent workspace: ${path}\n` +
+          `uvicorn cwd:      ${data.uvicorn_cwd}\n` +
+          `project root:     ${data.project_root}\n` +
+          `items present:    ${n}\n\n` +
+          (data.exists
+            ? '✓ workspace exists. All git clones, builds, file writes land here.'
+            : '⚠️ workspace does NOT exist — create it or change the setting.');
+      } catch (e) { /* ignore */ }
+    }
+
     // Reflect the current session's mode in the segmented pill.
     function updateModeSwitchUI() {
       const m = currentMode();
@@ -2386,6 +2434,8 @@
           // refresh the badge so the user sees the pollution growing if
           // they keep stacking projects in one session.
           refreshMemoryCount();
+          // New clones/files inside the workspace — bump the count display.
+          refreshWorkspaceIndicator();
         }
       }
     }
@@ -3102,7 +3152,8 @@
       initWS();
       await loadSessions();
       await loadChatHistory();
-      refreshMemoryCount();   // initial fill for the 🧠 badge
+      refreshMemoryCount();        // initial fill for the 🧠 badge
+      refreshWorkspaceIndicator(); // show 📂 absolute workspace path
       loadSkills();
       loadTools();
       pollApprovals();
