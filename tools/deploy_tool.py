@@ -70,9 +70,21 @@ async def _run_cmd(
 
 
 def _resolve_cwd(working_dir: Optional[str]) -> str:
-    """Same cwd logic as shell_tool — fall back to config.agent_workspace_dir."""
+    """Same cwd logic as shell_tool — fall back to config.agent_workspace_dir.
+
+    When ``working_dir`` is a *relative* path, resolve it **against the
+    agent workspace** (not against whatever cwd Python happens to be in).
+    This eliminates the "../Pixelle-Video went to /home/user/Pixelle-Video
+    not /home/user/OpenTeddy/agent-workspace/Pixelle-Video" class of bug,
+    which has caused repeated deploy failures.
+    """
     from config import config as _cfg
-    chosen = working_dir or getattr(_cfg, "agent_workspace_dir", None) or os.getcwd()
+    ws = getattr(_cfg, "agent_workspace_dir", None) or os.getcwd()
+    ws = os.path.abspath(ws)  # defensive — config should already be abs
+    if not working_dir:
+        return ws
+    # Resolve relative paths against the workspace root, not the uvicorn cwd.
+    chosen = working_dir if os.path.isabs(working_dir) else os.path.join(ws, working_dir)
     return os.path.abspath(chosen)
 
 
@@ -341,10 +353,25 @@ async def docker_project_detect(
       }
     """
     root = _resolve_cwd(working_dir)
+    if not os.path.isdir(root):
+        # Most common cause: Gemma planned to detect a repo that hasn't been
+        # cloned yet. Spell it out so the next plan step is obvious.
+        hint = (
+            f"Directory does not exist: {root}. "
+            "If this is a repo you intended to work on, git clone it into "
+            "the agent workspace FIRST (e.g. `git clone <URL>`), then retry. "
+            "Do not use `..` paths — all work should happen inside the "
+            "workspace."
+        )
+        return make_result(False, error=hint)
     try:
         entries = set(os.listdir(root))
     except Exception as exc:  # noqa: BLE001
-        return make_result(False, error=f"cannot list {root}: {exc}")
+        return make_result(
+            False,
+            error=f"cannot list {root}: {exc}. "
+                  "Check permissions or try a different working_dir.",
+        )
 
     # Case-insensitive lookup
     entries_lower = {e.lower(): e for e in entries}
