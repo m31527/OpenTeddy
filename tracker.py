@@ -76,6 +76,9 @@ class Tracker:
             "ALTER TABLE usage_records ADD COLUMN model_provider TEXT NOT NULL DEFAULT 'ollama'",
             "ALTER TABLE usage_records ADD COLUMN task_description TEXT DEFAULT ''",
             "ALTER TABLE tasks ADD COLUMN session_id TEXT",
+            # Session mode selector (chat / code / analytic). Default 'code'
+            # so existing sessions keep their full-autonomy behavior.
+            "ALTER TABLE sessions ADD COLUMN mode TEXT NOT NULL DEFAULT 'code'",
         ]
         for sql in migrations:
             try:
@@ -178,12 +181,14 @@ class Tracker:
 
     # ── Session CRUD ──────────────────────────────────────────────────────────
 
-    async def create_session(self, session_id: str, title: str) -> None:
+    async def create_session(
+        self, session_id: str, title: str, mode: str = "code",
+    ) -> None:
         now = datetime.utcnow().isoformat()
         await self.db.execute(
-            "INSERT OR IGNORE INTO sessions(id, title, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?)",
-            (session_id, title, now, now),
+            "INSERT OR IGNORE INTO sessions(id, title, mode, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (session_id, title, mode, now, now),
         )
         await self.db.commit()
 
@@ -194,10 +199,25 @@ class Tracker:
             rows = await cur.fetchall()
             return [dict(r) for r in rows]
 
+    async def get_session(self, session_id: str) -> Optional[dict]:
+        async with self.db.execute(
+            "SELECT * FROM sessions WHERE id=?", (session_id,)
+        ) as cur:
+            row = await cur.fetchone()
+            return dict(row) if row else None
+
     async def rename_session(self, session_id: str, title: str) -> None:
         await self.db.execute(
             "UPDATE sessions SET title=?, updated_at=? WHERE id=?",
             (title, datetime.utcnow().isoformat(), session_id),
+        )
+        await self.db.commit()
+
+    async def update_session_mode(self, session_id: str, mode: str) -> None:
+        """Change the mode on an existing session (Chat / Code / Analytic)."""
+        await self.db.execute(
+            "UPDATE sessions SET mode=?, updated_at=? WHERE id=?",
+            (mode, datetime.utcnow().isoformat(), session_id),
         )
         await self.db.commit()
 

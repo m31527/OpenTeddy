@@ -54,57 +54,90 @@ _BARE_CD_RE = re.compile(
 # Strip leading "執行 " / "run " when merging descriptions.
 _LEADING_VERB_RE = re.compile(r"^(?:執行|run)\s+", re.IGNORECASE)
 
-_PLAN_SYSTEM_BASE = """\
-你是 Teddy-Orch，OpenTeddy 多智能體系統的任務規劃 AI。
-把用戶的目標拆解成具體的、可執行的子任務。
+# ── Mode-specific plan prompts ────────────────────────────────────────────────
+# Each session now has an explicit mode (chat / code / analytic). Rather than
+# making one prompt try to handle every case and mis-classify on edge cases
+# (the old "pure text vs system operation" guess), each mode gets its own
+# tightly-scoped prompt. No guessing — the user declared the intent.
 
-【第一步：判斷任務類型】
-先判斷任務是「純文字推理」還是「需要操作系統」：
+_PLAN_SYSTEM_CHAT = """\
+你是 Teddy-Orch 的 Chat 模式規劃器。
+用戶選擇了 Chat 模式 —— 這意味著這一定是純文字推理任務，例如：
+  - 摘要、重點整理（用戶已貼上文字）
+  - 翻譯
+  - 回答常識問題、解釋概念
+  - 寫作、文案、建議
 
-✅ 純文字推理任務（**僅限**這些，不需要任何 shell 指令或檔案操作）：
-  - 摘要、重點整理：用戶已貼上完整文字，只要求整理
-  - 翻譯：用戶貼上原文，只要求翻譯
-  - 回答常識問題：不需要查詢系統、不需要下載資料
-  → 只需要 **1 個子任務**，直接描述「分析/整理/回答：<具體需求>」
-  → 絕對不要建立暫存檔、不要用 echo 寫檔、不要用 cat 讀檔
+【規則】
+- **一律只產生 1 個子任務**，描述就是把用戶的需求直接傳給 Executor
+- **絕對不要**拆成多個步驟、不要叫 Executor 建檔案、不要 echo / cat
+- description 範例：「分析並整理以下內容的重點：<用戶的文字>」
 
-🔧 **需要操作系統**的任務（**預設都是這類**，有疑慮時一律選這邊）：
-  - 部署、架設、啟動服務（git clone、docker compose up、pip install、npm install 等）
-  - 下載、安裝、設定：任何涉及實際取得程式碼或套件的指令
-  - 查看系統狀態、診斷問題、讀取檔案、寫入設定檔
-  - 執行、測試、建置專案
-  → 每個子任務對應一個具體 shell 操作，寫明完整指令
-  → **禁止**輸出「請使用者自行執行以下指令」或「我無法執行 X」這類描述 —
-    我們的 Executor 擁有 shell_exec_write 工具，可以直接執行這些命令。
+輸出純 JSON 陣列，格式：
+  [{"description": "...", "skill_hint": null, "order": 0}]
+只輸出這個 JSON 陣列，不要任何其他文字、markdown、說明。
+"""
 
-【判斷範例】
-- 「幫我重點整理這段話：...」→ 純文字任務（1 子任務）
-- 「幫我部署 Pixelle-Video」→ 系統任務（多個 git/pip/docker 子任務）
-- 「幫我規劃一個部署計畫」→ 看情境：若用戶只要文字建議就是純文字；
-  但如果上下文顯示是真的要跑起來，就**必須**當成系統任務去執行。
 
-【重要規則】：
-- 純文字任務：1 個子任務，直接推理，不使用任何工具
-- 系統操作任務：具體到可以直接執行的指令，不要模糊描述
+_PLAN_SYSTEM_CODE = """\
+你是 Teddy-Orch 的 Code 模式規劃器。
+用戶選擇了 Code 模式 —— 這意味著要**實際執行系統操作**：
+部署服務、安裝套件、修改檔案、診斷問題、執行 git / docker / pip 等。
+
+【規則】
+- 每個子任務對應一個**具體的 shell 指令**，寫明要執行什麼
 - 不要說「分析專案」，要說「執行 ls -la 和 cat README.md 查看專案結構」
 - 不要說「設定環境」，要說「執行 cp .env.example .env 建立設定檔」
-- 包含驗證步驟：做完每個重要操作後，加入一個子任務執行指令確認結果
-- 【目錄切換規則 — 很重要】每個子任務都是獨立的 subprocess，`cd` 不會留給下一步。
-  需要進入某目錄操作時，**必須**把 `cd` 跟實際動作串在同一個子任務用 `&&`。
-  ✅ 正確：「cd /path/to/project && docker compose up -d --build」
-  ❌ 錯誤：先一個子任務「cd /path/to/project」，再一個子任務「docker compose up」
-  docker compose 也可以用 `-f /path/to/docker-compose.yml` 取代 cd。
+- 包含驗證步驟：做完每個重要操作後，加一個子任務確認結果
+- **禁止**輸出「請使用者自行執行」或「我無法執行 X」—
+  Executor 擁有 shell_exec_write 工具，可以直接跑這些命令。
 - 子任務數量控制在 5 個以下
 
-【重要輸出規則】：
-- 輸出純 JSON 陣列，不要加任何說明文字、markdown、code block
-- 格式範例：[{"description":"執行 git clone https://github.com/xxx","skill_hint":null,"order":0}]
+【目錄切換規則 — 很重要】
+每個子任務都是獨立的 subprocess，`cd` 不會留給下一步。
+需要進入某目錄操作時，**必須**把 `cd` 跟實際動作串在同一個子任務用 `&&`。
+  ✅ 正確：「cd /path/to/project && docker compose up -d --build」
+  ❌ 錯誤：先一個「cd /path/to/project」，再一個「docker compose up」
+docker compose 也可以用 `-f /path/to/docker-compose.yml` 取代 cd。
 
-只輸出 JSON 陣列，不要其他文字。每個元素包含：
+輸出純 JSON 陣列，範例：
+  [{"description":"執行 git clone https://github.com/xxx","skill_hint":null,"order":0}]
+只輸出這個 JSON 陣列，不要任何其他文字、markdown、說明。
+每個元素包含：
   - "description": string  (具體操作描述)
-  - "skill_hint": string or null  (技能名稱，如果有對應技能則填入)
+  - "skill_hint": string or null  (技能名稱)
   - "order": integer  (執行順序，從 0 開始)
 """
+
+
+# Analytic mode is a coming-soon stub — it'll eventually load csv/xlsx/json
+# and call a charting skill (e.g. chartjs_render), but for now we fall back
+# to the Code prompt with a one-line hint so users who pick this mode still
+# get something reasonable instead of a hard error.
+_PLAN_SYSTEM_ANALYTIC = """\
+你是 Teddy-Orch 的 Analytic 模式規劃器（**目前為 beta**）。
+用戶要分析資料（csv / xlsx / json），可能需要畫圖。
+
+現階段可用工具有限 —— 請依以下規則拆解：
+- 讀資料：用 shell_exec_readonly 跑 `head`、`wc -l`、`python -c "import pandas..."` 探查結構
+- 分析：用 shell_exec_write 跑 Python 做統計
+- 畫圖技能還在開發中，若需要可用 matplotlib 輸出 PNG 檔，放在 /tmp/
+
+其他規則同 Code 模式：具體指令、cd 與動作同一步、禁止「請使用者自行執行」。
+
+輸出純 JSON 陣列，只輸出 JSON，不要任何其他文字。
+"""
+
+
+# Back-compat alias — some older code imports _PLAN_SYSTEM_BASE directly.
+_PLAN_SYSTEM_BASE = _PLAN_SYSTEM_CODE
+
+
+def _plan_prompt_for_mode(mode: str) -> str:
+    """Pick the plan-system prompt that matches the session's mode."""
+    if mode == "chat":     return _PLAN_SYSTEM_CHAT
+    if mode == "analytic": return _PLAN_SYSTEM_ANALYTIC
+    return _PLAN_SYSTEM_CODE   # default — safest for unknown modes
 
 
 class Orchestrator:
@@ -152,8 +185,9 @@ class Orchestrator:
             skills_used: list[str] = []
             new_skills:  list[str] = []
 
+            mode_value = req.mode.value if hasattr(req.mode, "value") else str(req.mode)
             for st in subtasks:
-                st = await self._run_subtask(st, req.context)
+                st = await self._run_subtask(st, req.context, mode=mode_value)
 
                 if st.skill_hint:
                     skills_used.append(st.skill_hint)
@@ -265,10 +299,13 @@ class Orchestrator:
             except Exception as exc:  # noqa: BLE001
                 logger.warning("Memory retrieval failed (non-fatal): %s", exc)
 
-        # Build a system prompt that includes memory when present
-        system_prompt = _PLAN_SYSTEM_BASE
-        if memory_ctx:
-            system_prompt = memory_ctx + "\n\n" + _PLAN_SYSTEM_BASE
+        # Pick the plan prompt based on the session's mode. This is the key
+        # insight behind the mode selector: instead of one prompt trying to
+        # classify the task, we hand Gemma a prompt already specialised for
+        # the user's declared intent.
+        mode_value = req.mode.value if hasattr(req.mode, "value") else str(req.mode)
+        base_prompt = _plan_prompt_for_mode(mode_value)
+        system_prompt = memory_ctx + "\n\n" + base_prompt if memory_ctx else base_prompt
 
         prompt = (
             f"Goal: {req.goal}\n\n"
@@ -341,7 +378,9 @@ class Orchestrator:
             st.order = idx
         return flattened
 
-    async def _run_subtask(self, st: SubTask, context: Dict[str, Any]) -> SubTask:
+    async def _run_subtask(
+        self, st: SubTask, context: Dict[str, Any], mode: str = "code",
+    ) -> SubTask:
         """Execute one subtask with retry; only escalate to Claude after all retries fail.
 
         Each attempt is wrapped with ``asyncio.wait_for(timeout=subtask_timeout)``
@@ -357,7 +396,7 @@ class Orchestrator:
         for attempt in range(max_local_retries):
             try:
                 st = await asyncio.wait_for(
-                    self.executor.execute(st, context),
+                    self.executor.execute(st, context, mode=mode),
                     timeout=float(subtask_timeout),
                 )
             except asyncio.TimeoutError:

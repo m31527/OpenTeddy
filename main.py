@@ -29,6 +29,7 @@ from models import (
     RunResponse,
     Session,
     SessionListResponse,
+    SessionMode,
     SkillListResponse,
     StatusResponse,
     TaskRequest,
@@ -208,18 +209,37 @@ async def run_task(body: RunRequest) -> RunResponse:
     # Use a client-supplied task_id when present so the UI can call
     # POST /tasks/{id}/cancel (Stop button) on the *same* id it sent.
     task_id = body.task_id or str(uuid.uuid4())
+
+    # Resolve the mode. Priority:
+    #   1. Explicit override in body.mode (rare — UI usually omits it)
+    #   2. The mode stored on the session row (what the user picked in the UI)
+    #   3. Default to CODE for back-compat with sessions that pre-date modes
+    resolved_mode = body.mode or SessionMode.CODE
+    if body.session_id and not body.mode:
+        try:
+            sess = await tracker.get_session(body.session_id)
+            if sess and sess.get("mode"):
+                resolved_mode = SessionMode(sess["mode"])
+        except Exception:  # noqa: BLE001
+            pass
+
     req = TaskRequest(
         id=task_id,
         goal=body.goal,
         context=body.context,
         priority=body.priority,
         session_id=body.session_id,
+        mode=resolved_mode,
     )
     # Auto-create the session row if the client gave us a new id so the
     # sessions list picks it up on refresh.
     if body.session_id:
         try:
-            await tracker.create_session(body.session_id, body.goal[:60] or "New session")
+            await tracker.create_session(
+                body.session_id,
+                body.goal[:60] or "New session",
+                mode=resolved_mode.value,
+            )
         except Exception:  # noqa: BLE001
             pass
 
@@ -298,19 +318,26 @@ async def list_sessions(limit: int = 50) -> SessionListResponse:
 
 @app.post("/sessions", response_model=Session)
 async def create_session(body: CreateSessionRequest) -> Session:
-    s = Session(title=body.title or "New session")
-    await tracker.create_session(s.id, s.title)
+    s = Session(
+        title=body.title or "New session",
+        mode=body.mode or SessionMode.CODE,
+    )
+    await tracker.create_session(s.id, s.title, mode=s.mode.value)
     return s
 
 
 @app.patch("/sessions/{session_id}", response_model=Session)
-async def rename_session(session_id: str, body: CreateSessionRequest) -> Session:
-    await tracker.rename_session(session_id, body.title or "Session")
-    rows = await tracker.list_sessions(limit=1000)
-    for r in rows:
-        if r["id"] == session_id:
-            return Session(**r)
-    raise HTTPException(status_code=404, detail="Session not found")
+async def update_session(session_id: str, body: CreateSessionRequest) -> Session:
+    # Update whichever fields the client sent. Title and mode are both
+    # optional — if neither is provided we just return the current row.
+    if body.title is not None:
+        await tracker.rename_session(session_id, body.title or "Session")
+    if body.mode is not None:
+        await tracker.update_session_mode(session_id, body.mode.value)
+    row = await tracker.get_session(session_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return Session(**row)
 
 
 @app.delete("/sessions/{session_id}")
