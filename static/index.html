@@ -820,6 +820,23 @@
     .type-conversation    { color: var(--warning); }
     .type-unknown         { color: var(--text-muted); }
     .memory-time    { font-size: 0.71rem; color: var(--text-muted); }
+    .memory-session-badge {
+      font-size: 0.67rem;
+      font-weight: 500;
+      color: var(--text-secondary);
+      background: var(--bg-primary);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 0.1rem 0.42rem;
+      max-width: 180px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .memory-session-badge.memory-session-orphan {
+      color: var(--text-muted);
+      font-style: italic;
+    }
     .memory-content { font-size: 0.84rem; color: var(--text-secondary); line-height: 1.5; word-break: break-word; }
     .memory-del-btn {
       background: transparent;
@@ -1439,7 +1456,8 @@
           <div class="chat-header-title-wrap">
             <span class="chat-header-title" id="chatHeaderTitle">New session</span>
             <span class="chat-header-workspace" id="chatHeaderWorkspace"
-              title="所有 git clone / build / 檔案寫入都發生在這個目錄底下。看這個位置不對請去 Settings → Agent Workspace 改。">📂 —</span>
+              onclick="editSessionWorkspace()"
+              title="點擊可為這個 session 指定專屬工作目錄（例如電腦上已存在的專案）。留空恢復預設 agent-workspace。">📂 —</span>
           </div>
           <div class="mode-switch" id="modeSwitch" role="tablist" aria-label="Session mode">
             <button type="button" class="mode-btn" data-mode="chat" onclick="changeMode('chat')" title="純文字推理（摘要、翻譯、問答）">
@@ -1939,30 +1957,74 @@
       if (el) el.textContent = _sessionTitles[_currentSessionId] || 'New session';
     }
 
-    // Query /debug/workspace once at startup and show the resolved absolute
-    // path under the session title. Users were getting burned by uvicorn
-    // launching from a surprise cwd — making the path visible kills that
-    // whole bug class. Silent best-effort; nothing breaks if the endpoint
-    // 404s on an older server.
+    // Query /debug/workspace (scoped to the active session) and show the
+    // effective absolute path under the session title. Session overrides
+    // are labeled with ⭐ so you can see at a glance which sessions use
+    // their own workspace vs. the global default.
     async function refreshWorkspaceIndicator() {
       const el = document.getElementById('chatHeaderWorkspace');
       if (!el) return;
       try {
-        const res = await fetch(`${API}/debug/workspace`);
+        const qs = _currentSessionId ? `?session_id=${encodeURIComponent(_currentSessionId)}` : '';
+        const res = await fetch(`${API}/debug/workspace${qs}`);
         if (!res.ok) return;
         const data = await res.json();
-        const path = data.agent_workspace_dir || '';
+        const path = data.effective_workspace || data.agent_workspace_dir || '';
         const n = data.entry_count ?? 0;
-        el.textContent = `📂 ${path} · ${n} items`;
+        const overridden = !!data.session_workspace_dir;
+        const prefix = overridden ? '⭐📂' : '📂';
+        const labelSuffix = overridden ? ' (session-specific)' : '';
+        el.textContent = `${prefix} ${path} · ${n} items${labelSuffix}`;
         el.title =
-          `Agent workspace: ${path}\n` +
-          `uvicorn cwd:      ${data.uvicorn_cwd}\n` +
-          `project root:     ${data.project_root}\n` +
-          `items present:    ${n}\n\n` +
+          `Effective workspace:  ${path}\n` +
+          `Global default:       ${data.agent_workspace_dir}\n` +
+          `Session override:     ${data.session_workspace_dir || '(none — using global)'}\n` +
+          `uvicorn cwd:          ${data.uvicorn_cwd}\n` +
+          `items present:        ${n}\n\n` +
           (data.exists
-            ? '✓ workspace exists. All git clones, builds, file writes land here.'
-            : '⚠️ workspace does NOT exist — create it or change the setting.');
+            ? '✓ workspace exists.\n'
+            : '⚠️ workspace does NOT exist — create it or change the setting.\n') +
+          '\n點擊可為這個 session 指定 / 清除專屬目錄。';
       } catch (e) { /* ignore */ }
+    }
+
+    // Edit this session's workspace via a prompt. Empty / whitespace
+    // clears the override (session falls back to the global default).
+    async function editSessionWorkspace() {
+      if (!_currentSessionId) return;
+      let current = '';
+      try {
+        const res = await fetch(`${API}/debug/workspace?session_id=${encodeURIComponent(_currentSessionId)}`);
+        if (res.ok) {
+          const d = await res.json();
+          current = d.session_workspace_dir || '';
+        }
+      } catch { /* ignore */ }
+      const next = prompt(
+        '為這個 session 指定工作目錄（絕對路徑，或相對於全域 agent-workspace）。\n' +
+        '留空 = 使用全域預設。\n\n' +
+        '例如：\n' +
+        '  /home/me/my-project     ← 電腦上已存在的專案\n' +
+        '  Pixelle-Video           ← 相對路徑（會解析到 <agent-workspace>/Pixelle-Video）\n' +
+        '  (留空)                  ← 清除 override，回到預設',
+        current,
+      );
+      if (next === null) return;  // cancelled
+      try {
+        const res = await fetch(`${API}/sessions/${_currentSessionId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ workspace_dir: next }),
+        });
+        if (!res.ok) throw new Error(res.statusText);
+        const trimmed = (next || '').trim();
+        toast(trimmed
+          ? `Session workspace 已設為：${trimmed}`
+          : 'Session workspace 清除，回到全域預設');
+        await refreshWorkspaceIndicator();
+      } catch (e) {
+        toast('更新失敗：' + e.message, true);
+      }
     }
 
     // Reflect the current session's mode in the segmented pill.
@@ -2085,7 +2147,8 @@
       showChatPanel();
       updateChatHeaderTitle();
       updateModeSwitchUI();
-      refreshMemoryCount();   // intentionally not awaited — fire and forget
+      refreshMemoryCount();        // intentionally not awaited — fire and forget
+      refreshWorkspaceIndicator(); // session workspace may differ from prev
       await loadChatHistory();
       closeSidebar();
     }
@@ -2692,11 +2755,20 @@
           const label     = { task_result: 'Task Result', user_preference: 'User Pref', system_context: 'System', conversation: 'Convo' }[m.type] || m.type;
           const time      = m.timestamp ? new Date(m.timestamp).toLocaleString() : '';
           const snippet   = escHtml((m.content || '').slice(0, 120)) + ((m.content || '').length > 120 ? '…' : '');
+          // Which session did this memory come from? The retrieval is
+          // still session-scoped (each session only sees its own during
+          // planning), but this tab is the cross-session view.
+          const sid = m.session_id || '';
+          const sessionTitle = _sessionTitles[sid] || (sid ? sid.slice(0, 8) : 'no-session');
+          const sessionBadge = sid
+            ? `<span class="memory-session-badge" title="${escHtml(sid)}">${escHtml(sessionTitle)}</span>`
+            : '<span class="memory-session-badge memory-session-orphan" title="no session_id">—</span>';
           return `
             <li class="memory-item" id="mem-${escHtml(m.id)}">
               <div class="memory-body">
                 <div class="memory-meta">
                   <span class="memory-type-badge ${typeClass}">${label}</span>
+                  ${sessionBadge}
                   <span class="memory-time">${time}</span>
                 </div>
                 <div class="memory-content">${snippet}</div>

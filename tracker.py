@@ -79,6 +79,8 @@ class Tracker:
             # Session mode selector (chat / code / analytic). Default 'code'
             # so existing sessions keep their full-autonomy behavior.
             "ALTER TABLE sessions ADD COLUMN mode TEXT NOT NULL DEFAULT 'code'",
+            # Per-session workspace override. Null = use global default.
+            "ALTER TABLE sessions ADD COLUMN workspace_dir TEXT",
         ]
         for sql in migrations:
             try:
@@ -218,6 +220,21 @@ class Tracker:
         await self.db.execute(
             "UPDATE sessions SET mode=?, updated_at=? WHERE id=?",
             (mode, datetime.utcnow().isoformat(), session_id),
+        )
+        await self.db.commit()
+
+    async def update_session_workspace(
+        self, session_id: str, workspace_dir: Optional[str],
+    ) -> None:
+        """Point this session at a specific workspace directory, or clear
+        the override (pass None) to fall back to config.agent_workspace_dir.
+
+        The caller is responsible for validating the path — we accept
+        any string, including one that doesn't exist yet (so the user
+        can pre-configure a session, then create the dir later)."""
+        await self.db.execute(
+            "UPDATE sessions SET workspace_dir=?, updated_at=? WHERE id=?",
+            (workspace_dir, datetime.utcnow().isoformat(), session_id),
         )
         await self.db.commit()
 

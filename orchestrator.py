@@ -224,6 +224,26 @@ class Orchestrator:
         """Full lifecycle: plan → execute → escalate → summarise."""
         logger.info("Orchestrator starting task %s: %s", req.id, req.goal)
 
+        # Apply per-session workspace override if one is configured.
+        # Setting this ContextVar scopes the override to this async task,
+        # so concurrent tasks in other sessions keep their own setting.
+        # The value is cleared in the `finally` at the end of run().
+        from config import set_session_workspace
+        session_ws: Optional[str] = None
+        if req.session_id:
+            try:
+                sess = await self.tracker.get_session(req.session_id)
+                if sess:
+                    session_ws = sess.get("workspace_dir") or None
+            except Exception:  # noqa: BLE001
+                pass
+        set_session_workspace(session_ws)
+        if session_ws:
+            logger.info(
+                "Task %s using session-specific workspace: %s",
+                req.id, session_ws,
+            )
+
         # Persist the task
         await self.tracker.create_task(req)
         await self.tracker.update_task_status(req.id, TaskStatus.RUNNING)
@@ -369,7 +389,12 @@ class Orchestrator:
         workspace_hint = ""
         if mode_value in ("code", "analytic"):
             try:
-                ws = config.agent_workspace_dir  # already absolute after config init
+                # Use effective workspace so Gemma sees THIS session's path
+                # (the user may have pointed this session at a specific
+                # project folder; telling Gemma "clone into agent-workspace"
+                # would be wrong in that case).
+                from config import effective_workspace_dir
+                ws = os.path.abspath(effective_workspace_dir())
                 ws_basename = os.path.basename(ws.rstrip("/"))
                 workspace_hint = (
                     f"\n\n【工作目錄 — 非常重要，常踩坑，一定要讀完】\n"

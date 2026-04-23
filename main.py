@@ -236,20 +236,36 @@ async def health() -> dict:
 
 
 @app.get("/debug/workspace")
-async def debug_workspace() -> dict:
+async def debug_workspace(session_id: Optional[str] = None) -> dict:
     """Return absolute path state so the user can verify where clones go.
 
-    Powers the UI's workspace indicator and the "why is my repo not
-    where I expected" debugging flow. Everything returned here is safe
-    to display — absolute paths only, no secrets.
+    When ``session_id`` is supplied, also returns that session's
+    workspace_dir override (or null if it inherits the global default)
+    plus a listing of ITS effective workspace.
+
+    Everything returned here is safe to display — absolute paths only,
+    no secrets.
     """
-    ws = os.path.abspath(config.agent_workspace_dir)
-    exists = os.path.isdir(ws)
+    global_ws = os.path.abspath(config.agent_workspace_dir)
+
+    # Figure out the effective workspace (session override vs global).
+    effective_ws = global_ws
+    session_override: Optional[str] = None
+    if session_id:
+        try:
+            sess = await tracker.get_session(session_id)
+            if sess and sess.get("workspace_dir"):
+                session_override = sess["workspace_dir"]
+                effective_ws = os.path.abspath(session_override)
+        except Exception:  # noqa: BLE001
+            pass
+
+    exists = os.path.isdir(effective_ws)
     entries: list[dict] = []
     if exists:
         try:
-            for name in sorted(os.listdir(ws)):
-                full = os.path.join(ws, name)
+            for name in sorted(os.listdir(effective_ws)):
+                full = os.path.join(effective_ws, name)
                 entries.append({
                     "name": name,
                     "is_dir": os.path.isdir(full),
@@ -258,12 +274,14 @@ async def debug_workspace() -> dict:
         except Exception:  # noqa: BLE001
             pass
     return {
-        "agent_workspace_dir": ws,
+        "agent_workspace_dir":   global_ws,
+        "session_workspace_dir": session_override,
+        "effective_workspace":   effective_ws,
         "exists": exists,
-        "uvicorn_cwd": os.getcwd(),
+        "uvicorn_cwd":  os.getcwd(),
         "project_root": os.path.dirname(os.path.abspath(__file__)),
-        "entry_count": len(entries),
-        "entries": entries[:50],  # cap to keep the response small
+        "entry_count":  len(entries),
+        "entries":      entries[:50],  # cap to keep the response small
     }
 
 
@@ -384,19 +402,31 @@ async def create_session(body: CreateSessionRequest) -> Session:
     s = Session(
         title=body.title or "New session",
         mode=body.mode or SessionMode.CODE,
+        workspace_dir=body.workspace_dir,
     )
     await tracker.create_session(s.id, s.title, mode=s.mode.value)
+    if s.workspace_dir:
+        await tracker.update_session_workspace(s.id, s.workspace_dir)
     return s
 
 
 @app.patch("/sessions/{session_id}", response_model=Session)
 async def update_session(session_id: str, body: CreateSessionRequest) -> Session:
-    # Update whichever fields the client sent. Title and mode are both
-    # optional — if neither is provided we just return the current row.
+    # Update whichever fields the client sent. All are optional —
+    # if none is provided we just return the current row.
     if body.title is not None:
         await tracker.rename_session(session_id, body.title or "Session")
     if body.mode is not None:
         await tracker.update_session_mode(session_id, body.mode.value)
+    if body.workspace_dir is not None:
+        # Empty string ⇒ clear the override (fall back to global default).
+        ws = body.workspace_dir.strip() or None
+        # Resolve relative user input against the global workspace so the
+        # UI can stay terse ("my-project" → <global>/my-project), while
+        # still accepting absolute paths verbatim (e.g. /home/me/repo).
+        if ws and not os.path.isabs(ws):
+            ws = os.path.abspath(os.path.join(config.agent_workspace_dir, ws))
+        await tracker.update_session_workspace(session_id, ws)
     row = await tracker.get_session(session_id)
     if not row:
         raise HTTPException(status_code=404, detail="Session not found")

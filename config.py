@@ -3,12 +3,45 @@ OpenTeddy Configuration
 Central configuration management using environment variables.
 """
 
+import contextvars
 import logging
 import os
 from dataclasses import dataclass, field
+from typing import Optional
 from dotenv import load_dotenv
 
 load_dotenv()
+
+
+# ── Session-scoped workspace override ─────────────────────────────────────────
+# A Code-mode session can point at a specific directory (e.g. the user's
+# real project checkout) instead of the shared agent-workspace sandbox.
+# The orchestrator sets this ContextVar at the start of each task; every
+# shell / deploy tool reads it via `effective_workspace_dir()` and falls
+# back to the global default when unset. ContextVars are task-local in
+# asyncio, so concurrent sessions don't stomp on each other.
+_session_workspace_var: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+    "openteddy_session_workspace", default=None,
+)
+
+
+def set_session_workspace(path: Optional[str]) -> None:
+    """Orchestrator calls this at the start of a task. Pass None to clear."""
+    _session_workspace_var.set(path or None)
+
+
+def effective_workspace_dir() -> str:
+    """Return the workspace the current async task should use.
+
+    Priority:
+      1. Session override (set via ``set_session_workspace``)
+      2. Global ``config.agent_workspace_dir`` (absolute after init)
+    Always returns an absolute path.
+    """
+    override = _session_workspace_var.get()
+    if override:
+        return override if os.path.isabs(override) else os.path.abspath(override)
+    return config.agent_workspace_dir
 
 # Resolve the project root from THIS file's location, not from the uvicorn
 # process cwd. Users launching `uvicorn main:app` from anywhere (home dir,

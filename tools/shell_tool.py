@@ -272,29 +272,42 @@ def _resolve_working_dir(working_dir: Optional[str]) -> str:
 
     Priority:
       1. An explicit ``working_dir`` arg from the LLM — resolved against
-         the agent workspace when relative, so ``../X`` can't escape.
-      2. ``config.agent_workspace_dir`` — the project-wide default
-      3. Falls back to the current process CWD if even that fails
+         the session's effective workspace when relative, so ``../X``
+         can't escape.
+      2. The session's effective workspace (per-session override or
+         global default — see config.effective_workspace_dir).
+      3. Falls back to the current process CWD if even that fails.
 
-    The directory is created on-demand so a freshly cloned project doesn't
-    have to ``mkdir`` it manually. Returns an absolute path.
+    The directory is created on-demand for the GLOBAL fallback workspace
+    only (it's our sandbox). Per-session workspaces are assumed to be
+    real project directories and are NOT auto-created — if you point
+    a session at a bogus path we want you to see the failure, not
+    silently create an empty directory.
+
+    Returns an absolute path.
     """
     # Late import to avoid a circular dep when tool_registry imports this
     # module during early module initialisation.
-    from config import config as _cfg
-    ws = getattr(_cfg, "agent_workspace_dir", None) or os.getcwd()
+    from config import config as _cfg, effective_workspace_dir
+    ws = effective_workspace_dir() or os.getcwd()
     ws = os.path.abspath(ws)
+    is_global_ws = (ws == _cfg.agent_workspace_dir)
+
     if not working_dir:
         chosen_abs = ws
     elif os.path.isabs(working_dir):
         chosen_abs = working_dir
     else:
-        # Resolve relative paths against the workspace, NOT the uvicorn cwd.
+        # Resolve relative paths against the effective workspace, NOT
+        # the uvicorn cwd — same as for the session default.
         chosen_abs = os.path.abspath(os.path.join(ws, working_dir))
-    try:
-        os.makedirs(chosen_abs, exist_ok=True)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("Could not ensure working dir %s exists: %s", chosen_abs, exc)
+
+    # Only auto-create the GLOBAL sandbox. Per-session paths must exist.
+    if is_global_ws and chosen_abs.startswith(ws):
+        try:
+            os.makedirs(chosen_abs, exist_ok=True)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Could not ensure working dir %s exists: %s", chosen_abs, exc)
     return chosen_abs
 
 
