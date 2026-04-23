@@ -534,114 +534,128 @@
       position: fixed;
       top: 0; left: 0; right: 0;
       z-index: 9999;
-      background: #d97757;
-      color: white;
-      padding: 14px 24px;
+      background: var(--surface);
+      color: var(--text-primary);
+      border-bottom: 1px solid var(--accent);
+      padding: 10px 20px;
       align-items: center;
       justify-content: space-between;
-      font-size: 15px;
-      font-weight: 600;
-      box-shadow: 0 2px 12px rgba(0,0,0,0.2);
-      animation: banner-pulse 2s infinite;
+      font-size: 0.88rem;
+      font-weight: 500;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.08);
     }
     #approval-banner.visible { display: flex; }
-    @keyframes banner-pulse {
-      0%, 100% { background: #d97757; }
-      50%       { background: #c4623e; }
-    }
     #approval-banner .banner-btn {
-      background: white;
-      color: #d97757;
+      background: var(--text-primary);
+      color: #fff;
       border: none;
-      border-radius: 8px;
-      padding: 6px 16px;
-      font-size: 14px;
-      font-weight: 600;
+      border-radius: 7px;
+      padding: 6px 14px;
+      font-size: 0.82rem;
+      font-weight: 500;
       cursor: pointer;
       white-space: nowrap;
       flex-shrink: 0;
     }
-    #approval-banner .banner-btn:hover { background: #f5f5f5; }
+    #approval-banner .banner-btn:hover { background: #333; }
 
     /* Push whole layout down when banner is visible */
     body.has-banner .app-layout { height: calc(100vh - 53px); margin-top: 53px; }
 
-    /* ── Approval Card (in-chat) ─────────────────────────────────────────── */
+    /* ── Approval Card (in-chat) — Claude Code style ─────────────────────── */
     .approval-card {
-      background: #fff8f0;
-      border: 2.5px solid #d97757;
-      border-radius: 16px;
-      padding: 20px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px 18px;
       margin: 4px 0;
-      box-shadow: 0 4px 20px rgba(217, 119, 87, 0.25);
+      box-shadow: 0 1px 3px rgba(0,0,0,0.04);
       align-self: stretch;
-      animation: pulse-border 2s infinite;
-    }
-    @keyframes pulse-border {
-      0%, 100% { box-shadow: 0 4px 20px rgba(217, 119, 87, 0.25); }
-      50%       { box-shadow: 0 4px 28px rgba(217, 119, 87, 0.5); }
     }
     .approval-card .approval-header {
-      font-size: 16px;
+      font-size: 0.95rem;
       font-weight: 600;
-      color: #c4623e;
+      color: var(--text-primary);
       margin-bottom: 10px;
-      display: flex;
-      align-items: center;
-      gap: 8px;
+    }
+    .approval-card .approval-header .approval-tool-name {
+      font-family: 'Courier New', monospace;
+      color: var(--purple);
     }
     .approval-card .approval-command {
-      background: #1a1a1a;
-      color: #f0ede8;
+      background: var(--bg-secondary);
+      color: var(--text-primary);
       border-radius: 8px;
       padding: 10px 14px;
-      font-family: monospace;
-      font-size: 13px;
-      margin: 10px 0;
+      font-family: 'Courier New', monospace;
+      font-size: 0.82rem;
+      line-height: 1.5;
+      margin: 8px 0;
       word-break: break-all;
       white-space: pre-wrap;
-      max-height: 140px;
+      max-height: 160px;
       overflow-y: auto;
     }
-    .approval-card .approval-card-meta {
-      font-size: 0.74rem;
+    .approval-card .approval-subtext {
+      font-size: 0.78rem;
       color: var(--text-muted);
-      margin-bottom: 10px;
+      margin: 10px 0 4px;
     }
     .approval-card .approval-card-actions {
       display: flex;
-      gap: 10px;
+      justify-content: flex-end;
+      gap: 8px;
       margin-top: 14px;
+      flex-wrap: wrap;
     }
-    .approval-card .btn-card-approve {
-      flex: 1;
-      padding: 10px;
-      font-size: 15px;
-      font-weight: 600;
-      background: #1a1a1a;
-      color: white;
-      border: none;
-      border-radius: 10px;
+    /* Claude Code-style buttons with kbd hints */
+    .approval-card .btn-approval {
+      padding: 8px 14px;
+      font-size: 0.86rem;
+      font-weight: 500;
+      font-family: inherit;
+      border-radius: 8px;
       cursor: pointer;
-      transition: background 0.15s;
+      transition: background 0.15s, border-color 0.15s;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      line-height: 1;
     }
-    .approval-card .btn-card-approve:hover { background: #333; }
-    .approval-card .btn-card-reject {
-      flex: 1;
-      padding: 10px;
-      font-size: 15px;
-      font-weight: 600;
+    .approval-card .btn-approval kbd {
+      font-family: inherit;
+      font-size: 0.72rem;
+      color: var(--text-muted);
+      letter-spacing: 0;
+      white-space: nowrap;
+    }
+    /* Deny — left-most, ghost style */
+    .approval-card .btn-deny {
       background: transparent;
-      color: #cc3333;
-      border: 2px solid #cc3333;
-      border-radius: 10px;
-      cursor: pointer;
-      transition: background 0.15s;
+      border: 1px solid var(--border);
+      color: var(--text-primary);
+      margin-right: auto;  /* push to the left, approve buttons to right */
     }
-    .approval-card .btn-card-reject:hover { background: #fff0f0; }
+    .approval-card .btn-deny:hover { background: var(--bg-secondary); }
+    /* Allow once — light */
+    .approval-card .btn-allow-once {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text-primary);
+    }
+    .approval-card .btn-allow-once:hover { background: var(--bg-secondary); }
+    .approval-card .btn-allow-once kbd { color: var(--text-secondary); }
+    /* Always allow — primary dark */
+    .approval-card .btn-allow-always {
+      background: var(--text-primary);
+      color: #fff;
+      border: 1px solid var(--text-primary);
+    }
+    .approval-card .btn-allow-always:hover { background: #333; }
+    .approval-card .btn-allow-always kbd { color: rgba(255,255,255,0.65); }
+
     .approval-card.resolved {
       opacity: 0.55;
-      animation: none;
       border-color: var(--border);
       box-shadow: none;
     }
@@ -2629,6 +2643,18 @@
       } catch (e) { /* ignore */ }
     }
 
+    // Tracks the currently-visible in-chat approval card so keyboard
+    // shortcuts (Esc / ⌘↵ / ⌘⇧↵) can act on "the latest one you see".
+    // When an approval resolves, we clear this so the shortcuts go back
+    // to being no-ops until the next prompt.
+    let _activeApprovalCard = null;
+
+    // Session-scoped set of tool names the user has chosen to "Always allow".
+    // Not persisted — the user starts fresh every server run, which is the
+    // safer default for a dev tool. (If we persisted it the user could
+    // forget they'd whitelisted a dangerous tool weeks ago.)
+    const _alwaysAllowedTools = new Set();
+
     function handleApprovalRequired(data) {
       const approvalId = data.approval_id || data.id || '';
       const toolName   = data.tool_name   || data.tool || 'Unknown Tool';
@@ -2636,48 +2662,88 @@
       const taskId     = data.task_id     || '';
       const argsStr    = JSON.stringify(args, null, 2);
 
+      // Auto-approve if the user previously picked "Always allow" for
+      // this tool in the current session. Fire-and-forget the HTTP call.
+      if (_alwaysAllowedTools.has(toolName)) {
+        fetch(`${API}/approvals/${approvalId}/approve`, { method: 'POST' })
+          .catch(() => {});
+        toast(`Auto-approved: ${toolName} (always allow this session)`);
+        return;
+      }
+
       const card = document.createElement('div');
       card.className = 'approval-card';
       card.id = `chat-approval-${escHtml(approvalId)}`;
+      card.dataset.approvalId = approvalId;
+      card.dataset.toolName   = toolName;
+      // Use the macOS-ish symbols that Claude Code uses (⌘⇧↵). On
+      // Windows/Linux ⌘ reads as "Cmd" but the symbol is universally
+      // recognisable as "the modifier key".
       card.innerHTML = `
-        <div class="approval-header">⚠️ 需要你的確認</div>
-        <div style="font-size:0.9rem;color:var(--text-secondary);margin-bottom:6px">
-          工具 <strong>${escHtml(toolName)}</strong> 需要執行以下操作：
-        </div>
+        <div class="approval-header">Allow OpenTeddy to run <span class="approval-tool-name">${escHtml(toolName)}</span>?</div>
         <div class="approval-command">${escHtml(argsStr)}</div>
-        <div class="approval-card-meta">Task: <code>${escHtml(taskId)}</code></div>
+        <div class="approval-subtext">This command requires approval · Task <code>${escHtml(taskId.slice(0, 8))}</code></div>
         <div class="approval-card-actions">
-          <button class="btn-card-approve"
-            onclick="resolveChatApproval('${escHtml(approvalId)}', true, this)">✅ 批准</button>
-          <button class="btn-card-reject"
-            onclick="resolveChatApproval('${escHtml(approvalId)}', false, this)">❌ 拒絕</button>
+          <button class="btn-approval btn-deny"
+            onclick="resolveChatApproval('${escHtml(approvalId)}', 'deny', this)">
+            Deny <kbd>esc</kbd>
+          </button>
+          <button class="btn-approval btn-allow-once"
+            onclick="resolveChatApproval('${escHtml(approvalId)}', 'once', this)">
+            Allow once <kbd>⌘⇧↵</kbd>
+          </button>
+          <button class="btn-approval btn-allow-always"
+            onclick="resolveChatApproval('${escHtml(approvalId)}', 'always', this)">
+            Always allow <kbd>⌘↵</kbd>
+          </button>
         </div>`;
       appendToChat(card);
+      _activeApprovalCard = card;
       pollApprovals();
     }
 
-    async function resolveChatApproval(approvalId, approved, btn) {
-      const action = approved ? 'approve' : 'reject';
+    async function resolveChatApproval(approvalId, action, btn) {
+      // action: 'deny' | 'once' | 'always'
+      const approved = (action !== 'deny');
+      const endpoint = approved ? 'approve' : 'reject';
       const card   = document.getElementById(`chat-approval-${approvalId}`);
-      if (btn) btn.disabled = true;
+
+      // "Always allow" first records the choice (so any queued approvals
+      // for the same tool get auto-resolved), then falls through to the
+      // normal approve path for THIS one.
+      if (action === 'always' && card?.dataset.toolName) {
+        _alwaysAllowedTools.add(card.dataset.toolName);
+      }
+
+      // Disable all buttons in this card to prevent double-click.
+      card?.querySelectorAll('button').forEach(b => (b.disabled = true));
       try {
-        const res = await fetch(`${API}/approvals/${approvalId}/${action}`, { method: 'POST' });
+        const res = await fetch(`${API}/approvals/${approvalId}/${endpoint}`, { method: 'POST' });
         if (!res.ok) {
           const err = await res.json();
           toast(err.detail || 'Failed', true);
-          if (btn) btn.disabled = false;
+          card?.querySelectorAll('button').forEach(b => (b.disabled = false));
           return;
         }
         if (card) {
           card.classList.add('resolved');
           const actionsDiv = card.querySelector('.approval-card-actions');
           if (actionsDiv) {
-            actionsDiv.innerHTML = `<span style="color:${approved ? 'var(--success)' : 'var(--error)'};font-weight:600">
-              ${approved ? '✅ 已批准 — 任務繼續執行' : '❌ 已拒絕 — 代理將嘗試其他方案'}
-            </span>`;
+            const msg = {
+              deny:   '❌ Denied — agent will try an alternative',
+              once:   '✅ Allowed once — task continuing',
+              always: `✅ Always allowed for ${escHtml(card.dataset.toolName)} this session`,
+            }[action];
+            actionsDiv.innerHTML = `<span style="color:${approved ? 'var(--success)' : 'var(--error)'};font-size:0.82rem;font-weight:500">${msg}</span>`;
           }
         }
-        toast(approved ? '✅ 已批准 — 任務繼續執行' : '❌ 已拒絕 — 代理將嘗試其他方案');
+        if (_activeApprovalCard === card) _activeApprovalCard = null;
+        const toastMsg = {
+          deny:   '❌ Denied',
+          once:   '✅ Allowed once',
+          always: `✅ Always allow: ${card?.dataset.toolName || ''}`,
+        }[action];
+        toast(toastMsg);
         setTimeout(pollApprovals, 400);
       } catch (e) {
         toast('Error: ' + e.message, true);
@@ -3219,9 +3285,44 @@
       }
     }
 
+    // ── Keyboard shortcuts for the approval card ────────────────────────────
+    // Mirrors Claude Code's convention:
+    //   Esc        → Deny
+    //   ⌘⇧↵ / ^⇧↵  → Allow once
+    //   ⌘↵  / ^↵   → Always allow (for this tool, this session)
+    // We only act when an approval card is currently visible and the user
+    // isn't typing into a textarea / input (so they can still type normally
+    // while a card is on screen).
+    function installApprovalShortcuts() {
+      document.addEventListener('keydown', (e) => {
+        if (!_activeApprovalCard) return;
+        const tag = (e.target && e.target.tagName) || '';
+        const typing = tag === 'TEXTAREA' || tag === 'INPUT' || e.target?.isContentEditable;
+
+        // Esc always works even while typing — it's the standard cancel.
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          const id = _activeApprovalCard.dataset.approvalId;
+          if (id) resolveChatApproval(id, 'deny', null);
+          return;
+        }
+        // ⌘/Ctrl shortcuts: ignore when user is typing to avoid stealing
+        // legitimate newlines / copy-paste.
+        if (typing) return;
+        if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+          e.preventDefault();
+          const id = _activeApprovalCard.dataset.approvalId;
+          if (!id) return;
+          const action = e.shiftKey ? 'once' : 'always';
+          resolveChatApproval(id, action, null);
+        }
+      });
+    }
+
     // ── Init ─────────────────────────────────────────────────────────────────
     window.onload = async () => {
       initWS();
+      installApprovalShortcuts();
       await loadSessions();
       await loadChatHistory();
       refreshMemoryCount();        // initial fill for the 🧠 badge
