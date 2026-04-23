@@ -374,6 +374,57 @@ class MemoryManager:
             logger.error("clear_all failed: %s", exc)
             return 0
 
+    async def clear_session(self, session_id: str) -> int:
+        """
+        Delete every memory tagged with this session_id.
+
+        Core fix for cross-task contamination WITHIN a session — if you
+        start working on a new project but stay in the same session,
+        memories from the previous project will otherwise keep surfacing
+        in Gemma's plan context. This gives the UI a "Clear session
+        memory" button so the user doesn't have to spin up a new session
+        for every new project.
+
+        Returns the number of records removed.
+        """
+        if not self.is_available or not session_id:
+            return 0
+        try:
+            # ChromaDB supports metadata-filtered delete via the `where`
+            # kwarg. Count first so we can return a useful number.
+            probe = self._collection.get(  # type: ignore[union-attr]
+                where={"session_id": session_id}, include=[],
+            )
+            ids = probe.get("ids") or []
+            if not ids:
+                return 0
+            self._collection.delete(where={"session_id": session_id})  # type: ignore[union-attr]
+            logger.info(
+                "MemoryManager cleared %d memories for session %s",
+                len(ids), session_id,
+            )
+            return len(ids)
+        except Exception as exc:  # noqa: BLE001
+            logger.error("clear_session failed for %s: %s", session_id, exc)
+            return 0
+
+    async def count_for_session(self, session_id: str) -> int:
+        """How many memories does this session currently hold?
+
+        Powers the small badge next to the 'Clear memory' button so the
+        user can see the pollution level before they clear.
+        """
+        if not self.is_available or not session_id:
+            return 0
+        try:
+            probe = self._collection.get(  # type: ignore[union-attr]
+                where={"session_id": session_id}, include=[],
+            )
+            return len(probe.get("ids") or [])
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("count_for_session failed: %s", exc)
+            return 0
+
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 

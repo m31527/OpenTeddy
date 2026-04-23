@@ -320,6 +320,39 @@
       letter-spacing: 0.04em;
     }
 
+    /* Memory count / clear button in the chat header */
+    .mem-btn {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      color: var(--text-secondary);
+      border-radius: 999px;
+      padding: 5px 10px;
+      font-size: 0.78rem;
+      font-weight: 500;
+      font-family: inherit;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      flex-shrink: 0;
+      transition: background 0.15s, color 0.15s, border-color 0.15s;
+    }
+    .mem-btn:hover {
+      background: var(--bg-primary);
+      color: var(--text-primary);
+      border-color: var(--text-secondary);
+    }
+    /* Warn when memory is getting big — 10+ records is usually where
+       cross-project contamination starts to bite. */
+    .mem-btn.high-memory {
+      background: #fff4ec;
+      color: var(--warning);
+      border-color: #fdba74;
+    }
+    .mem-btn.high-memory:hover {
+      background: #fde8d6;
+    }
+
     /* Mode badge next to each session item in the sidebar */
     .session-mode-badge {
       font-size: 0.6rem;
@@ -1397,6 +1430,10 @@
               <span class="mode-emoji">📊</span><span>Analytic</span><span class="mode-beta">BETA</span>
             </button>
           </div>
+          <button type="button" id="memoryBtn" class="mem-btn" onclick="clearSessionMemory()"
+            title="這個 session 累積的長期記憶數量（舊專案記憶可能干擾新任務 → 點一下清空）">
+            <span>🧠</span><span id="memoryCount">—</span>
+          </button>
         </div>
         <div class="chat-layout">
           <div class="chat-messages" id="chatMessages">
@@ -1871,6 +1908,47 @@
       });
     }
 
+    // Refresh the "🧠 N" badge in the chat header so the user can see
+    // how much accumulated long-term memory this session is feeding to
+    // Gemma. High counts are the usual cause of cross-project leakage
+    // (e.g. mold-harvester memories surfacing in a new Pixelle-Video task).
+    async function refreshMemoryCount() {
+      const btn = document.getElementById('memoryBtn');
+      const label = document.getElementById('memoryCount');
+      if (!btn || !label || !_currentSessionId) return;
+      try {
+        const res = await fetch(`${API}/sessions/${_currentSessionId}/memory`);
+        if (!res.ok) return;
+        const data = await res.json();
+        label.textContent = data.count ?? 0;
+        btn.classList.toggle('high-memory', (data.count ?? 0) >= 10);
+      } catch (e) {
+        /* silently ignore — the badge is a nice-to-have */
+      }
+    }
+
+    async function clearSessionMemory() {
+      if (!_currentSessionId) return;
+      if (!confirm(
+        '清空這個 session 的長期記憶？\n\n' +
+        '這只會清 ChromaDB 裡屬於這個 session 的向量記憶 —— ' +
+        '聊天紀錄（SQLite tasks 表）不會動。\n\n' +
+        '適合情境：你換做新專案但還在同一個 session，' +
+        '不想讓舊專案的記憶干擾 Gemma 規劃。'
+      )) return;
+      try {
+        const res = await fetch(`${API}/sessions/${_currentSessionId}/memory`, {
+          method: 'DELETE',
+        });
+        if (!res.ok) throw new Error(res.statusText);
+        const data = await res.json();
+        toast(`🧹 清除了 ${data.deleted_count} 筆記憶 — Gemma 下次規劃會從零開始`);
+        await refreshMemoryCount();
+      } catch (e) {
+        toast('清除失敗：' + e.message, true);
+      }
+    }
+
     // Change the active session's mode. Persists to the server via PATCH
     // so refreshes / other tabs see the choice.
     async function changeMode(mode) {
@@ -1942,6 +2020,7 @@
       showChatPanel();
       updateChatHeaderTitle();
       updateModeSwitchUI();
+      refreshMemoryCount();   // intentionally not awaited — fire and forget
       await loadChatHistory();
       closeSidebar();
     }
@@ -2284,7 +2363,13 @@
         setRunningState(false);
         _runAbort      = null;
         _currentTaskId = null;
-        if (!aborted) loadSessions().catch(() => {});
+        if (!aborted) {
+          loadSessions().catch(() => {});
+          // A completed task may have stored new summaries to memory —
+          // refresh the badge so the user sees the pollution growing if
+          // they keep stacking projects in one session.
+          refreshMemoryCount();
+        }
       }
     }
 
@@ -2996,6 +3081,7 @@
       initWS();
       await loadSessions();
       await loadChatHistory();
+      refreshMemoryCount();   // initial fill for the 🧠 badge
       loadSkills();
       loadTools();
       pollApprovals();
