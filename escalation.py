@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
-from typing import Dict
+from typing import Any, Callable, Dict, List, Optional
 
 import anthropic
 
@@ -111,6 +111,275 @@ class EscalationAgent:
         subtask.completed_at = datetime.utcnow()
         await self.tracker.update_subtask(subtask)
         return subtask
+
+    async def resolve_whole_task(
+        self,
+        task: Dict[str, Any],
+        subtasks: List[Dict[str, Any]],
+        tool_registry,
+        session_id: Optional[str] = None,
+        user_hint: Optional[str] = None,
+        ws_callback: Optional[Callable] = None,
+        max_turns: int = 15,
+    ) -> Dict[str, Any]:
+        """User-triggered whole-task takeover. Given the full history of
+        local-model attempts on a failed task, let Claude drive the
+        remaining work end-to-end with full tool access.
+
+        Differs from ``resolve()`` in three ways:
+
+          1. **Scope** — sees the whole task + all subtask attempts, not
+             one lonely subtask. That's what lets it fix the
+             "Dockerfile COPY order" / "missing env var" kind of bugs
+             a single-subtask escalation can't reason about.
+          2. **Tool use** — Claude calls tools directly (shell, file,
+             docker helpers, deploy tools) via the Anthropic tool-use
+             loop. No hand-off back to Qwen.
+          3. **User-gated** — only runs when the UI button is clicked,
+             so the token spend is opt-in.
+
+        Returns ``{success, summary, tools_used, turns}``.
+        """
+        registry = tool_registry
+        task_id = task.get("id", "")
+
+        # Convert Ollama-format schemas → Anthropic tool_use format.
+        # Ollama: {type: function, function: {name, description, parameters}}
+        # Anthropic: {name, description, input_schema}
+        anthropic_tools: List[Dict[str, Any]] = []
+        for schema in registry.get_schemas():
+            fn = schema.get("function", {})
+            anthropic_tools.append({
+                "name":        fn.get("name", ""),
+                "description": fn.get("description", ""),
+                "input_schema": fn.get(
+                    "parameters", {"type": "object", "properties": {}},
+                ),
+            })
+
+        # Build the prior-attempts digest. Cap each field so the total
+        # context stays reasonable even on a 10-subtask task.
+        prior_lines: List[str] = []
+        for idx, st in enumerate(subtasks, 1):
+            desc   = (st.get("description") or "")[:300]
+            status = st.get("status", "?")
+            conf   = float(st.get("confidence", 0) or 0)
+            result = (st.get("result") or "")[:600]
+            err    = (st.get("error")  or "")[:400]
+            block = [f"#{idx} [{status} conf={conf:.2f}] {desc}"]
+            if result:
+                block.append(f"    result: {result}")
+            if err:
+                block.append(f"    error:  {err}")
+            prior_lines.append("\n".join(block))
+        prior_text = "\n\n".join(prior_lines) if prior_lines else "(no subtasks recorded)"
+
+        system = (
+            "You are Claude, taking over a task that OpenTeddy's local models "
+            "(Gemma + Qwen) could not complete. You have full tool access — "
+            "shell_exec_readonly/write, read_file/write_file, http_request, "
+            "docker_project_detect, docker_diagnose, compose_validate, "
+            "env_file_lint, compose_remap_port, port_probe, and any registered "
+            "skills.\n\n"
+            "Your job:\n"
+            "  1. READ the actual project state with tools — don't trust the "
+            "     prior attempts' summaries blindly, they may have been wrong.\n"
+            "  2. Identify the ROOT CAUSE (e.g. Dockerfile COPY order, missing "
+            "     env var, port conflict, bad healthcheck).\n"
+            "  3. FIX it directly — write files, run commands, rebuild, verify.\n"
+            "  4. When the task is complete and verified, write a concise final "
+            "     summary (no tool call). Include what you changed and any URL "
+            "     the user can visit.\n\n"
+            "Constraints:\n"
+            "  - Session workspace is the cwd for all shell commands.\n"
+            "  - High-risk tools auto-queue for the user's approval — just call "
+            "    them normally, the system handles the gate.\n"
+            "  - Do NOT narrate commands the user should run — YOU run them.\n"
+            "  - If truly stuck, explain what's blocking in the final summary "
+            "    so the user knows what to do."
+        )
+
+        user_msg_parts = [
+            f"Task goal:\n{task.get('goal', '(unknown)')}",
+            "",
+            f"Prior subtask attempts by local models ({len(subtasks)}):",
+            prior_text,
+        ]
+        if user_hint:
+            user_msg_parts += ["", f"User hint: {user_hint}"]
+        user_msg_parts += [
+            "",
+            "Please investigate, fix the root cause, and complete the task. "
+            "Use tools as needed. When done, reply with a final summary "
+            "(no tool calls).",
+        ]
+
+        messages: List[Dict[str, Any]] = [
+            {"role": "user", "content": "\n".join(user_msg_parts)},
+        ]
+
+        tools_used: List[str] = []
+        total_tokens_in = 0
+        total_tokens_out = 0
+
+        logger.info(
+            "Claude whole-task takeover starting for task=%s (%d prior subtasks)",
+            task_id, len(subtasks),
+        )
+
+        for turn in range(max_turns):
+            try:
+                response = await self._claude.messages.create(
+                    model=config.claude_model,
+                    max_tokens=4096,
+                    system=system,
+                    tools=anthropic_tools,
+                    messages=messages,
+                )
+            except anthropic.APIError as exc:
+                logger.error("Claude API error on turn %d: %s", turn, exc)
+                return {
+                    "success":   False,
+                    "summary":   f"Claude API error: {exc}",
+                    "tools_used": tools_used,
+                    "turns":     turn + 1,
+                }
+
+            # Record usage so the Usage tab reflects the opt-in cost.
+            u = response.usage
+            total_tokens_in  += u.input_tokens
+            total_tokens_out += u.output_tokens
+            try:
+                await self.tracker.record_usage(
+                    task_id=task_id,
+                    model=config.claude_model,
+                    model_provider="anthropic",
+                    tokens_in=u.input_tokens,
+                    tokens_out=u.output_tokens,
+                    task_description=f"[claude-fix turn {turn}] {task.get('goal', '')[:200]}",
+                )
+            except Exception:  # noqa: BLE001
+                pass
+
+            # Claude's content is a list of blocks: either {type: text} or
+            # {type: tool_use, name, input, id}. Collect both.
+            tool_use_blocks = [
+                b for b in response.content if getattr(b, "type", "") == "tool_use"
+            ]
+            text_blocks = [
+                getattr(b, "text", "")
+                for b in response.content
+                if getattr(b, "type", "") == "text"
+            ]
+
+            if not tool_use_blocks:
+                # Final answer — Claude is done.
+                final_text = "\n\n".join(t for t in text_blocks if t).strip()
+                logger.info(
+                    "Claude finished in %d turn(s), %d tokens in / %d out, "
+                    "tools used: %s",
+                    turn + 1, total_tokens_in, total_tokens_out, tools_used,
+                )
+                return {
+                    "success":   True,
+                    "summary":   final_text or "(Claude returned no text)",
+                    "tools_used": tools_used,
+                    "turns":     turn + 1,
+                    "tokens_in": total_tokens_in,
+                    "tokens_out": total_tokens_out,
+                }
+
+            # Record the assistant's turn verbatim so the next call has full history.
+            messages.append({"role": "assistant", "content": response.content})
+
+            # Execute every tool call in this turn.
+            tool_results_content: List[Dict[str, Any]] = []
+            for idx, block in enumerate(tool_use_blocks):
+                tool_name = block.name
+                tool_args = dict(block.input) if isinstance(block.input, dict) else {}
+                tools_used.append(tool_name)
+
+                logger.info(
+                    "Claude turn=%d idx=%d tool=%s args=%s",
+                    turn, idx, tool_name, tool_args,
+                )
+
+                if ws_callback:
+                    try:
+                        await ws_callback({
+                            "event":    "tool_call",
+                            "round":    100 + turn,  # offset so UI keys don't clash with Qwen rounds
+                            "call_idx": idx,
+                            "tool":     tool_name,
+                            "args":     tool_args,
+                            "task_id":  task_id,
+                            "source":   "claude-fix",
+                        })
+                    except Exception:  # noqa: BLE001
+                        pass
+
+                try:
+                    result = await registry.execute(
+                        tool_name, tool_args, task_id=task_id,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    result = {"success": False, "error": f"Tool execution crashed: {exc}"}
+
+                # Truncate tool output so a huge stdout doesn't bloat the
+                # next Claude call's context window.
+                output_text: str
+                if isinstance(result.get("result"), dict):
+                    output_text = (
+                        result["result"].get("stdout")
+                        or result["result"].get("stderr")
+                        or str(result["result"])
+                    )
+                else:
+                    output_text = str(result.get("result") or result.get("error", ""))
+                output_text = output_text[:4000]
+
+                if ws_callback:
+                    try:
+                        await ws_callback({
+                            "event":    "tool_result",
+                            "round":    100 + turn,
+                            "call_idx": idx,
+                            "tool":     tool_name,
+                            "success":  bool(result.get("success")),
+                            "output":   output_text[:500],
+                            "error":    result.get("error") if not result.get("success") else "",
+                            "task_id":  task_id,
+                            "source":   "claude-fix",
+                        })
+                    except Exception:  # noqa: BLE001
+                        pass
+
+                tool_results_content.append({
+                    "type":        "tool_result",
+                    "tool_use_id": block.id,
+                    "content":     output_text or "(no output)",
+                    "is_error":    not result.get("success"),
+                })
+
+            messages.append({"role": "user", "content": tool_results_content})
+
+        # max_turns exhausted
+        logger.warning(
+            "Claude whole-task takeover hit max_turns=%d for task %s",
+            max_turns, task_id,
+        )
+        return {
+            "success":   False,
+            "summary": (
+                f"Claude ran {max_turns} turns without converging on a final "
+                "answer. The task may need manual attention, a bigger model, "
+                "or a user hint passed via the 'hint' parameter."
+            ),
+            "tools_used": tools_used,
+            "turns":     max_turns,
+            "tokens_in": total_tokens_in,
+            "tokens_out": total_tokens_out,
+        }
 
     async def synthesize_summary(
         self,

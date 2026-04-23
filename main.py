@@ -368,6 +368,81 @@ async def cancel_task(task_id: str) -> dict:
     return {"cancelled": True, "task_id": task_id}
 
 
+@app.post("/tasks/{task_id}/claude-fix", status_code=202)
+async def claude_fix_task(task_id: str, body: Optional[dict] = None) -> dict:
+    """User-triggered "Let Claude fix this" button.
+
+    Loads the failed task + all subtask attempts, hands them to Claude
+    with full tool access, and lets Claude drive the remaining work
+    end-to-end. Responds immediately (202) and does the heavy lifting
+    in the background; progress flows through the usual WebSocket
+    tool_call / tool_result events so the UI can show what Claude's
+    doing in real time.
+
+    Optional body: {"hint": "...extra user guidance for Claude..."}.
+    """
+    task = await tracker.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    subtasks_raw = await tracker.get_subtasks(task_id)
+    # Tracker returns SubTask objects; normalise to plain dicts for the
+    # escalation agent so it doesn't need to know the SubTask shape.
+    subtasks = [s.model_dump() if hasattr(s, "model_dump") else dict(s) for s in subtasks_raw]
+    user_hint = (body or {}).get("hint") if body else None
+
+    # Apply the session's workspace context var so any shell commands
+    # Claude runs land in the same dir as the original task.
+    session_id = task.get("session_id")
+    if session_id:
+        try:
+            sess = await tracker.get_session(session_id)
+            if sess and sess.get("workspace_dir"):
+                from config import set_session_workspace
+                set_session_workspace(sess["workspace_dir"])
+        except Exception:  # noqa: BLE001
+            pass
+
+    async def _run_claude_fix() -> None:
+        try:
+            result = await escalation_agent.resolve_whole_task(
+                task=task,
+                subtasks=subtasks,
+                tool_registry=tool_registry,
+                session_id=session_id,
+                user_hint=user_hint,
+                ws_callback=ws_manager.broadcast,
+            )
+            final_status = TaskStatus.COMPLETED if result.get("success") else TaskStatus.ESCALATED
+            summary = result.get("summary") or "(Claude returned no summary)"
+            # Prepend a marker so the user can tell which summary came
+            # from a Claude fix vs the original local run.
+            marked = f"🛠️ **Claude Fix**\n\n{summary}"
+            try:
+                await tracker.update_task_status(task_id, final_status, marked)
+            except Exception:  # noqa: BLE001
+                pass
+            await ws_manager.broadcast({
+                "event":    "claude_fix_done",
+                "task_id":  task_id,
+                "status":   final_status.value,
+                "summary":  marked,
+                "turns":    result.get("turns"),
+                "tools_used": result.get("tools_used", []),
+            })
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("claude-fix crashed for %s: %s", task_id, exc)
+            await ws_manager.broadcast({
+                "event":   "claude_fix_done",
+                "task_id": task_id,
+                "status":  "failed",
+                "summary": f"🛠️ Claude Fix crashed: {exc}",
+            })
+
+    asyncio.create_task(_run_claude_fix())
+    return {"ok": True, "task_id": task_id, "message": "Claude is taking over..."}
+
+
 @app.get("/tasks/{task_id}", response_model=StatusResponse)
 async def get_task_status(task_id: str) -> StatusResponse:
     task = await tracker.get_task(task_id)

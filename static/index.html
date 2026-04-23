@@ -1264,6 +1264,46 @@
       border-top: 1px solid var(--border);
       padding-top: 0.5rem;
     }
+
+    /* "Let Claude fix" button — shown inside a failed task's result
+       card. Deliberately uses Claude's brand-ish purple so it visually
+       signals "this path spends Anthropic tokens". */
+    .claude-fix-wrap {
+      margin-top: 0.8rem;
+      padding-top: 0.8rem;
+      border-top: 1px dashed var(--border);
+      display: flex;
+      align-items: center;
+      gap: 0.7rem;
+      flex-wrap: wrap;
+    }
+    .btn-claude-fix {
+      background: var(--purple);
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      padding: 8px 16px;
+      font-size: 0.86rem;
+      font-weight: 600;
+      font-family: inherit;
+      cursor: pointer;
+      transition: background 0.15s, transform 0.08s;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .btn-claude-fix:hover:not(:disabled) { background: #6b4ea3; }
+    .btn-claude-fix:active:not(:disabled) { transform: scale(0.98); }
+    .btn-claude-fix:disabled {
+      opacity: 0.55;
+      cursor: wait;
+      background: var(--purple);
+    }
+    .claude-fix-hint {
+      font-size: 0.76rem;
+      color: var(--text-muted);
+      line-height: 1.4;
+    }
     .chat-subtasks li {
       display: flex;
       align-items: flex-start;
@@ -1893,6 +1933,7 @@
           if (_currentTaskId && data.task_id && data.task_id !== _currentTaskId) return;
           if (data.event === 'tool_call')         handleToolCall(data);
           if (data.event === 'tool_result')       handleToolResult(data);
+          if (data.event === 'claude_fix_done')   handleClaudeFixDone(data);
           if (data.type  === 'pull_progress')     handlePullProgress(data);
           if (data.type  === 'approval_required') handleApprovalRequired(data);
         } catch (e) { /* ignore */ }
@@ -2435,6 +2476,84 @@
       }
     }
 
+    // ── Let Claude Fix ─────────────────────────────────────────────────────
+    // User-triggered whole-task takeover. Fires the /claude-fix endpoint,
+    // then relies on the existing WebSocket pipeline (tool_call /
+    // tool_result with source="claude-fix") to render Claude's actions
+    // live in the same chat. The 'claude_fix_done' event carries the
+    // final summary and swaps the button for a completed notice.
+    async function letClaudeFix(taskId, btn) {
+      if (!taskId) return;
+      // Optional user hint for tricky cases ("the port should be 18000
+      // not 8000", etc.). Empty → Claude works with only the task log.
+      const hint = prompt(
+        '給 Claude 一個提示（可選）\n\n' +
+        '如果你知道失敗的可能原因，或想指定修法，寫在這裡。\n' +
+        '留空也 OK — Claude 會自己讀專案檔案找根因。',
+        '',
+      );
+      if (hint === null) return;  // cancelled
+
+      if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<span class="loader" style="width:11px;height:11px;border-width:2px;margin-right:4px;border-top-color:#fff;border-color:rgba(255,255,255,0.3)"></span> Claude is working…';
+      }
+      // Route the normal tool-call UI for this taskId while Claude runs.
+      _currentTaskId = taskId;
+      _activeCalls   = {};
+
+      // Visible breadcrumb in the chat so the user knows Claude started.
+      const msg = document.createElement('div');
+      msg.className = 'msg-system';
+      msg.style.background = 'var(--purple-light)';
+      msg.style.borderColor = '#c4b5fd';
+      msg.style.color = 'var(--purple)';
+      msg.textContent = hint
+        ? `🛠️ Claude fix requested with hint: "${hint.slice(0, 120)}"`
+        : '🛠️ Claude fix requested — reading the project state, will report back…';
+      appendToChat(msg);
+
+      try {
+        const res = await fetch(`${API}/tasks/${encodeURIComponent(taskId)}/claude-fix`, {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify(hint ? { hint } : {}),
+        });
+        if (!res.ok) {
+          const err = await res.text();
+          throw new Error(err || res.statusText);
+        }
+      } catch (e) {
+        if (btn) {
+          btn.disabled = false;
+          btn.innerHTML = '🛠️ Let Claude fix this';
+        }
+        toast('Claude fix failed to start: ' + e.message, true);
+      }
+    }
+
+    function handleClaudeFixDone(data) {
+      // Clean up any in-flight tool cards (Claude's run is over).
+      cancelStragglers('Claude fix 完成');
+      // Render the final summary as a new agent message.
+      const summary = data.summary || '(no summary)';
+      const subtitle = data.turns != null
+        ? `${data.turns} turns · tools: ${(data.tools_used || []).length}`
+        : '';
+      let html = `<div class="md-body">${renderMarkdown(summary)}</div>`;
+      if (subtitle) {
+        html += `<div style="font-size:0.72rem;color:var(--text-muted);margin-top:6px">${escHtml(subtitle)}</div>`;
+      }
+      addAgentMessage(html, false);
+      // Remove the now-stale "Let Claude fix this" buttons so the user
+      // doesn't accidentally double-fire (and re-burn tokens).
+      document.querySelectorAll('.btn-claude-fix').forEach(b => {
+        b.disabled = true;
+        b.innerHTML = '✓ Claude fix applied';
+      });
+      _currentTaskId = null;
+    }
+
     async function cancelRunning() {
       if (_currentTaskId) {
         try {
@@ -2559,6 +2678,26 @@
              </li>`
           ).join('');
         }
+
+        // If the local run failed (or any subtask ended in failed/escalated),
+        // offer the user a big "Let Claude fix this" button. Clicking gives
+        // Claude the full context + tool access — opt-in because it spends
+        // commercial tokens.
+        const hadAnyFailure =
+          ['failed', 'escalated'].includes(data.status) ||
+          (data.subtasks || []).some(s => ['failed', 'escalated'].includes(s.status));
+        if (hadAnyFailure && data.task_id) {
+          resultHTML += `
+            <div class="claude-fix-wrap">
+              <button class="btn-claude-fix" onclick="letClaudeFix('${escHtml(data.task_id)}', this)">
+                🛠️ Let Claude fix this
+              </button>
+              <span class="claude-fix-hint">
+                Hands the full task context + tools to Claude. Uses commercial tokens.
+              </span>
+            </div>`;
+        }
+
         addAgentMessage(resultHTML, false);
 
       } catch (e) { /* silently ignore */ }
