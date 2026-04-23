@@ -433,6 +433,22 @@ class Orchestrator:
                     f"\n"
                     f"  【規則 5 — 看到 `no such file` / `cannot list` 立刻查上游】\n"
                     f"  這代表某個前置步驟沒做或做錯了。不要無視繼續往下跑。\n"
+                    f"\n"
+                    f"  【規則 6 — 絕對禁止對 OpenTeddy 本體動手術】\n"
+                    f"  OpenTeddy 自己的原始碼目錄**不是**你的工作目錄。\n"
+                    f"  不要把 working_dir 設成 OpenTeddy 的專案根目錄，\n"
+                    f"  也不要 cd 進去跑 docker compose / rm / mv 等會改\n"
+                    f"  變狀態的指令 —— 會搞壞正在跑的 agent。只有 `{ws_basename}/`\n"
+                    f"  底下的子目錄才是合法沙盒。shell_tool 會硬性擋下違反\n"
+                    f"  這條規則的指令，計劃階段就要避開。\n"
+                    f"\n"
+                    f"  【規則 7 — 相信 session workspace，不要自作主張傳絕對路徑】\n"
+                    f"  你看到的 workspace 路徑（{ws}）是這個 session 專屬的。\n"
+                    f"  下面那些 tool / shell 指令，working_dir 一律用**相對路徑**\n"
+                    f"  （就寫子目錄名，例如 `worldmonitor`、或留空 = 直接在 workspace）。\n"
+                    f"  **禁止**在 tool call 裡把 working_dir 填絕對路徑跳出這個範圍\n"
+                    f"  （例如 /home/user/OpenTeddy、/home/user/otherproject）—— 那是\n"
+                    f"  繞過 session 設定，使用者會很困擾。\n"
                 )
             except Exception:  # noqa: BLE001
                 pass

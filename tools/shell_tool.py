@@ -166,6 +166,35 @@ def _build_cwd_diagnostic(effective_dir: str) -> str:
     return "\n".join(lines)
 
 
+def _openteddy_project_root() -> str:
+    """Absolute path of OpenTeddy's own source tree (parent of tools/)."""
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def _is_openteddy_source_path(path: str) -> bool:
+    """True when ``path`` is inside OpenTeddy's own source tree BUT NOT
+    inside an ``agent-workspace/`` subdir.
+
+    Protects against the "Qwen passes working_dir='/path/to/OpenTeddy'
+    and runs `docker compose up --build` there" failure mode, which
+    could clobber the running uvicorn / DB / skills directory. The
+    ``agent-workspace/`` subdir is explicitly allowed since that's the
+    legitimate sandbox.
+    """
+    try:
+        abs_path = os.path.abspath(path)
+    except Exception:  # noqa: BLE001
+        return False
+    root = _openteddy_project_root()
+    ws   = os.path.join(root, "agent-workspace")
+    if abs_path == root:
+        return True
+    if abs_path.startswith(root + os.sep):
+        # Inside project root — allowed only if under agent-workspace/
+        return not (abs_path == ws or abs_path.startswith(ws + os.sep))
+    return False
+
+
 def _looks_like_empty_compose_result(command: str, stdout: str, stderr: str) -> bool:
     """After ``docker compose up`` / ``ps``, an EMPTY container list is a
     red flag, not a success. The header ``NAME STATUS SERVICE`` with no
@@ -418,6 +447,38 @@ async def execute_shell(
             effective_dir,
         )
 
+    # ── Hard block: OpenTeddy's own source tree ────────────────────────────
+    # If Qwen passed a working_dir like "/home/user/OpenTeddy", refuse
+    # flat out — running `docker compose up` or `rm` there would break
+    # the live uvicorn, clobber openteddy.db, overwrite skills/. Only
+    # agent-workspace/ under the project root is allowed.
+    if _is_openteddy_source_path(effective_dir):
+        msg = (
+            f"Refused: working_dir '{effective_dir}' is inside OpenTeddy's "
+            f"own source tree. This would conflict with the running agent. "
+            f"Use a path under the agent workspace, or set this session's "
+            f"workspace via the 📂 icon in the chat header to point at the "
+            f"project you actually want to work on."
+        )
+        logger.warning("execute_shell blocked: %s", msg)
+        return make_result(False, error=msg)
+
+    # Also catch `cd /path/to/OpenTeddy && ...` at the start of the command.
+    cd_match = re.match(r"^\s*cd\s+(['\"]?)([^'\"\s&|;]+)\1", command)
+    if cd_match:
+        cd_target = cd_match.group(2)
+        # Resolve cd target relative to the subprocess cwd (effective_dir)
+        cd_abs = cd_target if os.path.isabs(cd_target) else os.path.abspath(os.path.join(effective_dir, cd_target))
+        if _is_openteddy_source_path(cd_abs):
+            msg = (
+                f"Refused: command tried to `cd` into '{cd_abs}', which is "
+                f"inside OpenTeddy's own source tree. Only agent-workspace/ "
+                f"and its subdirs are allowed. Fix the plan or set a "
+                f"session-specific workspace via 📂."
+            )
+            logger.warning("execute_shell blocked: %s", msg)
+            return make_result(False, error=msg)
+
     # Path-hygiene fix for the most common Gemma planning mistake: it
     # sometimes prefixes cd targets with ./agent-workspace/ even though
     # the shell is already rooted there. We fix it transparently and log
@@ -426,6 +487,22 @@ async def execute_shell(
     if fix_note:
         logger.info("execute_shell: %s", fix_note)
         command = fixed
+
+    # ── Soft warning: session workspace boundary ───────────────────────────
+    # If the user set a session-specific workspace AND the effective_dir
+    # escaped it, attach a note so Qwen sees "you're drifting outside the
+    # session's declared workspace" and can correct course.
+    try:
+        from config import config as _cfg, effective_workspace_dir
+        sess_ws = os.path.abspath(effective_workspace_dir())
+        global_ws = _cfg.agent_workspace_dir
+        if sess_ws != global_ws and not effective_dir.startswith(sess_ws):
+            logger.warning(
+                "execute_shell: cwd %s escapes session workspace %s",
+                effective_dir, sess_ws,
+            )
+    except Exception:  # noqa: BLE001
+        pass
 
     effective_timeout = _docker_timeout(command, timeout)
     if effective_timeout != timeout:
