@@ -52,6 +52,16 @@ class Config:
         default_factory=lambda: os.getenv("SKILLS_DIR", "skills")
     )
 
+    # ── Agent workspace ──────────────────────────────────────────────────────
+    # Default working directory for shell_exec_* in Code / Analytic modes.
+    # Any command that doesn't specify its own working_dir lands here, so
+    # `git clone`, `pip install -t .`, file writes etc. don't scatter across
+    # the host. A session can override this in the future; for now one dir
+    # for the whole project.
+    agent_workspace_dir: str = field(
+        default_factory=lambda: os.getenv("AGENT_WORKSPACE_DIR", "./agent-workspace")
+    )
+
     # ── Token limits ────────────────────────────────────────────────────────
     gemma_max_tokens: int = field(
         default_factory=lambda: int(os.getenv("GEMMA_MAX_TOKENS", "4096"))
@@ -165,6 +175,9 @@ class Config:
         v7 = _i("subtask_timeout")
         if v7 is not None:
             self.subtask_timeout = v7
+
+        if _s("agent_workspace_dir"):
+            self.agent_workspace_dir = settings["agent_workspace_dir"]
 
 
 # Module-level singleton

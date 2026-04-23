@@ -117,6 +117,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:  # type: ignore[type-arg]
     except Exception as exc:  # noqa: BLE001
         logger.warning("Tool auto-registration warning: %s", exc)
 
+    # Ensure the agent workspace exists — Code / Analytic modes default
+    # shell commands to run here. Created once at startup so the first
+    # shell_exec_* call doesn't race to mkdir.
+    try:
+        ws = os.path.abspath(config.agent_workspace_dir)
+        os.makedirs(ws, exist_ok=True)
+        logger.info("Agent workspace ready: %s", ws)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Could not create agent workspace %s: %s",
+                       config.agent_workspace_dir, exc)
+
     tracker = Tracker()
     await tracker.open()
 
@@ -193,6 +204,17 @@ async def root() -> FileResponse:
     if os.path.exists(index):
         return FileResponse(index)
     return FileResponse(__file__)
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon() -> FileResponse:
+    """Convenience route — browsers hit /favicon.ico by convention even when
+    the HTML declares the icon elsewhere. Serve the one under /static so it
+    matches the <link rel="icon"> tags in index.html."""
+    path = os.path.join(_static_dir, "favicon.ico")
+    if os.path.exists(path):
+        return FileResponse(path, media_type="image/x-icon")
+    raise HTTPException(status_code=404, detail="favicon not found")
 
 
 @app.get("/health")
