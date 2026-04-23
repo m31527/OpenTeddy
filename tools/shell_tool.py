@@ -74,6 +74,70 @@ def _sanitize_command(cmd: str) -> str:
     return cmd
 
 
+def _smart_resolve_rel_path(ws: str, rel: str) -> Tuple[str, Optional[str]]:
+    """Resolve ``rel`` (a relative path) against ``ws`` (abs workspace),
+    but also try to self-heal common path-duplication mistakes.
+
+    Background: Qwen assumes paths are rooted at "OpenTeddy project
+    root" and writes things like ``agent-workspace/worldmonitor`` even
+    when the session workspace is already at
+    ``/.../agent-workspace/worldmonitor``. Naively joining ws + rel
+    gives ``/.../worldmonitor/agent-workspace/worldmonitor`` which
+    doesn't exist. This helper tries four resolutions in order:
+
+      1. Direct join (ws/rel) — the normal case
+      2. ws itself (rel's segments are already the tail of ws)
+      3. Strip the shared leading segments when rel's prefix matches
+         the tail of ws (the "one-level-deep duplication" case)
+      4. Fallback: direct join, even if missing (surface a real error
+         downstream instead of silently using some wrong path)
+
+    Returns (abs_path, note). ``note`` is a human-readable explanation
+    when we auto-healed; None for the direct-hit case.
+    """
+    direct = os.path.abspath(os.path.join(ws, rel))
+    if os.path.exists(direct):
+        return direct, None
+
+    # Split into clean segments (handle both POSIX and Windows separators
+    # defensively; Qwen has been known to mix them).
+    rel_parts = [p for p in re.split(r"[\\/]+", rel) if p and p != "."]
+    ws_parts  = [p for p in os.path.abspath(ws).split(os.sep) if p]
+
+    if not rel_parts:
+        return os.path.abspath(ws), None
+
+    # Case 2: ws already points at rel. E.g. ws ends in
+    # ".../agent-workspace/worldmonitor", rel is "worldmonitor" OR
+    # "agent-workspace/worldmonitor" → effective path IS ws.
+    if len(ws_parts) >= len(rel_parts) and ws_parts[-len(rel_parts):] == rel_parts:
+        abs_ws = os.path.abspath(ws)
+        if os.path.exists(abs_ws):
+            return abs_ws, (
+                f"auto-healed: ws is already at '{'/'.join(rel_parts)}', "
+                f"using {abs_ws} directly"
+            )
+
+    # Case 3: a leading chunk of rel duplicates the tail of ws. E.g.
+    # ws ends in ".../agent-workspace", rel is "agent-workspace/foo"
+    # → drop the leading "agent-workspace/" and try "<ws>/foo".
+    for skip in range(min(len(rel_parts), len(ws_parts)), 0, -1):
+        if ws_parts[-skip:] == rel_parts[:skip]:
+            remaining = rel_parts[skip:]
+            if not remaining:
+                continue  # handled by case 2
+            collapsed = os.path.abspath(os.path.join(ws, *remaining))
+            if os.path.exists(collapsed):
+                stripped = "/".join(rel_parts[:skip])
+                return collapsed, (
+                    f"auto-healed: stripped duplicate '{stripped}/' prefix — "
+                    f"ws already ends there. Effective path: {collapsed}"
+                )
+
+    # Nothing matched — return the direct join so the error is visible.
+    return direct, None
+
+
 def _fix_duplicate_workspace_prefix(
     cmd: str, effective_dir: str,
 ) -> Tuple[str, Optional[str]]:
@@ -327,9 +391,13 @@ def _resolve_working_dir(working_dir: Optional[str]) -> str:
     elif os.path.isabs(working_dir):
         chosen_abs = working_dir
     else:
-        # Resolve relative paths against the effective workspace, NOT
-        # the uvicorn cwd — same as for the session default.
-        chosen_abs = os.path.abspath(os.path.join(ws, working_dir))
+        # Relative — use the smart resolver, which self-heals the
+        # "Qwen-passed-the-path-as-if-at-project-root-but-ws-is-deeper"
+        # class of duplication bugs (e.g. ws=<...>/agent-workspace/worldmonitor,
+        # rel="agent-workspace/worldmonitor" → just use ws).
+        chosen_abs, heal_note = _smart_resolve_rel_path(ws, working_dir)
+        if heal_note:
+            logger.info("_resolve_working_dir: %s", heal_note)
 
     # Only auto-create the GLOBAL sandbox. Per-session paths must exist.
     if is_global_ws and chosen_abs.startswith(ws):
@@ -487,6 +555,27 @@ async def execute_shell(
     if fix_note:
         logger.info("execute_shell: %s", fix_note)
         command = fixed
+
+    # Smart-heal `cd X && ...` when X doesn't exist relative to cwd but
+    # a dedupe-interpretation does. Covers the reverse duplication case:
+    # cwd = <ws>/worldmonitor, command = `cd agent-workspace/worldmonitor`
+    # → heals to just `cd .` (we're already there) or the stripped form.
+    cd_match = re.match(
+        r"^\s*cd\s+(['\"]?)([^'\"\s&|;]+)\1(.*)", command, re.DOTALL,
+    )
+    if cd_match and not os.path.isabs(cd_match.group(2)):
+        cd_target = cd_match.group(2)
+        direct_cd = os.path.abspath(os.path.join(effective_dir, cd_target))
+        if not os.path.isdir(direct_cd):
+            healed, heal_note = _smart_resolve_rel_path(effective_dir, cd_target)
+            if heal_note and os.path.isdir(healed):
+                # Rewrite to use the absolute healed path so shell finds it.
+                rest = cd_match.group(3)
+                command = f"cd {healed}{rest}"
+                logger.info(
+                    "execute_shell: rewrote `cd %s` → `cd %s` (%s)",
+                    cd_target, healed, heal_note,
+                )
 
     # ── Soft warning: session workspace boundary ───────────────────────────
     # If the user set a session-specific workspace AND the effective_dir

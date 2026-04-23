@@ -73,20 +73,22 @@ def _resolve_cwd(working_dir: Optional[str]) -> str:
     """Same cwd logic as shell_tool — fall back to the session's effective
     workspace (per-session override, else config.agent_workspace_dir).
 
-    When ``working_dir`` is a *relative* path, resolve it **against the
-    effective workspace** (not against whatever cwd Python happens to be
-    in). This keeps every tool's cwd semantics identical — the source
-    of last month's worldmonitor/Pixelle-Video confusion was
-    shell_tool vs deploy_tool resolving the same relative string
-    against different anchors.
+    When ``working_dir`` is a *relative* path, uses shell_tool's
+    ``_smart_resolve_rel_path`` to self-heal common path-duplication
+    mistakes (e.g. Qwen passing ``agent-workspace/worldmonitor`` when
+    ws is already at that path). Keeps every tool's cwd semantics
+    identical — the source of repeated deploy failures.
     """
     from config import effective_workspace_dir
+    from tools.shell_tool import _smart_resolve_rel_path
     ws = effective_workspace_dir() or os.getcwd()
     ws = os.path.abspath(ws)
     if not working_dir:
         return ws
-    chosen = working_dir if os.path.isabs(working_dir) else os.path.join(ws, working_dir)
-    return os.path.abspath(chosen)
+    if os.path.isabs(working_dir):
+        return os.path.abspath(working_dir)
+    resolved, _note = _smart_resolve_rel_path(ws, working_dir)
+    return resolved
 
 
 # ── Tool: port_probe ─────────────────────────────────────────────────────────
