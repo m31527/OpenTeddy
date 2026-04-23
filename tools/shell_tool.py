@@ -120,6 +120,51 @@ _DEPLOY_SUCCESS_EMPTY_RE = re.compile(
     r"\bdocker\s+compose\s+(?:up|ps)\b", re.IGNORECASE,
 )
 
+_CD_FAILURE_RE = re.compile(
+    r"(?:cd: can'?t cd to |cd: no such file|no such file or directory)",
+    re.IGNORECASE,
+)
+
+
+def _build_cwd_diagnostic(effective_dir: str) -> str:
+    """Render a short block showing the subprocess's cwd and its contents.
+
+    Appended to stderr on failures that smell like a cwd mismatch
+    (cd errors, "no such file or directory"). Lets Qwen — and the
+    human reading the UI — see at a glance WHERE the shell actually
+    was, versus where the LLM thought it was planning from. This is
+    the single most effective debug aid for path-resolution bugs
+    because the alternative is staring at "can't cd" with zero
+    clues about the current working directory.
+    """
+    lines: List[str] = [
+        "",
+        "[OpenTeddy cwd diagnostic]",
+        f"  effective cwd: {effective_dir}",
+    ]
+    try:
+        if os.path.isdir(effective_dir):
+            entries = sorted(os.listdir(effective_dir))
+            preview = "  ".join(entries[:20])
+            more = f"  (+{len(entries) - 20} more)" if len(entries) > 20 else ""
+            lines.append(f"  contents ({len(entries)}): {preview}{more}")
+        else:
+            lines.append("  (this directory does NOT exist on disk)")
+    except Exception as exc:  # noqa: BLE001
+        lines.append(f"  (could not list: {exc})")
+    try:
+        from config import config as _cfg
+        ws = getattr(_cfg, "agent_workspace_dir", None)
+        if ws and os.path.abspath(ws) != effective_dir:
+            lines.append(
+                f"  note: agent_workspace_dir is {ws} — if clones went "
+                "there but this cwd is different, that's the bug. "
+                "Check /debug/workspace for the authoritative path."
+            )
+    except Exception:  # noqa: BLE001
+        pass
+    return "\n".join(lines)
+
 
 def _looks_like_empty_compose_result(command: str, stdout: str, stderr: str) -> bool:
     """After ``docker compose up`` / ``ps``, an EMPTY container list is a
@@ -436,6 +481,14 @@ async def execute_shell(
 
         if compose_note:
             stderr = f"{compose_note}\n{stderr}" if stderr else compose_note
+
+        # If this looks like a cwd / path mismatch, tell Qwen AND the user
+        # exactly where the shell was and what's in it. Before this block,
+        # the `cd: can't cd to worldmonitor` error gave zero clues about
+        # which directory the shell was in — now it does.
+        combined = (stdout or "") + "\n" + (stderr or "")
+        if not success and _CD_FAILURE_RE.search(combined):
+            stderr = (stderr + _build_cwd_diagnostic(effective_dir)).strip()
 
         # Sanity guard: `docker compose up/ps` that exits 0 with ZERO rows
         # is almost always a false success (wrong cwd, missing project
