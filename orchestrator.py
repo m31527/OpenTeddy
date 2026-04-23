@@ -101,6 +101,36 @@ _PLAN_SYSTEM_CODE = """\
   ❌ 錯誤：先一個「cd /path/to/project」，再一個「docker compose up」
 docker compose 也可以用 `-f /path/to/docker-compose.yml` 取代 cd。
 
+【部署任務的標準流程 — 很重要】
+如果用戶的目標包含「部署／啟動／架設／跑起來／deploy／serve／install」，
+照以下順序規劃：
+
+  1. **探查專案結構** — 用 docker_project_detect 工具掃描資料夾。
+     它會回傳 compose_files、services、exposed_ports、likely_deploy_hint。
+     → 子任務例：「用 docker_project_detect 探查 ./agent-workspace/<repo> 的結構」
+
+  2. **檢查 port 衝突** — 如果第 1 步回報有 exposed_ports，先用 port_probe
+     每個要綁的 port 確認沒衝突。有衝突才用 port_free（會跳 approval）。
+     → 子任務例：「用 port_probe 檢查 port 8000 是否被占用」
+
+  3. **啟動服務** — 按第 1 步回傳的 likely_deploy_hint 執行。
+     有 compose 一律用 docker compose up -d（不要自己寫 Dockerfile）。
+     缺 .env 但有 .env.example 時，先 cp .env.example .env。
+     → 子任務例：「cd ./agent-workspace/<repo> && docker compose up -d --build」
+
+  4. **驗證健康** — up 完後用 docker compose ps 確認 status，
+     發現 unhealthy / Restarting / Exited 的 service 立刻用 docker_diagnose
+     抓根因（它會一次給 inspect + logs + 診斷 hint）。
+     → 子任務例：「用 docker compose ps 驗證所有服務狀態」
+
+【常見陷阱 — 規劃時要避開】
+- 看到「bind: address already in use」→ 下一步規劃 port_probe 確認，
+  不要直接換 port；可能是舊 container 沒清，用 port_free 更乾淨
+- 看到「unhealthy」→ 規劃 docker_diagnose，不要憑猜亂重啟
+- 看到「Exited (0)」不代表成功 —— 長期服務 Exited 就是錯，用 docker_diagnose
+- 不要把「cd ...」單獨當一個子任務（獨立 subprocess 會丟失）
+- 不要規劃「請用戶檢查/確認/執行」—— 規劃成具體可執行的 shell 指令
+
 輸出純 JSON 陣列，範例：
   [{"description":"執行 git clone https://github.com/xxx","skill_hint":null,"order":0}]
 只輸出這個 JSON 陣列，不要任何其他文字、markdown、說明。
