@@ -18,16 +18,44 @@ logger = logging.getLogger(__name__)
 
 # ── Implementations ────────────────────────────────────────────────────────────
 
+def _resolve_path(path: str) -> Path:
+    """Resolve ``path`` against the session's effective workspace when
+    relative, against the user's home with ~, otherwise verbatim.
+
+    Before this fix, ``Path(path).resolve()`` anchored relative paths to
+    the Python process cwd (uvicorn's cwd — usually the OpenTeddy repo
+    root). That meant ``read_file("Dockerfile.relay")`` looked in the
+    wrong place and failed, even though ``cat Dockerfile.relay`` via
+    shell_tool worked — because shell_tool anchors at the workspace
+    while file_tool did not. The two tools disagreeing on cwd was
+    causing Qwen to loop: retry the same read_file that it couldn't
+    see, fall back to cat, waste rounds.
+
+    Now every file tool uses the same anchor as shell_tool and
+    deploy_tool: the session's effective workspace.
+    """
+    expanded = os.path.expanduser(path)
+    if os.path.isabs(expanded):
+        return Path(expanded).resolve()
+    # Relative — anchor to the session workspace.
+    try:
+        from config import effective_workspace_dir
+        ws = effective_workspace_dir()
+    except Exception:  # noqa: BLE001
+        ws = os.getcwd()
+    return Path(os.path.join(ws, expanded)).resolve()
+
+
 async def read_file(path: str) -> Dict[str, Any]:
     """Read a file and return its contents as a string. LOW risk."""
     start = time.monotonic()
     try:
-        p = Path(path).expanduser().resolve()
+        p = _resolve_path(path)
         if not p.exists():
-            return make_result(False, error=f"File not found: {path}",
+            return make_result(False, error=f"File not found: {p}",
                                duration_ms=_ms(start))
         if not p.is_file():
-            return make_result(False, error=f"Path is not a file: {path}",
+            return make_result(False, error=f"Path is not a file: {p}",
                                duration_ms=_ms(start))
         content = p.read_text(encoding="utf-8", errors="replace")
         return make_result(True, result={"path": str(p), "content": content,
@@ -41,7 +69,7 @@ async def write_file(path: str, content: str) -> Dict[str, Any]:
     """Write content to a file (creates parent dirs). HIGH risk."""
     start = time.monotonic()
     try:
-        p = Path(path).expanduser().resolve()
+        p = _resolve_path(path)
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(content, encoding="utf-8")
         return make_result(True, result={"path": str(p),
@@ -55,7 +83,7 @@ async def list_directory(path: str) -> Dict[str, Any]:
     """List files and directories at a given path. LOW risk."""
     start = time.monotonic()
     try:
-        p = Path(path).expanduser().resolve()
+        p = _resolve_path(path)
         if not p.exists():
             return make_result(False, error=f"Path not found: {path}",
                                duration_ms=_ms(start))
@@ -80,7 +108,7 @@ async def delete_file(path: str) -> Dict[str, Any]:
     """Delete a file. HIGH risk — requires approval."""
     start = time.monotonic()
     try:
-        p = Path(path).expanduser().resolve()
+        p = _resolve_path(path)
         if not p.exists():
             return make_result(False, error=f"File not found: {path}",
                                duration_ms=_ms(start))
