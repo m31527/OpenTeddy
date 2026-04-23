@@ -543,20 +543,38 @@ class Orchestrator:
         subtask_timeout   = getattr(config, 'subtask_timeout', 120)
         escalation_threshold = getattr(config, 'escalation_confidence_threshold', 0.6)
 
+        # Subtasks that contain a long-running docker build get a much
+        # bigger ceiling (1 hour) so the orchestrator doesn't cancel them
+        # while shell_tool's silence-timeout is still happily watching
+        # the build produce progress. Without this, `docker compose up
+        # -d --build` on a fresh repo routinely tripped the 900s
+        # subtask wrapper even though the build itself was healthy.
+        desc_lower = (st.description or "").lower()
+        effective_sub_timeout = subtask_timeout
+        if any(kw in desc_lower for kw in
+               ("docker compose up", "docker compose build", "docker-compose up",
+                "docker build")):
+            effective_sub_timeout = max(subtask_timeout, 3600)  # at least 1 hour
+            logger.info(
+                "Subtask %s looks docker-heavy — bumping wall timeout %ds → %ds "
+                "(silence-timeout still watches for real hangs)",
+                st.id, subtask_timeout, effective_sub_timeout,
+            )
+
         for attempt in range(max_local_retries):
             try:
                 st = await asyncio.wait_for(
                     self.executor.execute(st, context, mode=mode),
-                    timeout=float(subtask_timeout),
+                    timeout=float(effective_sub_timeout),
                 )
             except asyncio.TimeoutError:
                 logger.warning(
                     "Subtask %s timed out after %ds on attempt %d/%d — escalating to Claude.",
-                    st.id, subtask_timeout, attempt + 1, max_local_retries,
+                    st.id, effective_sub_timeout, attempt + 1, max_local_retries,
                 )
                 st.status = TaskStatus.FAILED
                 st.error  = (
-                    f"地端模型執行超時（>{subtask_timeout}s），自動升級到 Claude"
+                    f"地端模型執行超時（>{effective_sub_timeout}s），自動升級到 Claude"
                 )
                 await self.tracker.update_subtask(st)
                 # 超時直接升級，不再重試

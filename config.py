@@ -150,12 +150,14 @@ class Config:
     )
 
     # Seconds of silence (no stdout/stderr activity) before a shell command
-    # is considered hung and killed. This is what actually stops runaway
-    # commands — `docker build` that's actively printing steps every few
-    # seconds stays alive; a command stuck on a DNS lookup or interactive
-    # prompt dies in ~90s. Set to 0 to disable (falls back to wall-clock).
+    # is considered hung and killed. This is the PRIMARY guard for
+    # long-running docker builds (wall-clock timeout is disabled for
+    # them entirely in shell_tool). 180s is roomy enough for npm install
+    # / cargo compile pauses during dep resolution or heavy compile
+    # phases while still catching real hangs (DNS stuck, interactive
+    # prompt, lock contention) in a few minutes. Set to 0 to disable.
     shell_silence_timeout: int = field(
-        default_factory=lambda: int(os.getenv("SHELL_SILENCE_TIMEOUT", "90"))
+        default_factory=lambda: int(os.getenv("SHELL_SILENCE_TIMEOUT", "180"))
     )
 
     # ── API server ───────────────────────────────────────────────────────────
