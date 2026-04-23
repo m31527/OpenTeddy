@@ -365,7 +365,36 @@ async def update_session(session_id: str, body: CreateSessionRequest) -> Session
 @app.delete("/sessions/{session_id}")
 async def delete_session(session_id: str) -> dict:
     await tracker.delete_session(session_id)
+    # Also wipe any long-term memory tagged with this session so the
+    # user doesn't see it resurface if they reuse the same id elsewhere.
+    try:
+        await memory_manager.clear_session(session_id)
+    except Exception:  # noqa: BLE001
+        pass
     return {"ok": True}
+
+
+@app.get("/sessions/{session_id}/memory")
+async def session_memory_stats(session_id: str) -> dict:
+    """Count how many long-term memories are tagged with this session.
+
+    Used by the chat header to show a small badge like "🧠 12" so the user
+    can see how much accumulated context Gemma is pulling in — high
+    numbers from an old project are the usual cause of cross-project
+    contamination complaints.
+    """
+    count = await memory_manager.count_for_session(session_id)
+    return {"session_id": session_id, "count": count}
+
+
+@app.delete("/sessions/{session_id}/memory")
+async def clear_session_memory(session_id: str) -> dict:
+    """Clear just this session's long-term memory — the chat history in
+    SQLite is preserved. Fixes "new project, same session" contamination
+    without forcing the user to spin up a fresh session.
+    """
+    deleted = await memory_manager.clear_session(session_id)
+    return {"ok": True, "deleted_count": deleted, "session_id": session_id}
 
 
 @app.get("/skills", response_model=SkillListResponse)
