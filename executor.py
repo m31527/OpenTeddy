@@ -29,10 +29,26 @@ _MAX_TOOL_ROUNDS = 10   # prevent infinite tool-call loops
 
 # Objective failure markers in tool results — override self-reported confidence
 # when present, so Claude takes over instead of a false "completed".
+# New additions cover compose/YAML failures that previously slipped through
+# ("yaml: unmarshal errors" on compose up would leave Qwen cheerfully
+# reporting 65% confidence while nothing had actually started).
 _FAILURE_SIGNAL_RE = re.compile(
     r"\b(?:unhealthy|Restarting|Exited \(\d+\)|Dead|CrashLoopBackOff|"
     r"Error response from daemon|ERROR \d{4}(?:\s*\(\d+\))?|"
-    r"WARNING: no compose file found)",
+    r"WARNING: no compose file found|"
+    # docker-compose YAML / parse failures
+    r"yaml: unmarshal errors?|yaml: line \d+|"
+    r"failed to (?:parse|load|read) compose|"
+    r"services\.\w+\.(?:ports|volumes|environment).*?(?:is invalid|must be)|"
+    r"mapping values are not allowed in this context|"
+    r"required variable .* is not set|"
+    # Image / build failures
+    r"failed to solve with frontend|"
+    r"pull access denied|manifest unknown|"
+    r"(?:image|manifest) not found|"
+    # Network failures that block startup
+    r"bind:? address already in use|"
+    r"port is already allocated)",
     re.IGNORECASE,
 )
 _FAILURE_CLAMP_CONFIDENCE = 0.3
@@ -111,9 +127,20 @@ AVAILABLE TOOLS (you MUST call these via function calling, not describe them):
   • docker_project_detect(dir)  — scan for Dockerfile/compose; returns
                                   services, ports, and a suggested command.
                                   Call this FIRST for any deploy task.
+  • compose_validate(dir)       — PRE-FLIGHT: `docker compose config --quiet`.
+                                  Always run before `up`. Cheap ~1s check
+                                  that catches YAML/env-substitution bugs
+                                  which would otherwise surface 30s into a
+                                  build as "yaml: unmarshal errors".
+  • env_file_lint(path)         — scan .env for multi-line values, duplicate
+                                  keys, unterminated quotes. Run when
+                                  compose_validate reports a YAML unmarshal
+                                  error — the culprit is almost always .env.
   • docker_diagnose(target)     — bundled inspect + logs + port, with a
                                   heuristic hint (OOM, port conflict, etc.).
-                                  Use whenever a container is unhealthy.
+                                  Use whenever a container is unhealthy
+                                  (NOT when compose fails before creating
+                                  containers — use compose_validate for that).
   • compose_remap_port(file, service, from, to) — edit a compose file to
                                   rebind a host port. THE PREFERRED fix
                                   when port_probe says safe_to_kill_hint=False.

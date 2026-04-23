@@ -563,6 +563,315 @@ async def docker_diagnose(
     return make_result(True, result=out)
 
 
+# ── Tool: compose_validate ───────────────────────────────────────────────────
+
+# Parse "line N" out of docker-compose error blurbs, e.g.:
+#   yaml: unmarshal errors:
+#     line 15: cannot unmarshal !!str `ANTHROP...` into cli.named
+_COMPOSE_ERROR_LINE_RE = re.compile(r"line\s+(\d+)", re.IGNORECASE)
+
+
+def _extract_context_lines(
+    path: str, line_no: int, radius: int = 3,
+) -> str:
+    """Return a small snippet around `line_no` so Qwen can see what's wrong."""
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+    except Exception:  # noqa: BLE001
+        return ""
+    lo = max(0, line_no - 1 - radius)
+    hi = min(len(lines), line_no + radius)
+    snippet: List[str] = []
+    for i in range(lo, hi):
+        marker = " > " if i == line_no - 1 else "   "
+        snippet.append(f"{marker}{i+1:4d}: {lines[i].rstrip()}")
+    return "\n".join(snippet)
+
+
+async def compose_validate(
+    working_dir: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Run `docker compose config --quiet` to validate the compose file
+    without actually starting anything. This is the cheapest way to catch
+    YAML syntax errors, bad variable substitutions, and unresolved
+    references BEFORE `up` wastes 30+ seconds building images that will
+    never run.
+
+    Pairs with env_file_lint — a .env file with multi-line values is the
+    #1 cause of "cannot unmarshal !!str `XXX...` into cli.named" errors,
+    because variable substitution splices the bad value directly into
+    the YAML.
+
+    Output schema:
+      {
+        "working_dir": str,
+        "valid": bool,
+        "stdout": str,                # rendered compose if valid
+        "stderr": str,                # raw error if invalid
+        "error_line": int | None,     # parsed line number if available
+        "error_file": str | None,     # which file the line refers to (compose vs .env)
+        "context_snippet": str,       # file lines around the error
+        "diagnosis_hint": str | None  # short human-readable next step
+      }
+    """
+    root = _resolve_cwd(working_dir)
+    if not shutil.which("docker"):
+        return make_result(False, error="docker CLI not available")
+
+    rc, stdout, stderr = await _run_cmd(
+        ["docker", "compose", "config", "--quiet"],
+        cwd=root, timeout=15,
+    )
+    valid = rc == 0
+    out: Dict[str, Any] = {
+        "working_dir": root,
+        "valid": valid,
+        "stdout": stdout[:2000],
+        "stderr": stderr.strip(),
+        "error_line": None,
+        "error_file": None,
+        "context_snippet": "",
+        "diagnosis_hint": None,
+    }
+
+    if not valid:
+        # Try to pull a line number out of the error and slice the file.
+        # First figure out WHICH file the error is about — docker-compose
+        # reports errors in .env with the same "line N" syntax as YAML
+        # errors, so we have to read the stderr to tell them apart.
+        m = _COMPOSE_ERROR_LINE_RE.search(stderr)
+        compose_paths = [
+            os.path.join(root, n) for n in _COMPOSE_FILENAMES
+            if os.path.isfile(os.path.join(root, n))
+        ]
+        compose_file = compose_paths[0] if compose_paths else None
+
+        # If stderr mentions a .env path, take the context from that file.
+        env_path_match = re.search(r"(\S+\.env)", stderr)
+        env_ref_path = None
+        if env_path_match:
+            env_ref_path = env_path_match.group(1)
+            # Normalise to absolute
+            if not os.path.isabs(env_ref_path):
+                env_ref_path = os.path.join(root, env_ref_path)
+
+        if m:
+            try:
+                line_no = int(m.group(1))
+                out["error_line"] = line_no
+                # Prefer the env file if stderr pointed there
+                target_file = env_ref_path if env_ref_path and os.path.isfile(env_ref_path) else compose_file
+                if target_file:
+                    out["context_snippet"] = _extract_context_lines(target_file, line_no)
+                    out["error_file"] = target_file
+            except ValueError:
+                pass
+
+        # Heuristic hints — the common compose-config failure modes.
+        lowered = stderr.lower()
+        # Most specific first: .env-origin errors point away from YAML.
+        if env_ref_path and ("failed to read" in lowered or "key cannot contain" in lowered
+                              or "line" in lowered):
+            out["diagnosis_hint"] = (
+                f"Error is in the .env file (see error_file above). "
+                f"Run env_file_lint('{os.path.basename(env_ref_path)}') to see the "
+                "structural issue, then fix the offending line."
+            )
+        elif "unmarshal" in lowered and ("cli.named" in lowered or "into" in lowered):
+            out["diagnosis_hint"] = (
+                "YAML unmarshal error — almost always a .env file problem: a "
+                "value contains newlines or unescaped special chars, and "
+                "variable substitution spliced garbage into the YAML. Run "
+                "env_file_lint(.env) to pinpoint the bad line, then fix/quote it."
+            )
+        elif "variable is not set" in lowered or "required variable" in lowered:
+            out["diagnosis_hint"] = (
+                "A compose variable is unset. Copy .env.example → .env and "
+                "fill in the missing key, then re-run compose_validate."
+            )
+        elif "yaml: line" in lowered or "mapping values are not allowed" in lowered:
+            out["diagnosis_hint"] = (
+                "YAML syntax error (indentation or quoting). Look at the "
+                "context_snippet above — the line with ' > ' is the error."
+            )
+        elif "no such file" in lowered and ".env" in lowered:
+            out["diagnosis_hint"] = (
+                "Compose is pointing at a .env file that doesn't exist. "
+                "Run `cp .env.example .env` first."
+            )
+        else:
+            out["diagnosis_hint"] = (
+                "compose config failed. Read the stderr above for the specific "
+                "error; if unclear, try `docker compose config` (without --quiet) "
+                "to see more context."
+            )
+
+    return make_result(True, result=out)
+
+
+# ── Tool: env_file_lint ──────────────────────────────────────────────────────
+
+async def env_file_lint(
+    env_file: str = ".env",
+    working_dir: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Check a .env file for structural problems that break docker-compose
+    variable substitution. The #1 cause of cryptic compose YAML errors:
+    a key whose value spans multiple lines (e.g. a pasted JSON blob or
+    a copied multi-line secret), because compose reads KEY=... per line
+    and splices the result into the YAML verbatim.
+
+    Also catches:
+      • Duplicate keys (last one wins silently)
+      • Keys with spaces/punctuation in the name
+      • Values that look multi-line but aren't quoted
+      • Lines that should be comments but forgot the '#'
+
+    Output schema:
+      {
+        "env_file": str,                       # absolute path resolved
+        "exists": bool,
+        "line_count": int,
+        "issues": [ {"line": int, "severity": "error"|"warn", "message": str, "content": str} ],
+        "duplicate_keys": [str],
+        "summary": str
+      }
+    """
+    root = _resolve_cwd(working_dir)
+    # Allow relative .env paths against the workspace
+    path = env_file if os.path.isabs(env_file) else os.path.join(root, env_file)
+
+    out: Dict[str, Any] = {
+        "env_file": path, "exists": False, "line_count": 0,
+        "issues": [], "duplicate_keys": [], "summary": "",
+    }
+
+    if not os.path.isfile(path):
+        out["summary"] = f".env file not found at {path}"
+        return make_result(True, result=out)
+
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            raw_lines = f.readlines()
+    except Exception as exc:  # noqa: BLE001
+        return make_result(False, error=f"cannot read {path}: {exc}")
+
+    out["exists"] = True
+    out["line_count"] = len(raw_lines)
+
+    issues: List[Dict[str, Any]] = []
+    seen_keys: Dict[str, int] = {}  # key -> first line it appeared on
+    dup_set: set[str] = set()
+
+    # State machine: are we mid-way through a "looks multi-line" value?
+    # Heuristic: a value ending with an unmatched quote or a backslash
+    # suggests the next line is a continuation — which breaks compose.
+    pending_multiline_from: Optional[int] = None
+
+    for idx, raw in enumerate(raw_lines, start=1):
+        line = raw.rstrip("\n")
+        stripped = line.strip()
+
+        # Blank / comment
+        if not stripped or stripped.startswith("#"):
+            if pending_multiline_from is not None:
+                # A multi-line value that continues past a blank/comment is
+                # almost always broken — flag the original line.
+                issues.append({
+                    "line": pending_multiline_from,
+                    "severity": "error",
+                    "message": "Value spans blank or comment lines — compose "
+                               "will only see the first line, the rest becomes "
+                               "YAML salad.",
+                    "content": raw_lines[pending_multiline_from - 1].rstrip("\n"),
+                })
+                pending_multiline_from = None
+            continue
+
+        # Inside an apparent multi-line value
+        if pending_multiline_from is not None:
+            # Any further KEY=... line on its own terminates the suspicion,
+            # but we still flag the earlier line.
+            if re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", stripped):
+                issues.append({
+                    "line": pending_multiline_from,
+                    "severity": "error",
+                    "message": "Multi-line value without triple-quote / single "
+                               "line — compose substitution will corrupt the "
+                               "YAML. Quote the value or put it on one line.",
+                    "content": raw_lines[pending_multiline_from - 1].rstrip("\n"),
+                })
+                pending_multiline_from = None
+            else:
+                # Still continuation
+                continue
+
+        # KEY=VALUE line
+        eq = stripped.find("=")
+        if eq <= 0:
+            issues.append({
+                "line": idx, "severity": "warn",
+                "message": "Line has no '=' — did you forget a comment '#' prefix?",
+                "content": line,
+            })
+            continue
+
+        key = stripped[:eq].strip()
+        value = stripped[eq + 1 :]
+
+        if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", key):
+            issues.append({
+                "line": idx, "severity": "warn",
+                "message": f"Non-standard env key '{key}' — use [A-Z_][A-Z0-9_]*.",
+                "content": line,
+            })
+
+        if key in seen_keys:
+            if key not in dup_set:
+                dup_set.add(key)
+                out["duplicate_keys"].append(key)
+            issues.append({
+                "line": idx, "severity": "warn",
+                "message": f"Duplicate key '{key}' (first seen at line {seen_keys[key]}). "
+                           "docker-compose uses the last occurrence.",
+                "content": line,
+            })
+        else:
+            seen_keys[key] = idx
+
+        # Multi-line detection:
+        # - value ends with backslash → line continuation (shell-like)
+        # - odd number of ' or "  → unterminated quote
+        # - value starts with { [ ( but doesn't close on this line
+        if value.endswith("\\"):
+            pending_multiline_from = idx
+            continue
+        q_double = value.count('"') - value.count('\\"')
+        q_single = value.count("'") - value.count("\\'")
+        if q_double % 2 == 1 or q_single % 2 == 1:
+            pending_multiline_from = idx
+            continue
+
+    # Trailing unclosed multi-line at EOF
+    if pending_multiline_from is not None:
+        issues.append({
+            "line": pending_multiline_from,
+            "severity": "error",
+            "message": "Multi-line value never terminates before end of file.",
+            "content": raw_lines[pending_multiline_from - 1].rstrip("\n"),
+        })
+
+    out["issues"] = issues
+    errors = sum(1 for i in issues if i["severity"] == "error")
+    warns  = sum(1 for i in issues if i["severity"] == "warn")
+    out["summary"] = (
+        f"{out['line_count']} lines scanned: {errors} errors, {warns} warnings"
+        + (f", {len(out['duplicate_keys'])} duplicate keys" if out["duplicate_keys"] else "")
+    )
+    return make_result(True, result=out)
+
+
 # ── Tool: compose_remap_port ─────────────────────────────────────────────────
 
 # Match a docker-compose port entry like:
@@ -898,6 +1207,66 @@ _SCHEMA_DOCKER_DIAGNOSE: Dict[str, Any] = {
     },
 }
 
+_SCHEMA_COMPOSE_VALIDATE: Dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "compose_validate",
+        "description": (
+            "Run `docker compose config --quiet` to validate a compose file "
+            "without starting anything. PRE-FLIGHT CHECK — always run this "
+            "right after `cp .env.example .env` and BEFORE `docker compose "
+            "up`, because YAML/substitution errors take 30s+ to surface via "
+            "up and crash nothing useful. Returns the error_line and a "
+            "context_snippet around it when invalid, plus a diagnosis_hint "
+            "pointing to the likely fix (env_file_lint, missing variable, "
+            "syntax typo, etc.). Low risk — read-only."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "working_dir": {
+                    "type": "string",
+                    "description": "Directory containing docker-compose.yml. "
+                                   "Defaults to the agent workspace.",
+                },
+            },
+            "required": [],
+        },
+    },
+}
+
+_SCHEMA_ENV_FILE_LINT: Dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "env_file_lint",
+        "description": (
+            "Scan a .env file for the structural problems that break "
+            "docker-compose variable substitution: multi-line values, "
+            "unterminated quotes, duplicate keys, non-standard key names. "
+            "Run this when compose_validate reports a YAML unmarshal error "
+            "with a value fragment (e.g. '`ANTHROP...` into cli.named') — "
+            "the culprit is almost always a bad .env line. Low risk."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "env_file": {
+                    "type": "string",
+                    "description": "Path to the .env file. Defaults to '.env' "
+                                   "relative to working_dir.",
+                    "default": ".env",
+                },
+                "working_dir": {
+                    "type": "string",
+                    "description": "Base directory for resolving env_file. "
+                                   "Defaults to the agent workspace.",
+                },
+            },
+            "required": [],
+        },
+    },
+}
+
 _SCHEMA_COMPOSE_REMAP: Dict[str, Any] = {
     "type": "function",
     "function": {
@@ -961,9 +1330,11 @@ _SCHEMA_PORT_FREE: Dict[str, Any] = {
 # ── Export ────────────────────────────────────────────────────────────────────
 
 DEPLOY_TOOLS: List[Tuple[Any, Dict[str, Any], RiskLevel]] = [
-    (port_probe,            _SCHEMA_PORT_PROBE,     "low"),
-    (docker_project_detect, _SCHEMA_DOCKER_DETECT,  "low"),
-    (docker_diagnose,       _SCHEMA_DOCKER_DIAGNOSE,"low"),
-    (compose_remap_port,    _SCHEMA_COMPOSE_REMAP,  "low"),
-    (port_free,             _SCHEMA_PORT_FREE,      "high"),
+    (port_probe,            _SCHEMA_PORT_PROBE,       "low"),
+    (docker_project_detect, _SCHEMA_DOCKER_DETECT,    "low"),
+    (docker_diagnose,       _SCHEMA_DOCKER_DIAGNOSE,  "low"),
+    (compose_validate,      _SCHEMA_COMPOSE_VALIDATE, "low"),
+    (env_file_lint,         _SCHEMA_ENV_FILE_LINT,    "low"),
+    (compose_remap_port,    _SCHEMA_COMPOSE_REMAP,    "low"),
+    (port_free,             _SCHEMA_PORT_FREE,        "high"),
 ]
