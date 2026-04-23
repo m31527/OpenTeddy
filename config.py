@@ -56,10 +56,17 @@ class Config:
     # Default working directory for shell_exec_* in Code / Analytic modes.
     # Any command that doesn't specify its own working_dir lands here, so
     # `git clone`, `pip install -t .`, file writes etc. don't scatter across
-    # the host. A session can override this in the future; for now one dir
-    # for the whole project.
+    # the host.
+    #
+    # IMPORTANT: this string is **always stored as an absolute path**.
+    # Relative forms like "./agent-workspace" only work if every consumer
+    # is running in the same cwd — which we can't guarantee (uvicorn cwd
+    # can differ from subprocess cwd, tool args can use `..`). Freezing
+    # the absolute path at load time eliminates that whole class of bugs.
     agent_workspace_dir: str = field(
-        default_factory=lambda: os.getenv("AGENT_WORKSPACE_DIR", "./agent-workspace")
+        default_factory=lambda: os.path.abspath(
+            os.getenv("AGENT_WORKSPACE_DIR", "./agent-workspace")
+        )
     )
 
     # ── Token limits ────────────────────────────────────────────────────────
@@ -194,7 +201,9 @@ class Config:
             self.shell_silence_timeout = v8
 
         if _s("agent_workspace_dir"):
-            self.agent_workspace_dir = settings["agent_workspace_dir"]
+            # Always store as absolute — keeps every downstream resolution
+            # consistent regardless of what cwd uvicorn happens to be in.
+            self.agent_workspace_dir = os.path.abspath(settings["agent_workspace_dir"])
 
 
 # Module-level singleton

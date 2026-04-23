@@ -48,7 +48,18 @@ _FAILURE_SIGNAL_RE = re.compile(
     r"(?:image|manifest) not found|"
     # Network failures that block startup
     r"bind:? address already in use|"
-    r"port is already allocated)",
+    r"port is already allocated|"
+    # Filesystem / path failures — Qwen has been mis-reading these as
+    # "nothing interesting happened" and returning 100% confidence on
+    # what were actually total dead-ends (e.g. `docker compose -f
+    # /nonexistent/path.yml` → "open X: no such file or directory").
+    r"no such file or directory|"
+    r"open [^:\n]+: no such file|"
+    r"fatal: (?:not a git repository|destination path|could not read)|"
+    r"cannot list |cannot access |"
+    r"command not found|"
+    # Empty-but-success compose output flagged by shell_tool
+    r"zero containers \(likely wrong cwd\))",
     re.IGNORECASE,
 )
 _FAILURE_CLAMP_CONFIDENCE = 0.3

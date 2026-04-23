@@ -226,7 +226,8 @@ def _resolve_working_dir(working_dir: Optional[str]) -> str:
     """Pick the effective working directory for this command.
 
     Priority:
-      1. An explicit ``working_dir`` arg from the LLM (absolute or relative)
+      1. An explicit ``working_dir`` arg from the LLM — resolved against
+         the agent workspace when relative, so ``../X`` can't escape.
       2. ``config.agent_workspace_dir`` — the project-wide default
       3. Falls back to the current process CWD if even that fails
 
@@ -236,8 +237,15 @@ def _resolve_working_dir(working_dir: Optional[str]) -> str:
     # Late import to avoid a circular dep when tool_registry imports this
     # module during early module initialisation.
     from config import config as _cfg
-    chosen = working_dir or getattr(_cfg, "agent_workspace_dir", None) or os.getcwd()
-    chosen_abs = os.path.abspath(chosen)
+    ws = getattr(_cfg, "agent_workspace_dir", None) or os.getcwd()
+    ws = os.path.abspath(ws)
+    if not working_dir:
+        chosen_abs = ws
+    elif os.path.isabs(working_dir):
+        chosen_abs = working_dir
+    else:
+        # Resolve relative paths against the workspace, NOT the uvicorn cwd.
+        chosen_abs = os.path.abspath(os.path.join(ws, working_dir))
     try:
         os.makedirs(chosen_abs, exist_ok=True)
     except Exception as exc:  # noqa: BLE001

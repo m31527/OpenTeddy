@@ -289,7 +289,9 @@ class SettingsStore:
             config.shell_silence_timeout = v8
 
         if "agent_workspace_dir" in settings and settings["agent_workspace_dir"]:
-            config.agent_workspace_dir = settings["agent_workspace_dir"]
+            # Resolve to absolute once here — see config.py for the rationale.
+            import os as _os
+            config.agent_workspace_dir = _os.path.abspath(settings["agent_workspace_dir"])
 
         logger.info("Config updated from SettingsStore.")
 
