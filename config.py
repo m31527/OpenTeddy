@@ -3,11 +3,34 @@ OpenTeddy Configuration
 Central configuration management using environment variables.
 """
 
+import logging
 import os
 from dataclasses import dataclass, field
 from dotenv import load_dotenv
 
 load_dotenv()
+
+# Resolve the project root from THIS file's location, not from the uvicorn
+# process cwd. Users launching `uvicorn main:app` from anywhere (home dir,
+# /tmp, a venv bin/) must still get the same workspace, otherwise git clones
+# scatter across the filesystem depending on where you happened to `cd` to
+# before starting the server.
+_PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+
+
+def _resolve_default_workspace() -> str:
+    """Pick the absolute default for AGENT_WORKSPACE_DIR.
+
+    Priority:
+      1. Env var AGENT_WORKSPACE_DIR (absolute wins, relative joined to
+         project root — so `./foo` resolves to <OpenTeddy>/foo, never
+         to whatever dir you launched uvicorn from).
+      2. Project root's ``agent-workspace/`` subdir.
+    """
+    raw = os.getenv("AGENT_WORKSPACE_DIR")
+    if raw:
+        return raw if os.path.isabs(raw) else os.path.abspath(os.path.join(_PROJECT_ROOT, raw))
+    return os.path.join(_PROJECT_ROOT, "agent-workspace")
 
 
 @dataclass
@@ -58,16 +81,14 @@ class Config:
     # `git clone`, `pip install -t .`, file writes etc. don't scatter across
     # the host.
     #
-    # IMPORTANT: this string is **always stored as an absolute path**.
-    # Relative forms like "./agent-workspace" only work if every consumer
-    # is running in the same cwd — which we can't guarantee (uvicorn cwd
-    # can differ from subprocess cwd, tool args can use `..`). Freezing
-    # the absolute path at load time eliminates that whole class of bugs.
-    agent_workspace_dir: str = field(
-        default_factory=lambda: os.path.abspath(
-            os.getenv("AGENT_WORKSPACE_DIR", "./agent-workspace")
-        )
-    )
+    # IMPORTANT: resolved via ``_resolve_default_workspace`` so the path
+    # is ALWAYS absolute AND anchored to the OpenTeddy project root (the
+    # directory containing this config.py). Running `uvicorn main:app`
+    # from your home dir, /tmp, or a cron script — they all produce the
+    # same workspace. Before this change, `./agent-workspace` resolved
+    # against the uvicorn process cwd, which caused `git clone` to land
+    # in one place while `docker_project_detect` looked in another.
+    agent_workspace_dir: str = field(default_factory=_resolve_default_workspace)
 
     # ── Token limits ────────────────────────────────────────────────────────
     gemma_max_tokens: int = field(

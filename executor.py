@@ -55,9 +55,11 @@ _FAILURE_SIGNAL_RE = re.compile(
     # /nonexistent/path.yml` → "open X: no such file or directory").
     r"no such file or directory|"
     r"open [^:\n]+: no such file|"
-    r"fatal: (?:not a git repository|destination path|could not read)|"
+    r"fatal: (?:not a git repository|could not read)|"
     r"cannot list |cannot access |"
     r"command not found|"
+    # cd failures — the exact shape `sh` emits: "/bin/sh: N: cd: can't cd to X"
+    r"cd: can'?t cd to |cd: no such file|"
     # Empty-but-success compose output flagged by shell_tool
     r"zero containers \(likely wrong cwd\))",
     re.IGNORECASE,

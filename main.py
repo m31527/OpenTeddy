@@ -120,10 +120,19 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:  # type: ignore[type-arg]
     # Ensure the agent workspace exists — Code / Analytic modes default
     # shell commands to run here. Created once at startup so the first
     # shell_exec_* call doesn't race to mkdir.
+    #
+    # Print the absolute path BIG AND LOUD so users can immediately see
+    # where their clones / builds are landing, regardless of which dir
+    # they started uvicorn from. Most deploy confusions trace back to
+    # "I thought it was in a different agent-workspace".
     try:
         ws = os.path.abspath(config.agent_workspace_dir)
         os.makedirs(ws, exist_ok=True)
-        logger.info("Agent workspace ready: %s", ws)
+        logger.info("=" * 72)
+        logger.info("OpenTeddy agent workspace: %s", ws)
+        logger.info("  All git clones, builds, file writes default to this dir.")
+        logger.info("  Override with AGENT_WORKSPACE_DIR env var or Settings → Agent Workspace.")
+        logger.info("=" * 72)
     except Exception as exc:  # noqa: BLE001
         logger.warning("Could not create agent workspace %s: %s",
                        config.agent_workspace_dir, exc)
@@ -223,6 +232,38 @@ async def health() -> dict:
         "status":  "ok",
         "version": "0.3.0",
         "memory":  memory_manager.is_available,
+    }
+
+
+@app.get("/debug/workspace")
+async def debug_workspace() -> dict:
+    """Return absolute path state so the user can verify where clones go.
+
+    Powers the UI's workspace indicator and the "why is my repo not
+    where I expected" debugging flow. Everything returned here is safe
+    to display — absolute paths only, no secrets.
+    """
+    ws = os.path.abspath(config.agent_workspace_dir)
+    exists = os.path.isdir(ws)
+    entries: list[dict] = []
+    if exists:
+        try:
+            for name in sorted(os.listdir(ws)):
+                full = os.path.join(ws, name)
+                entries.append({
+                    "name": name,
+                    "is_dir": os.path.isdir(full),
+                    "size": os.path.getsize(full) if os.path.isfile(full) else None,
+                })
+        except Exception:  # noqa: BLE001
+            pass
+    return {
+        "agent_workspace_dir": ws,
+        "exists": exists,
+        "uvicorn_cwd": os.getcwd(),
+        "project_root": os.path.dirname(os.path.abspath(__file__)),
+        "entry_count": len(entries),
+        "entries": entries[:50],  # cap to keep the response small
     }
 
 
