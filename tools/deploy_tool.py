@@ -70,20 +70,21 @@ async def _run_cmd(
 
 
 def _resolve_cwd(working_dir: Optional[str]) -> str:
-    """Same cwd logic as shell_tool — fall back to config.agent_workspace_dir.
+    """Same cwd logic as shell_tool — fall back to the session's effective
+    workspace (per-session override, else config.agent_workspace_dir).
 
     When ``working_dir`` is a *relative* path, resolve it **against the
-    agent workspace** (not against whatever cwd Python happens to be in).
-    This eliminates the "../Pixelle-Video went to /home/user/Pixelle-Video
-    not /home/user/OpenTeddy/agent-workspace/Pixelle-Video" class of bug,
-    which has caused repeated deploy failures.
+    effective workspace** (not against whatever cwd Python happens to be
+    in). This keeps every tool's cwd semantics identical — the source
+    of last month's worldmonitor/Pixelle-Video confusion was
+    shell_tool vs deploy_tool resolving the same relative string
+    against different anchors.
     """
-    from config import config as _cfg
-    ws = getattr(_cfg, "agent_workspace_dir", None) or os.getcwd()
-    ws = os.path.abspath(ws)  # defensive — config should already be abs
+    from config import effective_workspace_dir
+    ws = effective_workspace_dir() or os.getcwd()
+    ws = os.path.abspath(ws)
     if not working_dir:
         return ws
-    # Resolve relative paths against the workspace root, not the uvicorn cwd.
     chosen = working_dir if os.path.isabs(working_dir) else os.path.join(ws, working_dir)
     return os.path.abspath(chosen)
 

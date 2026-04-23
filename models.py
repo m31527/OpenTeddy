@@ -167,6 +167,11 @@ class Session(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     title: str = "New session"
     mode: SessionMode = SessionMode.CODE
+    # Per-session override for the agent workspace. None ⇒ use the
+    # global config.agent_workspace_dir. Lets a Code-mode session point
+    # at an existing project on disk (e.g. /home/me/my-repo) so the
+    # agent can work on it directly instead of cloning into a sandbox.
+    workspace_dir: Optional[str] = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
@@ -178,6 +183,7 @@ class SessionListResponse(BaseModel):
 class CreateSessionRequest(BaseModel):
     title: Optional[str] = None
     mode: Optional[SessionMode] = None
+    workspace_dir: Optional[str] = None
 
 
 class RunResponse(BaseModel):
@@ -201,14 +207,15 @@ class SkillListResponse(BaseModel):
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS sessions (
-    id          TEXT PRIMARY KEY,
-    title       TEXT NOT NULL DEFAULT 'New session',
-    mode        TEXT NOT NULL DEFAULT 'code',
-    created_at  TEXT NOT NULL,
-    updated_at  TEXT NOT NULL
+    id            TEXT PRIMARY KEY,
+    title         TEXT NOT NULL DEFAULT 'New session',
+    mode          TEXT NOT NULL DEFAULT 'code',
+    workspace_dir TEXT,
+    created_at    TEXT NOT NULL,
+    updated_at    TEXT NOT NULL
 );
--- NOTE: for pre-existing DBs the `mode` column is added in
--- tracker._migrate_usage_columns, same pattern as tasks.session_id.
+-- NOTE: for pre-existing DBs the `mode` and `workspace_dir` columns
+-- are added in tracker._migrate_usage_columns.
 
 CREATE TABLE IF NOT EXISTS tasks (
     id          TEXT PRIMARY KEY,

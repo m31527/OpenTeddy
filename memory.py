@@ -315,6 +315,11 @@ class MemoryManager:
                     "content":   doc,
                     "type":      meta.get("type", "unknown"),
                     "task_id":   meta.get("task_id", ""),
+                    # Expose session_id so the Memory tab can group /
+                    # label each record by which session produced it.
+                    # Lets the user see the cross-session view at a
+                    # glance without losing per-session isolation.
+                    "session_id": meta.get("session_id", ""),
                     "timestamp": meta.get("timestamp", ""),
                     "importance": float(meta.get("importance", 0.5)),
                 }
