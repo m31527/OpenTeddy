@@ -74,6 +74,76 @@ def _sanitize_command(cmd: str) -> str:
     return cmd
 
 
+def _fix_duplicate_workspace_prefix(
+    cmd: str, effective_dir: str,
+) -> Tuple[str, Optional[str]]:
+    """Strip a duplicate ``agent-workspace/`` prefix from a leading ``cd``.
+
+    Bug this fixes: Gemma sometimes plans commands like
+        ``cd ./agent-workspace/Pixelle-Video && docker compose up``
+    because ``docker_project_detect`` accepts that shape (it resolves via
+    Python's os.path.abspath, which is relative to the uvicorn process
+    cwd). But shell_exec_* runs in ``agent_workspace_dir`` already, so
+    the shell sees ``cd ./agent-workspace/agent-workspace/...`` and the
+    `cd` silently fails, breaking the `&&` chain. The user then sees
+    "deploy completed 100%" while nothing actually started.
+
+    If the subprocess cwd ends in (e.g.) ``/agent-workspace`` AND the
+    command starts with ``cd ./agent-workspace/X`` or ``cd agent-workspace/X``,
+    rewrite to ``cd X``. Absolute paths are left alone.
+
+    Returns (fixed_cmd, reason_or_None). reason is a human-readable
+    note when a rewrite happened, for logging.
+    """
+    if not effective_dir:
+        return cmd, None
+    ws_basename = os.path.basename(os.path.abspath(effective_dir).rstrip("/"))
+    if not ws_basename:
+        return cmd, None
+
+    # Match "cd agent-workspace/X..." or "cd ./agent-workspace/X..." at start.
+    # The `(?:\./)?` prevents matching "cd /agent-workspace/X" (absolute).
+    pattern = rf"^cd\s+(?:\./)?({re.escape(ws_basename)}/)"
+    m = re.match(pattern, cmd)
+    if not m:
+        return cmd, None
+
+    new_cmd = re.sub(pattern, "cd ", cmd, count=1)
+    reason = (
+        f"auto-stripped duplicate '{m.group(1)}' prefix — shell cwd is "
+        f"already '{effective_dir}'. Was: `{cmd[:80]}` → `{new_cmd[:80]}`"
+    )
+    return new_cmd, reason
+
+
+_DEPLOY_SUCCESS_EMPTY_RE = re.compile(
+    r"\bdocker\s+compose\s+(?:up|ps)\b", re.IGNORECASE,
+)
+
+
+def _looks_like_empty_compose_result(command: str, stdout: str, stderr: str) -> bool:
+    """After ``docker compose up`` / ``ps``, an EMPTY container list is a
+    red flag, not a success. The header ``NAME STATUS SERVICE`` with no
+    rows means either the compose project never started or the agent ran
+    ``ps`` in the wrong directory. Return True so the caller can flip
+    this into a visible failure signal."""
+    if not _DEPLOY_SUCCESS_EMPTY_RE.search(command):
+        return False
+    # `docker compose ps` with zero services emits either just the header
+    # or no output at all (depending on version).
+    rendered = (stdout or "") + (stderr or "")
+    if not rendered.strip():
+        return True
+    lines = [ln for ln in rendered.splitlines() if ln.strip()]
+    # If only a header row (contains "NAME" and "STATUS" or "SERVICE") and
+    # nothing else, it's empty.
+    if len(lines) <= 1:
+        header = lines[0] if lines else ""
+        if "NAME" in header.upper() and ("STATUS" in header.upper() or "SERVICE" in header.upper()):
+            return True
+    return False
+
+
 # ── Docker Compose context check ──────────────────────────────────────────────
 
 _COMPOSE_FILENAMES = (
@@ -274,18 +344,28 @@ async def execute_shell(
     No more zombie `docker build` processes chewing CPU in the background.
     """
     command = _sanitize_command(command)
-    effective_timeout = _docker_timeout(command, timeout)
-    if effective_timeout != timeout:
-        logger.info(
-            "execute_shell: overriding timeout %ds → %ds for command: %s",
-            timeout, effective_timeout, command[:80],
-        )
 
     effective_dir = _resolve_working_dir(working_dir)
     if not working_dir:
         logger.info(
             "execute_shell: no working_dir supplied, defaulting to %s",
             effective_dir,
+        )
+
+    # Path-hygiene fix for the most common Gemma planning mistake: it
+    # sometimes prefixes cd targets with ./agent-workspace/ even though
+    # the shell is already rooted there. We fix it transparently and log
+    # a note so the user can see it happened.
+    fixed, fix_note = _fix_duplicate_workspace_prefix(command, effective_dir)
+    if fix_note:
+        logger.info("execute_shell: %s", fix_note)
+        command = fixed
+
+    effective_timeout = _docker_timeout(command, timeout)
+    if effective_timeout != timeout:
+        logger.info(
+            "execute_shell: overriding timeout %ds → %ds for command: %s",
+            timeout, effective_timeout, command[:80],
         )
 
     # Late import of config so tests can override it without module reload.
@@ -348,6 +428,34 @@ async def execute_shell(
 
         if compose_note:
             stderr = f"{compose_note}\n{stderr}" if stderr else compose_note
+
+        # Sanity guard: `docker compose up/ps` that exits 0 with ZERO rows
+        # is almost always a false success (wrong cwd, missing project
+        # file, stale context). Flip it to failure so Qwen escalates
+        # instead of reporting "deployed successfully" with no containers.
+        if success and _looks_like_empty_compose_result(command, stdout, stderr):
+            logger.warning(
+                "execute_shell: docker compose returned OK but NO containers "
+                "are present — likely ran in the wrong directory or the project "
+                "name is off. Flipping result to failure so the agent retries."
+            )
+            hint = (
+                "\n\n[OpenTeddy hint] docker compose reported zero containers. "
+                "This usually means the command ran in the wrong directory, or "
+                "the compose file wasn't picked up. Try running `docker compose "
+                "config` inside the project dir, or use an explicit `-f <file>`."
+            )
+            stderr = (stderr + hint).strip()
+            return make_result(
+                False,
+                result={
+                    "stdout": stdout,
+                    "stderr": stderr,
+                    "exit_code": exit_code,
+                },
+                error="docker compose returned zero containers (likely wrong cwd)",
+                duration_ms=duration_ms,
+            )
 
         return make_result(
             success,
