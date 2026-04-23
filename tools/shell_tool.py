@@ -22,12 +22,21 @@ MAX_OUTPUT_LINES = 200
 MAX_OUTPUT_CHARS = 8000
 
 # ── Docker-specific timeouts (seconds) ────────────────────────────────────────
+# Wall-clock timeouts per command-type. 0 means "no wall limit — rely
+# purely on silence-timeout to detect a truly stuck command". Docker
+# build / up / compose are intentionally 0 because real-world builds
+# on slow machines, large base images, or heavy npm/pip deps can run
+# 15+ minutes while still actively printing progress. Silence-timeout
+# (default 180s) catches genuine hangs; wall-clock caps just caused
+# false kills in the middle of legitimate long builds.
 _DOCKER_TIMEOUTS: List[Tuple[str, int]] = [
-    ("docker compose up",    180),
-    ("docker-compose up",    180),
-    ("docker compose build", 300),
-    ("docker-compose build", 300),
-    ("docker build",         300),
+    ("docker compose up",    0),  # no wall limit; silence-detect only
+    ("docker-compose up",    0),
+    ("docker compose build", 0),
+    ("docker-compose build", 0),
+    ("docker build",         0),
+    ("docker compose pull",  600),  # pulls can be huge but always stream
+    ("docker pull",          600),
 ]
 
 # ── Risk detection ─────────────────────────────────────────────────────────────
@@ -337,10 +346,14 @@ def _docker_compose_context_note(
 
 
 def _docker_timeout(cmd: str, default: int) -> int:
-    """Return a command-specific timeout for known long-running Docker operations."""
+    """Return a command-specific wall-clock timeout for known long-running
+    Docker operations. Returning 0 disables the wall-clock check entirely
+    — silence-timeout then becomes the sole hang detector, which is
+    what we want for builds that may legitimately run 15+ minutes.
+    """
     for pattern, t in _DOCKER_TIMEOUTS:
         if pattern in cmd:
-            return t
+            return t  # 0 means "no wall limit"; else use the configured value
     return default
 
 
@@ -594,7 +607,17 @@ async def execute_shell(
         pass
 
     effective_timeout = _docker_timeout(command, timeout)
-    if effective_timeout != timeout:
+    if effective_timeout == 0:
+        # Only silence-timeout now guards this command. Log it loudly so
+        # the user can see "this is allowed to run as long as it keeps
+        # producing output" rather than wondering why the normal 30s
+        # default didn't apply.
+        logger.info(
+            "execute_shell: NO wall-clock limit for long-running docker "
+            "command (relying on silence timeout only) — cmd: %s",
+            command[:120],
+        )
+    elif effective_timeout != timeout:
         logger.info(
             "execute_shell: overriding timeout %ds → %ds for command: %s",
             timeout, effective_timeout, command[:80],
