@@ -370,12 +370,34 @@ class Orchestrator:
         if mode_value in ("code", "analytic"):
             try:
                 ws = os.path.abspath(config.agent_workspace_dir)
+                ws_basename = os.path.basename(ws)
                 workspace_hint = (
-                    f"\n\n【工作目錄】預設 working directory 是：{ws}\n"
-                    f"  - 除非用戶明確指定其他路徑，所有 shell 指令都在這底下執行\n"
-                    f"  - 不需要手動 cd 進去 —— shell_exec 工具會自動用這個路徑\n"
-                    f"  - 例：「git clone https://github.com/x/y」會產生 {ws}/y\n"
-                    f"  - 若要進入子資料夾跑指令，照常用 `cd y && ...`\n"
+                    f"\n\n【工作目錄 — 非常重要，常踩坑】\n"
+                    f"  所有 shell 指令的 cwd 預設是：{ws}\n"
+                    f"\n"
+                    f"  ✅ 正確範例：\n"
+                    f"    - `git clone https://github.com/x/y`（clone 到 {ws}/y）\n"
+                    f"    - `cd y && docker compose up -d`（進 clone 下來的專案）\n"
+                    f"    - `ls y/` 查 y 資料夾內容\n"
+                    f"\n"
+                    f"  ❌ **絕對錯誤**：在 shell 指令裡寫 `{ws_basename}/` 前綴 —\n"
+                    f"    shell 已經在 `{ws_basename}` 裡面，再 cd 進 `{ws_basename}/y`\n"
+                    f"    會找 `{ws_basename}/{ws_basename}/y`，那個不存在，cd 失敗，\n"
+                    f"    後面的 && 全部不執行，但 exit code 可能讓你誤以為成功。\n"
+                    f"    - ❌ `cd ./{ws_basename}/y && docker compose up`\n"
+                    f"    - ❌ `cd {ws_basename}/y && ...`\n"
+                    f"    - ✅ `cd y && ...`\n"
+                    f"\n"
+                    f"  🔧 工具參數（docker_project_detect、compose_validate 等）\n"
+                    f"    的 working_dir 參數走 Python 絕對路徑解析，所以兩種寫法\n"
+                    f"    都能工作，但**請一律用不帶前綴**的寫法維持一致：\n"
+                    f"    - ✅ `docker_project_detect(working_dir='y')`\n"
+                    f"    - ❌ `docker_project_detect(working_dir='./{ws_basename}/y')`\n"
+                    f"\n"
+                    f"  🧪 驗證步驟必查：`docker compose up` 之後 `docker compose ps`\n"
+                    f"    若看到 `NAME STATUS SERVICE` 表頭但底下無資料，代表服務\n"
+                    f"    **沒真的起來**（通常是 cwd 錯了），不是成功。計劃時要\n"
+                    f"    把這當成失敗接 docker_diagnose 或 compose_validate 回查。\n"
                 )
             except Exception:  # noqa: BLE001
                 pass
