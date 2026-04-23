@@ -1734,6 +1734,23 @@
                     oninput="document.getElementById('val_skill_promotion_threshold').textContent=this.value" />
                 </div>
               </div>
+
+              <div class="param-row">
+                <div class="param-field">
+                  <label>Subtask Timeout (seconds) — wall-clock hard stop
+                    <span class="param-value" id="val_subtask_timeout">900</span>
+                  </label>
+                  <input type="range" id="rng_subtask_timeout" min="60" max="3600" step="60" value="900"
+                    oninput="document.getElementById('val_subtask_timeout').textContent=this.value" />
+                </div>
+                <div class="param-field">
+                  <label>Shell Silence Timeout (s) — kills commands with zero output for this long
+                    <span class="param-value" id="val_shell_silence_timeout">90</span>
+                  </label>
+                  <input type="range" id="rng_shell_silence_timeout" min="0" max="600" step="10" value="90"
+                    oninput="document.getElementById('val_shell_silence_timeout').textContent=this.value" />
+                </div>
+              </div>
             </div>
 
             <div class="settings-save-row">
@@ -2897,6 +2914,8 @@
         _setSlider('qwen_max_tokens',           s.qwen_max_tokens?.value           ?? 4096);
         _setSlider('skill_match_threshold',     s.skill_match_threshold?.value     ?? 0.4);
         _setSlider('skill_promotion_threshold', s.skill_promotion_threshold?.value ?? 5);
+        _setSlider('subtask_timeout',           s.subtask_timeout?.value           ?? 900);
+        _setSlider('shell_silence_timeout',     s.shell_silence_timeout?.value     ?? 90);
         _settingsLoaded = true;
         await refreshOllamaStatus();
         await loadOllamaModels(s.orchestrator_model?.value ?? '', s.executor_model?.value ?? '');
@@ -3050,6 +3069,8 @@
         qwen_max_tokens:           document.getElementById('rng_qwen_max_tokens').value,
         skill_match_threshold:     document.getElementById('rng_skill_match_threshold').value,
         skill_promotion_threshold: document.getElementById('rng_skill_promotion_threshold').value,
+        subtask_timeout:           document.getElementById('rng_subtask_timeout').value,
+        shell_silence_timeout:     document.getElementById('rng_shell_silence_timeout').value,
         agent_workspace_dir:       document.getElementById('inp_agent_workspace_dir').value.trim(),
       };
       Object.keys(payload).forEach(k => { if (payload[k] === '') delete payload[k]; });

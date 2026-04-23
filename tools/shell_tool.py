@@ -175,6 +175,78 @@ def _resolve_working_dir(working_dir: Optional[str]) -> str:
     return chosen_abs
 
 
+async def _drain_with_silence_timeout(
+    proc: asyncio.subprocess.Process,
+    silence_timeout: float,
+    wall_timeout: float,
+) -> Tuple[bytes, bytes, str]:
+    """Read stdout + stderr concurrently, kill the process if nothing arrives
+    for ``silence_timeout`` seconds, AND cap total runtime at ``wall_timeout``.
+
+    Returns (stdout_bytes, stderr_bytes, reason) where reason is one of:
+      "exit"              — process exited normally
+      "silence_timeout"   — idle too long, killed
+      "wall_timeout"      — exceeded absolute ceiling, killed
+
+    The whole point of this function is that `docker compose up --build`
+    can legitimately run for 10+ minutes while actively printing layer
+    progress. A fixed wall-clock timeout misjudges that as "hung". Here
+    each chunk of output resets the silence clock; a truly stuck command
+    (DNS failure, interactive prompt, lock contention with no logging)
+    still gets caught within ``silence_timeout`` seconds.
+    """
+    stdout_buf = bytearray()
+    stderr_buf = bytearray()
+    start = time.monotonic()
+    last_activity = start
+
+    async def _reader(stream: asyncio.StreamReader, buf: bytearray) -> None:
+        while True:
+            chunk = await stream.read(4096)
+            if not chunk:
+                return
+            buf.extend(chunk)
+            nonlocal last_activity
+            last_activity = time.monotonic()
+
+    assert proc.stdout is not None and proc.stderr is not None
+    stdout_task = asyncio.create_task(_reader(proc.stdout, stdout_buf))
+    stderr_task = asyncio.create_task(_reader(proc.stderr, stderr_buf))
+    wait_task   = asyncio.create_task(proc.wait())
+
+    try:
+        while True:
+            # Poll at most every `silence_timeout`; this loop exits on one of
+            # three conditions: exit, silence exceeded, wall-clock exceeded.
+            idle_for = time.monotonic() - last_activity
+            remaining_silence = max(0.5, silence_timeout - idle_for) if silence_timeout > 0 else 999999
+            elapsed = time.monotonic() - start
+            remaining_wall = max(0.5, wall_timeout - elapsed) if wall_timeout > 0 else 999999
+            sleep_for = min(remaining_silence, remaining_wall)
+
+            done, _ = await asyncio.wait(
+                {wait_task}, timeout=sleep_for,
+            )
+            if wait_task in done:
+                # Process has exited — drain any tail output.
+                # Readers will hit EOF shortly.
+                await asyncio.gather(stdout_task, stderr_task, return_exceptions=True)
+                return bytes(stdout_buf), bytes(stderr_buf), "exit"
+
+            # Woke up on timeout. Which limit tripped?
+            now = time.monotonic()
+            if silence_timeout > 0 and (now - last_activity) >= silence_timeout:
+                return bytes(stdout_buf), bytes(stderr_buf), "silence_timeout"
+            if wall_timeout > 0 and (now - start) >= wall_timeout:
+                return bytes(stdout_buf), bytes(stderr_buf), "wall_timeout"
+            # Otherwise: spurious wake, loop
+    finally:
+        # Clean up readers — they'll auto-exit on EOF but we belt-and-braces.
+        for t in (stdout_task, stderr_task, wait_task):
+            if not t.done():
+                t.cancel()
+
+
 async def execute_shell(
     command: str,
     working_dir: Optional[str] = None,
@@ -186,12 +258,20 @@ async def execute_shell(
     Risk is determined dynamically; the registry receives LOW by default but
     shell_tool re-checks at call time (registry handles the gate for HIGH entries).
 
-    Applies four safety measures automatically:
+    Applies five safety measures automatically:
     1. ``_resolve_working_dir`` defaults the cwd to ``agent_workspace_dir`` when
        the LLM didn't supply one, so git clones etc. land in a known place.
     2. ``_sanitize_command`` rewrites dangerous/blocking variants (e.g. docker logs).
     3. ``_docker_timeout`` overrides the timeout for known long-running Docker ops.
-    4. ``_truncate_output`` caps stdout/stderr to avoid context overflow.
+    4. **Silence timeout** (``config.shell_silence_timeout``, default 90s) —
+       command is killed only if it produces no output for that many seconds.
+       This lets long-but-active commands (docker build, pip install) run to
+       completion while still catching real hangs.
+    5. ``_truncate_output`` caps stdout/stderr to avoid context overflow.
+
+    Cleanup: the subprocess is ALWAYS killed if we exit this function without
+    a clean exit — including when our caller cancels us via asyncio.CancelledError.
+    No more zombie `docker build` processes chewing CPU in the background.
     """
     command = _sanitize_command(command)
     effective_timeout = _docker_timeout(command, timeout)
@@ -208,11 +288,16 @@ async def execute_shell(
             effective_dir,
         )
 
+    # Late import of config so tests can override it without module reload.
+    from config import config as _cfg
+    silence_timeout = float(getattr(_cfg, "shell_silence_timeout", 90) or 0)
+
     compose_note = _docker_compose_context_note(command, effective_dir)
     if compose_note:
         logger.info("%s", compose_note)
 
     start = time.monotonic()
+    proc: Optional[asyncio.subprocess.Process] = None
     try:
         proc = await asyncio.create_subprocess_shell(
             command,
@@ -220,17 +305,37 @@ async def execute_shell(
             stderr=asyncio.subprocess.PIPE,
             cwd=effective_dir,
         )
-        try:
-            stdout_bytes, stderr_bytes = await asyncio.wait_for(
-                proc.communicate(), timeout=float(effective_timeout)
-            )
-        except asyncio.TimeoutError:
-            proc.kill()
-            await proc.communicate()
+        stdout_bytes, stderr_bytes, reason = await _drain_with_silence_timeout(
+            proc,
+            silence_timeout=silence_timeout,
+            wall_timeout=float(effective_timeout),
+        )
+
+        if reason in ("silence_timeout", "wall_timeout"):
+            # Kill the straggler before returning — otherwise docker build
+            # keeps running orphaned, burning CPU and confusing the user's
+            # next attempt. `proc.wait()` with a short timeout gives the
+            # OS a moment to reap.
+            try:
+                proc.kill()
+                await asyncio.wait_for(proc.wait(), timeout=5)
+            except (ProcessLookupError, asyncio.TimeoutError):
+                pass
+
             duration_ms = int((time.monotonic() - start) * 1000)
+            idle_msg = (
+                f"no output for {silence_timeout}s (silence timeout — looks hung)"
+                if reason == "silence_timeout"
+                else f"exceeded wall-clock limit of {effective_timeout}s"
+            )
             return make_result(
                 False,
-                error=f"Command timed out after {effective_timeout}s",
+                result={
+                    "stdout": _truncate_output(stdout_bytes.decode(errors="replace")),
+                    "stderr": _truncate_output(stderr_bytes.decode(errors="replace")),
+                    "exit_code": -1,
+                },
+                error=f"Command killed — {idle_msg}",
                 duration_ms=duration_ms,
             )
 
@@ -254,7 +359,24 @@ async def execute_shell(
             error=None if success else f"Exit code {exit_code}",
             duration_ms=duration_ms,
         )
+    except asyncio.CancelledError:
+        # The orchestrator cancelled us (outer subtask_timeout, user hit Stop,
+        # or upstream escalation). Kill the subprocess so we don't leak a
+        # runaway docker build into the background.
+        if proc is not None and proc.returncode is None:
+            try:
+                proc.kill()
+                await asyncio.wait_for(proc.wait(), timeout=5)
+            except (ProcessLookupError, asyncio.TimeoutError):
+                pass
+        raise
     except Exception as exc:  # noqa: BLE001
+        if proc is not None and proc.returncode is None:
+            try:
+                proc.kill()
+                await asyncio.wait_for(proc.wait(), timeout=5)
+            except (ProcessLookupError, asyncio.TimeoutError):
+                pass
         duration_ms = int((time.monotonic() - start) * 1000)
         logger.error("execute_shell error: %s", exc)
         return make_result(False, error=str(exc), duration_ms=duration_ms)
