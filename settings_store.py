@@ -173,7 +173,56 @@ class SettingsStore:
                 )
             await db.commit()
 
+            # Auto-migrate stale defaults. Without this, users upgrading
+            # from older versions kept the old subtask_timeout=120 (or
+            # 180) in their DB, and long docker builds would get killed
+            # at 120s while the code thinks the default is 900s. We only
+            # migrate values that EXACTLY match a past shipped default
+            # so we never override a user's intentional choice.
+            await self._migrate_stale_defaults(db)
+
         logger.info("SettingsStore ready (%d default keys).", len(defaults))
+
+    async def _migrate_stale_defaults(self, db: aiosqlite.Connection) -> None:
+        """Replace pre-upgrade default values with the current ones.
+
+        Each entry lists (key, *known_old_defaults) — if the stored value
+        matches ANY of them, it's treated as "user never changed it from
+        the old default" and bumped to the current code default. If the
+        stored value is outside that allowlist, we leave it alone (user
+        may have tuned it intentionally).
+        """
+        stale_matches: list[tuple[str, tuple[str, ...]]] = [
+            # subtask_timeout: shipped 120 → 180 → 900
+            ("subtask_timeout", ("120", "180")),
+            # shell_silence_timeout: added later at 90 — if someone has
+            # an exactly-default stored but we lower the default, we'd
+            # want to not touch it. Currently 90 is the default, no
+            # migration needed here yet; placeholder for future.
+        ]
+        defaults = _defaults_from_config()
+        for key, old_values in stale_matches:
+            target = defaults.get(key)
+            if not target:
+                continue
+            async with db.execute(
+                "SELECT value FROM app_settings WHERE key=?", (key,)
+            ) as cur:
+                row = await cur.fetchone()
+            if not row:
+                continue
+            current = row[0]
+            if current in old_values and current != target:
+                await db.execute(
+                    "UPDATE app_settings SET value=?, updated_at=? WHERE key=?",
+                    (target, _now(), key),
+                )
+                logger.info(
+                    "Migrated stale default for '%s': %s → %s (was an old "
+                    "shipped default; current code default is higher)",
+                    key, current, target,
+                )
+        await db.commit()
 
     # ── CRUD ───────────────────────────────────────────────────────────────────
 

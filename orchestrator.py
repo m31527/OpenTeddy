@@ -616,7 +616,30 @@ class Orchestrator:
         # Docker 操作：嘗試用 scoped 指令避免看到無關容器
         docker_keywords = ["docker compose", "docker-compose", "docker run", "docker"]
         if any(kw in desc_lower for kw in docker_keywords):
-            scoped_cmd = self._compose_scoped_ps_cmd(desc) or "docker ps"
+            # Priority 1: explicit `-f path` or `cd X` in the description
+            scoped_cmd = self._compose_scoped_ps_cmd(desc)
+            # Priority 2: fall back to the session's effective workspace.
+            # This stops verification from doing `docker ps` globally,
+            # which would pick up unrelated unhealthy containers on the
+            # host (e.g. mold-harvester-db-1 leftover from a previous
+            # project) and trigger bogus Claude escalations.
+            if not scoped_cmd:
+                try:
+                    from config import effective_workspace_dir
+                    import shlex as _shlex
+                    ws = effective_workspace_dir()
+                    if ws:
+                        scoped_cmd = (
+                            f"cd {_shlex.quote(ws)} && "
+                            "docker compose ps --format "
+                            "'table {{.Name}}\\t{{.Status}}\\t{{.Service}}' "
+                            "2>/dev/null || docker ps"
+                        )
+                except Exception:  # noqa: BLE001
+                    pass
+            # Priority 3: global docker ps (last resort)
+            if not scoped_cmd:
+                scoped_cmd = "docker ps"
             logger.info("Running verification '%s' for subtask %s", scoped_cmd, st.id)
             output = await self._run_cmd_capture(scoped_cmd, timeout=10.0, max_chars=1200)
             if output is None:

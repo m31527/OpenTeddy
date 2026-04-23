@@ -451,11 +451,29 @@ class Executor:
                         pass
                     raise
 
+                # Include a preview of the error / output so the server
+                # log doesn't just say "success=False" — when a deploy
+                # fails, we want the reason visible in the log without
+                # re-running everything with debug on.
+                result_preview = ""
+                if not tool_result.get("success"):
+                    result_preview = (
+                        tool_result.get("error")
+                        or _preview_tool_output(tool_result)
+                        or ""
+                    )
+                else:
+                    result_preview = _preview_tool_output(tool_result) or ""
+                # Flatten whitespace + cap so multi-line stderr stays readable.
+                result_preview = (
+                    " ".join(result_preview.split())[:200]
+                )
                 logger.info(
-                    "Tool result tool=%s success=%s duration_ms=%s",
+                    "Tool result tool=%s success=%s duration_ms=%s -- %s",
                     tool_name,
                     tool_result.get("success"),
                     tool_result.get("duration_ms"),
+                    result_preview,
                 )
 
                 # ── Objective failure detection ───────────────────────────
