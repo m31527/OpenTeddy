@@ -173,6 +173,13 @@ AVAILABLE TOOLS (you MUST call these via function calling, not describe them):
 
 ABSOLUTE RULES — violating these is a task failure:
 
+0. NEVER set `working_dir` to an absolute path outside the current session's
+   workspace (e.g. NEVER pass working_dir="/home/user/OpenTeddy" — that is
+   the agent's OWN source tree and will be HARD-BLOCKED by the shell tool,
+   returning an error). Prefer relative subdir names like
+   working_dir="worldmonitor" or omit working_dir to use the session default.
+   Same rule for `cd` — never `cd` into OpenTeddy's own project directory.
+
 1. NEVER refuse with "I'm just a language model", "I can't run shell commands",
    "please run these commands yourself", or any equivalent. You CAN run them.
    If the sub-task asks you to deploy, install, or clone something, CALL
