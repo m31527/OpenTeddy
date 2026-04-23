@@ -152,6 +152,29 @@ def _truncate_output(text: str) -> str:
 
 # ── Tool implementation ────────────────────────────────────────────────────────
 
+def _resolve_working_dir(working_dir: Optional[str]) -> str:
+    """Pick the effective working directory for this command.
+
+    Priority:
+      1. An explicit ``working_dir`` arg from the LLM (absolute or relative)
+      2. ``config.agent_workspace_dir`` — the project-wide default
+      3. Falls back to the current process CWD if even that fails
+
+    The directory is created on-demand so a freshly cloned project doesn't
+    have to ``mkdir`` it manually. Returns an absolute path.
+    """
+    # Late import to avoid a circular dep when tool_registry imports this
+    # module during early module initialisation.
+    from config import config as _cfg
+    chosen = working_dir or getattr(_cfg, "agent_workspace_dir", None) or os.getcwd()
+    chosen_abs = os.path.abspath(chosen)
+    try:
+        os.makedirs(chosen_abs, exist_ok=True)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Could not ensure working dir %s exists: %s", chosen_abs, exc)
+    return chosen_abs
+
+
 async def execute_shell(
     command: str,
     working_dir: Optional[str] = None,
@@ -163,10 +186,12 @@ async def execute_shell(
     Risk is determined dynamically; the registry receives LOW by default but
     shell_tool re-checks at call time (registry handles the gate for HIGH entries).
 
-    Applies three safety measures automatically:
-    1. ``_sanitize_command`` rewrites dangerous/blocking variants (e.g. docker logs).
-    2. ``_docker_timeout`` overrides the timeout for known long-running Docker ops.
-    3. ``_truncate_output`` caps stdout/stderr to avoid context overflow.
+    Applies four safety measures automatically:
+    1. ``_resolve_working_dir`` defaults the cwd to ``agent_workspace_dir`` when
+       the LLM didn't supply one, so git clones etc. land in a known place.
+    2. ``_sanitize_command`` rewrites dangerous/blocking variants (e.g. docker logs).
+    3. ``_docker_timeout`` overrides the timeout for known long-running Docker ops.
+    4. ``_truncate_output`` caps stdout/stderr to avoid context overflow.
     """
     command = _sanitize_command(command)
     effective_timeout = _docker_timeout(command, timeout)
@@ -176,7 +201,14 @@ async def execute_shell(
             timeout, effective_timeout, command[:80],
         )
 
-    compose_note = _docker_compose_context_note(command, working_dir)
+    effective_dir = _resolve_working_dir(working_dir)
+    if not working_dir:
+        logger.info(
+            "execute_shell: no working_dir supplied, defaulting to %s",
+            effective_dir,
+        )
+
+    compose_note = _docker_compose_context_note(command, effective_dir)
     if compose_note:
         logger.info("%s", compose_note)
 
@@ -186,7 +218,7 @@ async def execute_shell(
             command,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            cwd=working_dir,
+            cwd=effective_dir,
         )
         try:
             stdout_bytes, stderr_bytes = await asyncio.wait_for(

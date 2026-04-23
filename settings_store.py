@@ -98,6 +98,12 @@ SETTINGS_META: dict[str, dict[str, Any]] = {
         "min":         0,
         "max":         600,
     },
+    "agent_workspace_dir": {
+        "label":       "Agent Workspace Directory",
+        "description": "Default working directory for shell commands in Code / Analytic modes. "
+                       "Relative paths resolve against the project root.",
+        "type":        "text",
+    },
 }
 
 
@@ -116,6 +122,7 @@ def _defaults_from_config() -> dict[str, str]:
         "skill_match_threshold":    str(getattr(config, "skill_match_threshold", "0.4")),
         "skill_promotion_threshold": str(config.skill_promotion_threshold),
         "subtask_timeout":           str(config.subtask_timeout),
+        "agent_workspace_dir":       str(config.agent_workspace_dir),
     }
 
 
@@ -265,6 +272,9 @@ class SettingsStore:
         v7 = _int("subtask_timeout")
         if v7 is not None:
             config.subtask_timeout = v7
+
+        if "agent_workspace_dir" in settings and settings["agent_workspace_dir"]:
+            config.agent_workspace_dir = settings["agent_workspace_dir"]
 
         logger.info("Config updated from SettingsStore.")
 

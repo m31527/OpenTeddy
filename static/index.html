@@ -4,6 +4,14 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>OpenTeddy</title>
+  <!-- Favicons served from FastAPI's /static mount. `/favicon.ico` at the
+       root is also resolved by the root route in main.py for browsers that
+       bypass the HTML and hit the conventional path directly. -->
+  <link rel="icon" type="image/x-icon" href="/static/favicon.ico">
+  <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32x32.png">
+  <link rel="icon" type="image/png" sizes="16x16" href="/static/favicon-16x16.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon.png">
+  <link rel="manifest" href="/static/site.webmanifest">
   <style>
     :root {
       --bg-primary:    #faf9f7;
@@ -1625,6 +1633,21 @@
             </div>
 
             <div class="settings-section">
+              <h3>Agent Workspace</h3>
+              <div class="row" style="margin-bottom:0.25rem">
+                <div class="field" style="flex:2">
+                  <label>Workspace Directory (Code / Analytic 模式的預設 cwd)</label>
+                  <input type="text" id="inp_agent_workspace_dir" placeholder="./agent-workspace" />
+                </div>
+              </div>
+              <div style="font-size:0.72rem;color:var(--text-muted);line-height:1.5">
+                所有 shell 指令如果沒有指定 working_dir，都會預設在這個目錄底下執行
+                （<code>git clone</code>、<code>pip install</code>、檔案寫入等）。
+                相對路徑會從專案根目錄算起。目錄不存在時會自動建立。
+              </div>
+            </div>
+
+            <div class="settings-section">
               <h3>Parameter Settings</h3>
               <div class="param-row">
                 <div class="param-field">
@@ -2782,6 +2805,7 @@
         _setInput('inp_claude_model',   s.claude_model?.value   ?? '');
         _setInput('inp_gemma_base_url', s.gemma_base_url?.value ?? '');
         _setInput('inp_qwen_base_url',  s.qwen_base_url?.value  ?? '');
+        _setInput('inp_agent_workspace_dir', s.agent_workspace_dir?.value ?? './agent-workspace');
         _setSlider('escalation_threshold',      s.escalation_threshold?.value      ?? 0.6);
         _setSlider('escalation_failure_limit',  s.escalation_failure_limit?.value  ?? 3);
         _setSlider('gemma_max_tokens',          s.gemma_max_tokens?.value          ?? 4096);
@@ -2941,6 +2965,7 @@
         qwen_max_tokens:           document.getElementById('rng_qwen_max_tokens').value,
         skill_match_threshold:     document.getElementById('rng_skill_match_threshold').value,
         skill_promotion_threshold: document.getElementById('rng_skill_promotion_threshold').value,
+        agent_workspace_dir:       document.getElementById('inp_agent_workspace_dir').value.trim(),
       };
       Object.keys(payload).forEach(k => { if (payload[k] === '') delete payload[k]; });
       try {

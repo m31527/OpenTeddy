@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
@@ -305,7 +306,28 @@ class Orchestrator:
         # the user's declared intent.
         mode_value = req.mode.value if hasattr(req.mode, "value") else str(req.mode)
         base_prompt = _plan_prompt_for_mode(mode_value)
-        system_prompt = memory_ctx + "\n\n" + base_prompt if memory_ctx else base_prompt
+
+        # For Code / Analytic modes, tell Gemma what the agent workspace is
+        # so the shell plan uses a known directory (git clones land there
+        # by default, not scattered across /tmp or the server's cwd). Chat
+        # mode doesn't touch the filesystem so we skip this.
+        workspace_hint = ""
+        if mode_value in ("code", "analytic"):
+            try:
+                ws = os.path.abspath(config.agent_workspace_dir)
+                workspace_hint = (
+                    f"\n\n【工作目錄】預設 working directory 是：{ws}\n"
+                    f"  - 除非用戶明確指定其他路徑，所有 shell 指令都在這底下執行\n"
+                    f"  - 不需要手動 cd 進去 —— shell_exec 工具會自動用這個路徑\n"
+                    f"  - 例：「git clone https://github.com/x/y」會產生 {ws}/y\n"
+                    f"  - 若要進入子資料夾跑指令，照常用 `cd y && ...`\n"
+                )
+            except Exception:  # noqa: BLE001
+                pass
+
+        system_prompt = base_prompt + workspace_hint
+        if memory_ctx:
+            system_prompt = memory_ctx + "\n\n" + system_prompt
 
         prompt = (
             f"Goal: {req.goal}\n\n"
