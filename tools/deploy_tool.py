@@ -78,11 +78,33 @@ def _resolve_cwd(working_dir: Optional[str]) -> str:
 
 # ── Tool: port_probe ─────────────────────────────────────────────────────────
 
+# Processes that port_probe flags as "do not kill by default" — includes
+# typical web servers / databases / daemons. When port_probe sees one of
+# these owning a contested port, it tells Qwen to remap the container
+# port instead of calling port_free (which would disrupt the host).
+_IMPORTANT_PROCESS_NAMES = frozenset({
+    "uvicorn", "gunicorn", "hypercorn", "daphne",       # Python ASGI/WSGI
+    "node", "npm", "next-server",                       # Node web servers
+    "nginx", "apache", "apache2", "httpd", "caddy", "haproxy",
+    "mysqld", "postgres", "redis-server", "mongod",     # Databases
+    "ollama", "ollama-server",                          # Ollama daemon
+    "docker", "dockerd", "containerd", "containerd-shim",
+    "sshd", "cupsd", "launchd", "systemd",
+    "chrome", "firefox", "safari",                      # Browsers often hold ephemeral ports
+})
+
+
 async def port_probe(
     port: int, host: str = "localhost",
 ) -> Dict[str, Any]:
     """Check whether a TCP port is in use. Returns PID/process info when
     ``lsof`` is available; otherwise only the boolean.
+
+    Critically also flags whether the holding process is OpenTeddy itself,
+    or a known-important host service — because port_free on those would
+    kill the agent or a critical system daemon. Qwen reads the
+    ``safe_to_kill_hint`` + ``recommendation`` fields to decide whether
+    to remap the container's port instead.
 
     Output schema (as the 'result' field of the tool response):
       {
@@ -93,7 +115,11 @@ async def port_probe(
         "process": str | None,
         "user": str | None,
         "listening_addresses": list[str],
-        "raw_lsof": str     # preserved for debugging
+        "is_self": bool,              # PID matches our process or parent
+        "is_important": bool,         # PID is a well-known daemon/server
+        "safe_to_kill_hint": bool,    # False when is_self or is_important
+        "recommendation": str,        # human-readable suggestion for Qwen
+        "raw_lsof": str               # preserved for debugging
       }
     """
     port = int(port)
@@ -105,6 +131,10 @@ async def port_probe(
         "process": None,
         "user": None,
         "listening_addresses": [],
+        "is_self": False,
+        "is_important": False,
+        "safe_to_kill_hint": True,
+        "recommendation": "",
         "raw_lsof": "",
     }
 
@@ -148,6 +178,72 @@ async def port_probe(
                         out["user"] = parts[2]
                     addrs.append(parts[8])  # NAME column (e.g. *:8000, 127.0.0.1:8000)
             out["listening_addresses"] = addrs
+
+    # Safety analysis — the whole point of this field is to stop Qwen
+    # from calling port_free on OpenTeddy's own uvicorn (would kill the
+    # agent) or on shared host daemons like mysqld / ollama.
+    pid = out["pid"]
+    if pid is not None:
+        our_pid = os.getpid()
+        parent_pid = os.getppid()
+        if pid in (our_pid, parent_pid):
+            out["is_self"] = True
+        else:
+            # Walk up the PID's ancestry to detect "this is a child of
+            # OpenTeddy" (e.g. a uvicorn worker forked by the parent
+            # gunicorn process). Cheap best-effort — skips on error.
+            try:
+                pid_cursor = pid
+                for _ in range(6):  # bounded to avoid weird loops
+                    rc_pp, pp_out, _ = await _run_cmd(
+                        ["ps", "-o", "ppid=", "-p", str(pid_cursor)], timeout=2,
+                    )
+                    if rc_pp != 0 or not pp_out.strip():
+                        break
+                    try:
+                        pid_cursor = int(pp_out.strip())
+                    except ValueError:
+                        break
+                    if pid_cursor in (our_pid, parent_pid, 0, 1):
+                        if pid_cursor in (our_pid, parent_pid):
+                            out["is_self"] = True
+                        break
+            except Exception:  # noqa: BLE001
+                pass
+
+    pname = (out["process"] or "").lower()
+    if pname in _IMPORTANT_PROCESS_NAMES:
+        out["is_important"] = True
+
+    out["safe_to_kill_hint"] = not (out["is_self"] or out["is_important"])
+
+    # Recommendation string the plan-prompt tells Gemma/Qwen to read.
+    if not out["in_use"]:
+        out["recommendation"] = "Port is free — proceed with the bind."
+    elif out["is_self"]:
+        out["recommendation"] = (
+            f"Port {port} is held by OpenTeddy's own process (PID {pid}). "
+            "DO NOT call port_free — that would kill the agent. "
+            "Use compose_remap_port to move the container to a different host port."
+        )
+    elif out["is_important"]:
+        out["recommendation"] = (
+            f"Port {port} is held by '{out['process']}' (PID {pid}), "
+            "a known-important host service. Prefer compose_remap_port to "
+            "rebind the container; only port_free if the user explicitly "
+            "confirms stopping this service is OK."
+        )
+    elif pid is not None:
+        out["recommendation"] = (
+            f"Port {port} is held by '{out['process']}' (PID {pid}). "
+            "Looks like a normal user process — port_free is reasonable, "
+            "or compose_remap_port if you want to avoid disrupting it."
+        )
+    else:
+        out["recommendation"] = (
+            f"Port {port} is in use but lsof did not report a PID "
+            "(may require elevated privileges). Consider compose_remap_port."
+        )
 
     return make_result(True, result=out)
 
@@ -467,6 +563,178 @@ async def docker_diagnose(
     return make_result(True, result=out)
 
 
+# ── Tool: compose_remap_port ─────────────────────────────────────────────────
+
+# Match a docker-compose port entry like:
+#   - "8000:80"
+#   - "8000:80/tcp"
+#   - 8000:80
+#   - "127.0.0.1:8000:80"
+# Capture groups: (prefix, host_port, suffix)
+# prefix  = optional quote + optional IP bind (e.g. '"127.0.0.1:')
+# suffix  = everything after the host port (':80', ':80/tcp', '"')
+_PORT_ENTRY_RE = re.compile(
+    r"""
+    (?P<prefix>
+        -\s*           # list dash
+        ["']?          # opening quote (optional)
+        (?:[\d\.]+:)?  # optional IP bind like '127.0.0.1:'
+    )
+    (?P<host>\d+)
+    (?P<suffix>
+        :\d+           # container port
+        (?:/\w+)?      # /tcp or /udp (optional)
+        ["']?          # closing quote (optional)
+    )
+    """,
+    re.VERBOSE,
+)
+
+
+def _edit_compose_port(
+    content: str, service: str, from_port: int, to_port: int,
+) -> Tuple[str, int]:
+    """Regex edit of a compose file's ports mapping.
+
+    Returns (new_content, occurrences_changed).
+
+    We deliberately use regex rather than round-tripping through PyYAML
+    because YAML dump loses comments and reformats whitespace — which
+    breaks diffs, merges, and user trust in "what did the tool change?"
+    Downside: if the compose file uses an exotic port syntax this might
+    miss it. That's an acceptable trade for the common case.
+    """
+    # Locate the service block: line starting with "  <service>:" at
+    # indent 2 (compose default) or 4 (nested). End at the next
+    # top-level service or end of file.
+    # We support 2-space and 4-space top-level indent.
+    m = re.search(
+        rf"(^(?P<indent>[ \t]{{2,4}}){re.escape(service)}:\s*\n)"
+        rf"(?P<body>(?:(?P=indent)[ \t].*\n|\n)+)",
+        content,
+        re.MULTILINE,
+    )
+    if not m:
+        return content, 0
+    body_start = m.start("body")
+    body_end   = m.end("body")
+    body       = content[body_start:body_end]
+
+    count = 0
+    def _sub(match: re.Match) -> str:
+        nonlocal count
+        if int(match.group("host")) != int(from_port):
+            return match.group(0)
+        count += 1
+        return f"{match.group('prefix')}{to_port}{match.group('suffix')}"
+
+    new_body = _PORT_ENTRY_RE.sub(_sub, body)
+    return content[:body_start] + new_body + content[body_end:], count
+
+
+async def compose_remap_port(
+    compose_file: str,
+    service: str,
+    from_port: int,
+    to_port: int,
+) -> Dict[str, Any]:
+    """Rewrite a docker-compose file's host-side port binding for one service.
+
+    The common use case is port conflict recovery: something on the host
+    is holding ``from_port`` (e.g. OpenTeddy's own uvicorn on 8000), so
+    move the container's binding to ``to_port`` instead of killing the
+    host process. Only touches the specified service; comments and
+    formatting elsewhere are preserved.
+
+    Output schema:
+      {
+        "compose_file": str,
+        "service": str,
+        "from_port": int,
+        "to_port": int,
+        "occurrences_changed": int,    # 0 means nothing matched
+        "backup_path": str,            # '<file>.bak' — for rollback
+        "preview": str                 # unified-diff-ish snippet
+      }
+
+    Low risk: writes a .bak before modifying, and only touches a single
+    numeric literal. The caller can roll back with mv.
+    """
+    try:
+        with open(compose_file, "r", encoding="utf-8") as f:
+            original = f.read()
+    except FileNotFoundError:
+        return make_result(False, error=f"compose file not found: {compose_file}")
+    except Exception as exc:  # noqa: BLE001
+        return make_result(False, error=f"read failed: {exc}")
+
+    from_port = int(from_port)
+    to_port = int(to_port)
+    if from_port == to_port:
+        return make_result(False, error="from_port and to_port are identical")
+
+    new_content, count = _edit_compose_port(original, service, int(from_port), int(to_port))
+    if count == 0:
+        return make_result(
+            True,
+            result={
+                "compose_file": compose_file,
+                "service": service,
+                "from_port": from_port,
+                "to_port": to_port,
+                "occurrences_changed": 0,
+                "backup_path": "",
+                "preview": "",
+                "message": (
+                    f"No port mapping matching {from_port}:* was found under "
+                    f"service '{service}'. Check the service name and file "
+                    "contents with file_read first."
+                ),
+            },
+        )
+
+    # Write backup + new content
+    backup = compose_file + ".bak"
+    try:
+        with open(backup, "w", encoding="utf-8") as f:
+            f.write(original)
+        with open(compose_file, "w", encoding="utf-8") as f:
+            f.write(new_content)
+    except Exception as exc:  # noqa: BLE001
+        return make_result(False, error=f"write failed: {exc}")
+
+    # Tiny "diff preview" — the changed lines only, to keep tokens low.
+    old_lines = original.splitlines()
+    new_lines = new_content.splitlines()
+    preview_lines: List[str] = []
+    for i, (ol, nl) in enumerate(zip(old_lines, new_lines)):
+        if ol != nl:
+            preview_lines.append(f"- {ol}")
+            preview_lines.append(f"+ {nl}")
+            if len(preview_lines) >= 12:
+                break
+    preview = "\n".join(preview_lines) if preview_lines else "(no textual diff)"
+
+    return make_result(
+        True,
+        result={
+            "compose_file": compose_file,
+            "service": service,
+            "from_port": from_port,
+            "to_port": to_port,
+            "occurrences_changed": count,
+            "backup_path": backup,
+            "preview": preview,
+            "message": (
+                f"Changed {count} port mapping(s) in service '{service}' "
+                f"from {from_port} → {to_port}. "
+                f"Backup saved at {backup}. "
+                "Restart with `docker compose up -d` (or re-create the service)."
+            ),
+        },
+    )
+
+
 # ── Tool: port_free (HIGH risk) ──────────────────────────────────────────────
 
 async def port_free(
@@ -630,6 +898,44 @@ _SCHEMA_DOCKER_DIAGNOSE: Dict[str, Any] = {
     },
 }
 
+_SCHEMA_COMPOSE_REMAP: Dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "compose_remap_port",
+        "description": (
+            "Rewrite a docker-compose file's host-side port binding for a "
+            "specific service. Use this when port_probe reports a conflict "
+            "with safe_to_kill_hint=False — the host process is important "
+            "(OpenTeddy itself, a database, a daemon) and shouldn't be "
+            "killed. Moves the container's published port instead. "
+            "Writes a .bak before modifying and returns a diff preview. "
+            "Low risk — single numeric literal change, easy to roll back."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "compose_file": {
+                    "type": "string",
+                    "description": "Absolute or relative path to docker-compose.yml",
+                },
+                "service": {
+                    "type": "string",
+                    "description": "Service name as declared in the compose file (e.g. 'web', 'api').",
+                },
+                "from_port": {
+                    "type": "integer",
+                    "description": "Current host-side port (the one in conflict).",
+                },
+                "to_port": {
+                    "type": "integer",
+                    "description": "New host-side port to bind. Pick something unlikely to clash — e.g. original + 10000.",
+                },
+            },
+            "required": ["compose_file", "service", "from_port", "to_port"],
+        },
+    },
+}
+
 _SCHEMA_PORT_FREE: Dict[str, Any] = {
     "type": "function",
     "function": {
@@ -638,8 +944,8 @@ _SCHEMA_PORT_FREE: Dict[str, Any] = {
             "Find the process listening on the given TCP port and terminate "
             "it (SIGTERM → SIGKILL after 2s if needed). HIGH RISK — requires "
             "user approval before running. Use only after `port_probe` has "
-            "confirmed the port is held by a stale or unwanted process, not "
-            "a service the user might still need."
+            "confirmed the port is held by a stale or unwanted process "
+            "(safe_to_kill_hint=True), NOT when is_self/is_important is set."
         ),
         "parameters": {
             "type": "object",
@@ -658,5 +964,6 @@ DEPLOY_TOOLS: List[Tuple[Any, Dict[str, Any], RiskLevel]] = [
     (port_probe,            _SCHEMA_PORT_PROBE,     "low"),
     (docker_project_detect, _SCHEMA_DOCKER_DETECT,  "low"),
     (docker_diagnose,       _SCHEMA_DOCKER_DIAGNOSE,"low"),
+    (compose_remap_port,    _SCHEMA_COMPOSE_REMAP,  "low"),
     (port_free,             _SCHEMA_PORT_FREE,      "high"),
 ]

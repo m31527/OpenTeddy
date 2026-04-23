@@ -123,9 +123,25 @@ docker compose 也可以用 `-f /path/to/docker-compose.yml` 取代 cd。
      抓根因（它會一次給 inspect + logs + 診斷 hint）。
      → 子任務例：「用 docker compose ps 驗證所有服務狀態」
 
+【Port 衝突決策樹 — 很重要】
+port_probe 回報 in_use=true 時，**務必**依照 safe_to_kill_hint 決定下一步：
+
+  safe_to_kill_hint=false (is_self=true 或 is_important=true):
+    → 不能殺！（會殺到 OpenTeddy 本體或 mysql/ollama 這類關鍵 daemon）
+    → 規劃 `compose_remap_port(compose_file, service, from_port, to_port)`
+       把容器的 host port 換掉，例如 8000 → 18000
+    → 然後再 docker compose up
+
+  safe_to_kill_hint=true (普通用戶 process):
+    → 可以規劃 port_free（會跳 approval）
+    → 或也可以用 compose_remap_port 避免打擾其他服務
+
+  in_use=false:
+    → 直接 docker compose up
+
 【常見陷阱 — 規劃時要避開】
-- 看到「bind: address already in use」→ 下一步規劃 port_probe 確認，
-  不要直接換 port；可能是舊 container 沒清，用 port_free 更乾淨
+- 看到「bind: address already in use」→ 先 port_probe **讀 recommendation 欄位**
+  才決定 port_free 還是 compose_remap_port，不要直接殺
 - 看到「unhealthy」→ 規劃 docker_diagnose，不要憑猜亂重啟
 - 看到「Exited (0)」不代表成功 —— 長期服務 Exited 就是錯，用 docker_diagnose
 - 不要把「cd ...」單獨當一個子任務（獨立 subprocess 會丟失）
