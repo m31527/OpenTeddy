@@ -166,11 +166,12 @@ class ToolRegistry:
         from tools.gcp_tool import GCP_TOOLS
         from tools.deploy_tool import DEPLOY_TOOLS
         from tools.notify_tool import NOTIFY_TOOLS
+        from tools.report_tool import REPORT_TOOLS
 
         for fn, schema, risk in (
             SHELL_TOOLS + FILE_TOOLS + HTTP_TOOLS
             + PACKAGE_TOOLS + DB_TOOLS + GCP_TOOLS + DEPLOY_TOOLS
-            + NOTIFY_TOOLS
+            + NOTIFY_TOOLS + REPORT_TOOLS
         ):
             self.register(fn, schema, risk)
 
