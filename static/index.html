@@ -75,9 +75,10 @@
       padding: 0.35rem 0.4rem 0.75rem;
     }
     .sidebar-logo {
-      width: 30px; height: 30px;
-      border-radius: 50%;
-      object-fit: cover;
+      height: 30px;
+      width: auto;
+      max-width: 48px;
+      object-fit: contain;
       flex-shrink: 0;
     }
     .sidebar-brand-name {
@@ -1998,7 +1999,7 @@
     <aside class="sidebar" id="sidebar">
       <div class="sidebar-header">
         <div class="sidebar-brand">
-          <img src="/static/teddy.png" alt="OpenTeddy" class="sidebar-logo">
+          <img src="/static/OpenTeddy-logo.svg" alt="OpenTeddy" class="sidebar-logo">
           <span class="sidebar-brand-name">OpenTeddy</span>
         </div>
         <button class="new-chat-btn" onclick="createNewSession()">

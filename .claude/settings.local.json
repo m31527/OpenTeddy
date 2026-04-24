@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(magick --version)",
+      "Read(//private/tmp/**)",
+      "Bash(rsvg-convert -h 512 /Users/sean/other_projects/OpenTeddy/static/OpenTeddy-logo.svg -o openteddy_raw.png)",
+      "Bash(magick identify *)",
+      "Bash(magick openteddy_raw.png -background none -gravity center -extent 735x735 openteddy_square.png)",
+      "Bash(magick openteddy_square.png -resize 256x256 openteddy_256.png)",
+      "Bash(magick openteddy_square.png -resize 48x48 openteddy_48.png)",
+      "Bash(magick openteddy_square.png -resize 32x32 openteddy_32.png)",
+      "Bash(magick openteddy_square.png -resize 16x16 openteddy_16.png)",
+      "Bash(magick openteddy_square.png -resize 512x512 openteddy_512.png)",
+      "Bash(magick openteddy_square.png -resize 192x192 openteddy_192.png)",
+      "Bash(magick openteddy_square.png -resize 180x180 openteddy_180.png)",
+      "Bash(cp /tmp/openteddy_favicon.ico /Users/sean/other_projects/OpenTeddy/static/favicon.ico)",
+      "Bash(cp /tmp/openteddy_16.png /Users/sean/other_projects/OpenTeddy/static/favicon-16x16.png)",
+      "Bash(cp /tmp/openteddy_32.png /Users/sean/other_projects/OpenTeddy/static/favicon-32x32.png)",
+      "Bash(cp /tmp/openteddy_180.png /Users/sean/other_projects/OpenTeddy/static/apple-touch-icon.png)",
+      "Bash(cp /tmp/openteddy_192.png /Users/sean/other_projects/OpenTeddy/static/android-chrome-192x192.png)"
+    ]
+  }
+}
