@@ -324,7 +324,13 @@
       background: var(--surface);
       color: var(--text-primary);
       box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+      /* Each mode gets a themed bottom border when active so the
+         switch isn't just a subtle white-on-beige contrast — you can
+         tell at a glance which mode is on, especially after a switch. */
     }
+    .mode-btn.active[data-mode="chat"]     { box-shadow: 0 0 0 1px #93c5fd, 0 1px 3px rgba(0,0,0,0.08); }
+    .mode-btn.active[data-mode="code"]     { box-shadow: 0 0 0 1px #86efac, 0 1px 3px rgba(0,0,0,0.08); }
+    .mode-btn.active[data-mode="analytic"] { box-shadow: 0 0 0 1px #c4b5fd, 0 1px 3px rgba(0,0,0,0.08); }
     .mode-btn:disabled {
       opacity: 0.5;
       cursor: not-allowed;
@@ -1125,6 +1131,38 @@
       align-self: center;
       font-size: 0.82rem;
       font-weight: 500;
+    }
+
+    /* Permanent mode-change marker dropped into the chat when the
+       user flips the mode switcher mid-conversation. Reads as a
+       timeline event rather than a message — thin, centered, with
+       horizontal rules on both sides so it's visually clear this is
+       a "things changed here" divider. */
+    .mode-change-divider {
+      align-self: stretch;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      margin: 0.6rem 0;
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      font-weight: 500;
+      justify-content: center;
+    }
+    .mode-change-divider::before,
+    .mode-change-divider::after {
+      content: '';
+      flex: 1;
+      height: 1px;
+      background: var(--border);
+    }
+    .mode-change-divider .mode-change-arrow {
+      color: var(--text-muted);
+      opacity: 0.6;
+    }
+    .mode-change-divider .mode-change-new {
+      color: var(--text-primary);
+      font-weight: 600;
     }
 
     /* Tool execution card — collapsible */
@@ -2266,6 +2304,14 @@
 
     // Change the active session's mode. Persists to the server via PATCH
     // so refreshes / other tabs see the choice.
+    // Convenience label lookup used by both changeMode and the in-chat
+    // divider so the emoji/label stay consistent across surfaces.
+    const MODE_LABELS = {
+      chat:     '💬 Chat',
+      code:     '💻 Code',
+      analytic: '📊 Analytic',
+    };
+
     async function changeMode(mode) {
       if (!MODES.includes(mode)) return;
       if (!_currentSessionId) return;
@@ -2287,8 +2333,28 @@
           item.className = `session-mode-badge mode-${mode}`;
           item.textContent = { chat: 'Chat', code: 'Code', analytic: 'An.' }[mode];
         }
-        const label = { chat: '💬 Chat', code: '💻 Code', analytic: '📊 Analytic (beta)' }[mode];
-        toast(`Mode: ${label}`);
+        // Toast is ephemeral — also drop a PERMANENT divider into the
+        // chat so the mode change stays visible as you scroll back
+        // through the conversation. Without this, "I clicked but
+        // nothing happened" is the common user read on mode switches
+        // mid-conversation.
+        const chat = document.getElementById('chatMessages');
+        // Skip the divider for truly-empty sessions — it'd just add
+        // noise before any real message.
+        const hasContent = chat && chat.querySelector(
+          '.msg-user, .msg-agent:not(:only-child), .msg-system, .tool-call-card'
+        );
+        if (hasContent) {
+          const div = document.createElement('div');
+          div.className = 'mode-change-divider';
+          div.innerHTML =
+            `<span>${MODE_LABELS[prev] || prev}</span>` +
+            `<span class="mode-change-arrow">→</span>` +
+            `<span class="mode-change-new">${MODE_LABELS[mode] || mode}</span>`;
+          chat.appendChild(div);
+          chat.scrollTop = chat.scrollHeight;
+        }
+        toast(`Mode: ${MODE_LABELS[mode] || mode}`);
       } catch (e) {
         _sessionModes[_currentSessionId] = prev;
         updateModeSwitchUI();
