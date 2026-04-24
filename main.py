@@ -237,8 +237,105 @@ async def health() -> dict:
     }
 
 
+@app.get("/fs/browse")
+async def fs_browse(path: Optional[str] = None, show_hidden: bool = False) -> dict:
+    """List directories for the workspace-picker modal in the UI.
+
+    Constrained browser — not a general file listing API:
+      - Only paths under an allowlist of roots are permitted:
+        user's $HOME, the OpenTeddy project root, /tmp, /var/tmp,
+        and whatever the global agent_workspace_dir is.
+      - When path is omitted / outside the allowlist, we reset to $HOME.
+      - Dotfiles hidden by default (toggleable).
+
+    Returns:
+      {
+        path: str,                # absolute path being listed
+        parent: str | None,       # parent dir if still within allowed roots
+        entries: [{name, is_dir, size_bytes}],
+        roots: [{label, path}],   # shortcut roots shown in the picker
+      }
+    """
+    import stat as _stat
+    home = os.path.abspath(os.path.expanduser("~"))
+    project_root = os.path.dirname(os.path.abspath(__file__))
+    allowed_roots = [
+        home,
+        project_root,
+        "/tmp",
+        "/var/tmp",
+        os.path.abspath(config.agent_workspace_dir),
+    ]
+    # Dedupe while keeping order
+    seen: set[str] = set()
+    allowed_roots = [r for r in allowed_roots if not (r in seen or seen.add(r))]
+
+    def is_under_any_root(p: str) -> bool:
+        return any(p == r or p.startswith(r + os.sep) for r in allowed_roots)
+
+    # Resolve the requested path; fall back to $HOME if missing / bad.
+    target = os.path.abspath(os.path.expanduser(path)) if path else home
+    if not is_under_any_root(target) or not os.path.isdir(target):
+        target = home
+
+    try:
+        raw_entries = os.listdir(target)
+    except PermissionError:
+        raise HTTPException(status_code=403, detail=f"Permission denied: {target}")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    entries: list[dict] = []
+    for name in sorted(raw_entries, key=str.lower):
+        if not show_hidden and name.startswith("."):
+            continue
+        full = os.path.join(target, name)
+        try:
+            st = os.lstat(full)
+        except Exception:  # noqa: BLE001
+            continue
+        # Skip symlinks to avoid escape via link traversal in the picker UI.
+        if _stat.S_ISLNK(st.st_mode):
+            continue
+        is_dir = _stat.S_ISDIR(st.st_mode)
+        # Picker shows dirs only (user is choosing a workspace).
+        # Files are listed purely as visual context — disabled for click.
+        entries.append({
+            "name":   name,
+            "is_dir": is_dir,
+            "size_bytes": st.st_size if not is_dir else 0,
+        })
+
+    parent = os.path.dirname(target.rstrip(os.sep))
+    if target in allowed_roots or not is_under_any_root(parent):
+        parent = None
+
+    roots_labels = [
+        ("🏠 Home",         home),
+        ("📦 OpenTeddy",   project_root),
+        ("📁 Agent WS",    os.path.abspath(config.agent_workspace_dir)),
+        ("/tmp",            "/tmp"),
+    ]
+    roots = [
+        {"label": lbl, "path": rp}
+        for lbl, rp in roots_labels
+        if os.path.isdir(rp)
+    ]
+
+    return {
+        "path":    target,
+        "parent":  parent,
+        "entries": entries,
+        "roots":   roots,
+    }
+
+
 @app.get("/files")
-async def download_file(path: str, session_id: Optional[str] = None) -> FileResponse:
+async def download_file(
+    path: str,
+    session_id: Optional[str] = None,
+    download: bool = False,
+) -> FileResponse:
     """Serve a file produced by the agent (Analytic HTML reports,
     written files, etc.) so the UI can show a download link instead of
     the user having to SSH in.
@@ -283,17 +380,34 @@ async def download_file(path: str, session_id: Optional[str] = None) -> FileResp
     if not os.path.isfile(target):
         raise HTTPException(status_code=404, detail="File not found")
 
-    # Content-Disposition: pick inline for browsers to render .html
-    # in a new tab, attachment for binary types.
+    # Content-Disposition: when the UI asks for download=1 (artifact
+    # chips do this) we force `attachment` so the browser saves the
+    # file instead of rendering it inline. Without the flag we still
+    # default to `attachment` for binary types but allow inline for
+    # text/html — so a user pasting the URL directly still gets the
+    # expected "open in tab" behaviour.
     filename = os.path.basename(target)
     ext = os.path.splitext(filename)[1].lower()
     inline_exts = {".html", ".htm", ".txt", ".md", ".json", ".csv", ".log",
                    ".png", ".jpg", ".jpeg", ".gif", ".svg", ".pdf"}
-    disposition = "inline" if ext in inline_exts else "attachment"
+    if download:
+        disposition = "attachment"
+    else:
+        disposition = "inline" if ext in inline_exts else "attachment"
+    # Encode the filename per RFC 5987 so non-ASCII names survive.
+    try:
+        filename.encode("ascii")
+        cd_value = f'{disposition}; filename="{filename}"'
+    except UnicodeEncodeError:
+        from urllib.parse import quote
+        cd_value = (
+            f"{disposition}; filename=\"{quote(filename)}\"; "
+            f"filename*=UTF-8''{quote(filename)}"
+        )
     return FileResponse(
         target,
         filename=filename,
-        headers={"Content-Disposition": f'{disposition}; filename="{filename}"'},
+        headers={"Content-Disposition": cd_value},
     )
 
 

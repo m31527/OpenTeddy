@@ -277,19 +277,6 @@
       overflow: hidden;
       text-overflow: ellipsis;
     }
-    .chat-header-workspace {
-      font-size: 0.68rem;
-      color: var(--text-muted);
-      font-family: 'Courier New', monospace;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      cursor: help;
-    }
-    .chat-header-workspace:hover {
-      color: var(--text-secondary);
-    }
-
     /* Mode switcher (Chat / Code / Analytic) — Claude-style segmented pill */
     .mode-switch {
       display: inline-flex;
@@ -786,6 +773,247 @@
       font-size: 0.875rem;
       text-align: center;
       padding: 1.5rem 0;
+    }
+
+    /* ── Workspace bar (inside chat-input-area) ──────────────────────────── */
+    .workspace-bar {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      max-width: 800px;
+      margin: 0 auto 0.5rem auto;
+      padding: 0.35rem 0.7rem;
+      font-size: 0.76rem;
+      color: var(--text-secondary);
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+    }
+    .workspace-bar-icon { flex-shrink: 0; }
+    .workspace-bar-label {
+      color: var(--text-muted);
+      flex-shrink: 0;
+    }
+    .workspace-bar-path {
+      flex: 1;
+      min-width: 0;
+      font-family: 'Courier New', monospace;
+      color: var(--text-primary);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .workspace-bar-meta {
+      color: var(--text-muted);
+      font-size: 0.7rem;
+      flex-shrink: 0;
+      white-space: nowrap;
+    }
+    .workspace-bar-btn {
+      flex-shrink: 0;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      color: var(--text-secondary);
+      padding: 0.2rem 0.6rem;
+      font-size: 0.72rem;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: background 0.15s, color 0.15s;
+    }
+    .workspace-bar-btn:hover {
+      background: var(--bg-primary);
+      color: var(--text-primary);
+    }
+    .workspace-bar.is-override {
+      border-color: #d4a84b;
+      background: rgba(212, 168, 75, 0.08);
+    }
+    .workspace-bar.is-override .workspace-bar-icon::before {
+      content: '⭐';
+      margin-right: 2px;
+    }
+
+    /* ── Folder-picker modal ─────────────────────────────────────────────── */
+    #fsPickerOverlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.35);
+      z-index: 1050;
+      align-items: center;
+      justify-content: center;
+    }
+    #fsPickerOverlay.open { display: flex; }
+    #fsPickerModal {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 1.5rem;
+      width: min(760px, 94vw);
+      max-height: 85vh;
+      display: flex;
+      flex-direction: column;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.16);
+    }
+    #fsPickerModal h3 {
+      font-size: 1rem;
+      font-weight: 600;
+      color: var(--text-primary);
+      margin-bottom: 0.75rem;
+    }
+    .fs-breadcrumb {
+      font-family: 'Courier New', monospace;
+      font-size: 0.78rem;
+      color: var(--text-secondary);
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.45rem 0.65rem;
+      margin-bottom: 0.6rem;
+      overflow-x: auto;
+      white-space: nowrap;
+    }
+    .fs-breadcrumb .crumb {
+      cursor: pointer;
+      color: var(--text-primary);
+      text-decoration: none;
+    }
+    .fs-breadcrumb .crumb:hover {
+      text-decoration: underline;
+    }
+    .fs-breadcrumb .crumb-sep {
+      color: var(--text-muted);
+      margin: 0 3px;
+    }
+
+    .fs-body {
+      display: flex;
+      gap: 0.75rem;
+      flex: 1;
+      min-height: 280px;
+      max-height: 48vh;
+    }
+    .fs-roots {
+      flex-shrink: 0;
+      width: 160px;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 0.4rem;
+      overflow-y: auto;
+    }
+    .fs-root-btn {
+      display: block;
+      width: 100%;
+      text-align: left;
+      background: transparent;
+      border: none;
+      padding: 0.4rem 0.55rem;
+      font-size: 0.8rem;
+      color: var(--text-secondary);
+      border-radius: 6px;
+      cursor: pointer;
+      margin-bottom: 2px;
+    }
+    .fs-root-btn:hover {
+      background: var(--surface);
+      color: var(--text-primary);
+    }
+    .fs-root-btn.active {
+      background: var(--surface);
+      color: var(--text-primary);
+      font-weight: 600;
+    }
+
+    .fs-entries-wrap {
+      flex: 1;
+      background: var(--bg-primary);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      overflow-y: auto;
+    }
+    .fs-entries {
+      list-style: none;
+      margin: 0;
+      padding: 0.25rem 0;
+    }
+    .fs-entry {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.35rem 0.7rem;
+      font-size: 0.83rem;
+      color: var(--text-secondary);
+      cursor: pointer;
+      border-radius: 4px;
+      user-select: none;
+    }
+    .fs-entry:hover {
+      background: var(--bg-secondary);
+      color: var(--text-primary);
+    }
+    .fs-entry.is-file {
+      cursor: default;
+      color: var(--text-muted);
+      opacity: 0.7;
+    }
+    .fs-entry.is-file:hover {
+      background: transparent;
+      color: var(--text-muted);
+    }
+    .fs-entry-icon { flex-shrink: 0; }
+    .fs-entry-name {
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .fs-entry-up {
+      font-weight: 600;
+      color: var(--text-primary);
+    }
+    .fs-empty {
+      color: var(--text-muted);
+      font-size: 0.82rem;
+      text-align: center;
+      padding: 2rem 0;
+    }
+
+    .fs-path-row {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      margin-top: 0.75rem;
+    }
+    .fs-path-row label {
+      font-size: 0.76rem;
+      color: var(--text-muted);
+      flex-shrink: 0;
+    }
+    .fs-path-row input {
+      flex: 1;
+      border: 1.5px solid var(--border);
+      border-radius: 8px;
+      padding: 0.4rem 0.6rem;
+      font-family: 'Courier New', monospace;
+      font-size: 0.82rem;
+      background: var(--bg-primary);
+      color: var(--text-primary);
+      outline: none;
+      min-width: 0;
+    }
+    .fs-path-row input:focus { border-color: var(--text-secondary); }
+
+    .fs-hint {
+      font-size: 0.72rem;
+      color: var(--text-muted);
+      margin: 0.6rem 0 0.9rem 0;
+      line-height: 1.5;
+    }
+    .fs-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 0.5rem;
     }
 
     /* ── Skills / Tools / Memory / Usage / Settings ──────────────────────── */
@@ -1334,6 +1562,36 @@
       background: var(--bg-secondary);
       border-color: var(--text-secondary);
     }
+    /* Wraps the download chip + inline preview eye so they read as one unit */
+    .artifact-chip-wrap {
+      display: inline-flex;
+      align-items: stretch;
+      border-radius: 999px;
+      overflow: hidden;
+    }
+    .artifact-chip-wrap .artifact-chip {
+      border-top-right-radius: 0;
+      border-bottom-right-radius: 0;
+      border-right: none;
+    }
+    .artifact-preview {
+      display: inline-flex;
+      align-items: center;
+      padding: 5px 10px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-left: 1px solid var(--border);
+      border-top-right-radius: 999px;
+      border-bottom-right-radius: 999px;
+      font-size: 0.82rem;
+      color: var(--text-secondary);
+      text-decoration: none;
+      transition: background 0.12s, color 0.12s;
+    }
+    .artifact-preview:hover {
+      background: var(--bg-secondary);
+      color: var(--text-primary);
+    }
 
     /* Collapsible "N steps" block under each task result */
     .chat-steps-details {
@@ -1707,9 +1965,6 @@
           <button class="hamburger" onclick="toggleSidebar()" aria-label="Open sidebar">☰</button>
           <div class="chat-header-title-wrap">
             <span class="chat-header-title" id="chatHeaderTitle">New session</span>
-            <span class="chat-header-workspace" id="chatHeaderWorkspace"
-              onclick="editSessionWorkspace()"
-              title="點擊可為這個 session 指定專屬工作目錄（例如電腦上已存在的專案）。留空恢復預設 agent-workspace。">📂 —</span>
           </div>
           <div class="mode-switch" id="modeSwitch" role="tablist" aria-label="Session mode">
             <button type="button" class="mode-btn" data-mode="chat" onclick="changeMode('chat')" title="純文字推理（摘要、翻譯、問答）">
@@ -1738,6 +1993,21 @@
             </div>
           </div>
           <div class="chat-input-area">
+            <!-- Workspace bar — shows the effective working directory
+                 for this session and lets the user change it without
+                 using prompt(). The "Change…" button opens a proper
+                 folder-picker modal. Sits just above attachment chips
+                 so it's visible whenever the user is about to send a
+                 task. -->
+            <div class="workspace-bar" id="workspaceBar" title="這個 session 的工作目錄。點『Change…』改用其他資料夾（例如已存在的專案）。">
+              <span class="workspace-bar-icon" id="workspaceBarIcon">📂</span>
+              <span class="workspace-bar-label">Working in:</span>
+              <span class="workspace-bar-path" id="workspaceBarPath">—</span>
+              <span class="workspace-bar-meta" id="workspaceBarMeta"></span>
+              <button type="button" class="workspace-bar-btn" id="workspaceBarBtn"
+                onclick="openWorkspacePicker()">Change…</button>
+            </div>
+
             <!-- Attachment chips — populated as the user adds files via
                  the + button. Each chip carries the server-returned
                  rel_path so runTask() can pass the list to the agent. -->
@@ -1763,7 +2033,6 @@
                 <button class="send-btn" id="runBtn" onclick="onSendOrStop()" title="Send">↑</button>
               </div>
             </div>
-            <div class="input-hint">Enter 換行 · 點擊 ↑ 送出 · 執行中可按 ■ 中斷（⌘/Ctrl+Enter 亦可送出）· + 附加檔案</div>
           </div>
         </div>
 
@@ -2172,6 +2441,46 @@
     </div>
   </div>
 
+  <!-- ── Workspace folder-picker modal ──────────────────────────────────── -->
+  <!-- Replaces the old JS prompt() flow. Shortcut roots on the left,
+       directory listing on the right, breadcrumb on top, and a manual
+       path input + Select/Clear/Cancel at the bottom.  Constrained to
+       $HOME / OpenTeddy / /tmp / agent-workspace on the backend. -->
+  <div id="fsPickerOverlay" onclick="maybeCloseFsPicker(event)">
+    <div id="fsPickerModal" role="dialog" aria-labelledby="fsPickerTitle">
+      <button class="modal-close" onclick="closeWorkspacePicker()">✕ Close</button>
+      <h3 id="fsPickerTitle">📁 Choose workspace folder</h3>
+
+      <div class="fs-breadcrumb" id="fsBreadcrumb"></div>
+
+      <div class="fs-body">
+        <aside class="fs-roots" id="fsRoots"></aside>
+        <div class="fs-entries-wrap">
+          <ul class="fs-entries" id="fsEntries"></ul>
+        </div>
+      </div>
+
+      <div class="fs-path-row">
+        <label for="fsPathInput">Path</label>
+        <input type="text" id="fsPathInput"
+          placeholder="/absolute/path/to/folder"
+          onkeydown="if(event.key==='Enter'){event.preventDefault();fsGoToInputPath();}" />
+        <button type="button" class="btn-ghost" onclick="fsGoToInputPath()">Go</button>
+      </div>
+
+      <p class="fs-hint">
+        留空後按 <b>Clear override</b> 可移除這個 session 的專屬目錄，回到全域預設。
+        選資料夾後按 <b>Select this folder</b> 套用。
+      </p>
+
+      <div class="fs-actions">
+        <button type="button" class="btn-ghost" onclick="closeWorkspacePicker()">Cancel</button>
+        <button type="button" class="btn-ghost" onclick="fsClearOverride()">Clear override</button>
+        <button type="button" class="btn-primary" id="fsSelectBtn" onclick="fsSelectCurrent()">Select this folder</button>
+      </div>
+    </div>
+  </div>
+
   <div id="toast"></div>
 
   <script>
@@ -2327,25 +2636,31 @@
       if (el) el.textContent = _sessionTitles[_currentSessionId] || 'New session';
     }
 
-    // Query /debug/workspace (scoped to the active session) and show the
-    // effective absolute path under the session title. Session overrides
-    // are labeled with ⭐ so you can see at a glance which sessions use
-    // their own workspace vs. the global default.
+    // Query /debug/workspace (scoped to the active session) and populate
+    // the workspace-bar inside .chat-input-area.  Session overrides get
+    // the .is-override class so the bar shows a subtle amber tint + ⭐,
+    // making it obvious at a glance which sessions use their own path.
     async function refreshWorkspaceIndicator() {
-      const el = document.getElementById('chatHeaderWorkspace');
-      if (!el) return;
+      const bar     = document.getElementById('workspaceBar');
+      const pathEl  = document.getElementById('workspaceBarPath');
+      const metaEl  = document.getElementById('workspaceBarMeta');
+      const iconEl  = document.getElementById('workspaceBarIcon');
+      if (!bar || !pathEl) return;
       try {
         const qs = _currentSessionId ? `?session_id=${encodeURIComponent(_currentSessionId)}` : '';
         const res = await fetch(`${API}/debug/workspace${qs}`);
         if (!res.ok) return;
         const data = await res.json();
-        const path = data.effective_workspace || data.agent_workspace_dir || '';
-        const n = data.entry_count ?? 0;
+        const path = data.effective_workspace || data.agent_workspace_dir || '—';
+        const n    = data.entry_count ?? 0;
         const overridden = !!data.session_workspace_dir;
-        const prefix = overridden ? '⭐📂' : '📂';
-        const labelSuffix = overridden ? ' (session-specific)' : '';
-        el.textContent = `${prefix} ${path} · ${n} items${labelSuffix}`;
-        el.title =
+
+        pathEl.textContent = path;
+        metaEl.textContent = `${n} items${data.exists ? '' : ' · ⚠ missing'}`;
+        iconEl.textContent = overridden ? '' : '📂';  // ⭐ added via CSS ::before
+        bar.classList.toggle('is-override', overridden);
+
+        bar.title =
           `Effective workspace:  ${path}\n` +
           `Global default:       ${data.agent_workspace_dir}\n` +
           `Session override:     ${data.session_workspace_dir || '(none — using global)'}\n` +
@@ -2354,32 +2669,198 @@
           (data.exists
             ? '✓ workspace exists.\n'
             : '⚠️ workspace does NOT exist — create it or change the setting.\n') +
-          '\n點擊可為這個 session 指定 / 清除專屬目錄。';
+          '\n按 Change… 可為這個 session 指定 / 清除專屬目錄。';
       } catch (e) { /* ignore */ }
     }
 
-    // Edit this session's workspace via a prompt. Empty / whitespace
-    // clears the override (session falls back to the global default).
-    async function editSessionWorkspace() {
+    // ── Workspace folder-picker modal ──────────────────────────────────────
+    // Replaces the old prompt()-based editSessionWorkspace() flow.
+    // Security-wise the server-side /fs/browse endpoint gates what paths
+    // can be listed — this UI only renders what the backend returns.
+
+    let _fsCurrentPath = null;
+    let _fsKnownRoots  = [];
+
+    // Compatibility shim: anything in the codebase that still calls
+    // editSessionWorkspace() now goes through the picker modal.
+    function editSessionWorkspace() { openWorkspacePicker(); }
+
+    async function openWorkspacePicker() {
       if (!_currentSessionId) return;
-      let current = '';
+      const overlay = document.getElementById('fsPickerOverlay');
+      if (!overlay) return;
+      overlay.classList.add('open');
+
+      // Decide initial directory: prefer the session's current effective
+      // workspace so the user lands in a familiar place, falling back
+      // to $HOME when unavailable.
+      let startPath = '';
       try {
         const res = await fetch(`${API}/debug/workspace?session_id=${encodeURIComponent(_currentSessionId)}`);
         if (res.ok) {
           const d = await res.json();
-          current = d.session_workspace_dir || '';
+          startPath = d.effective_workspace || d.agent_workspace_dir || '';
         }
       } catch { /* ignore */ }
-      const next = prompt(
-        '為這個 session 指定工作目錄（絕對路徑，或相對於全域 agent-workspace）。\n' +
-        '留空 = 使用全域預設。\n\n' +
-        '例如：\n' +
-        '  /home/me/my-project     ← 電腦上已存在的專案\n' +
-        '  Pixelle-Video           ← 相對路徑（會解析到 <agent-workspace>/Pixelle-Video）\n' +
-        '  (留空)                  ← 清除 override，回到預設',
-        current,
-      );
-      if (next === null) return;  // cancelled
+      await fsBrowse(startPath || null);
+      // Focus the manual path input once rendering is done — lets keyboard
+      // users paste a path and hit Enter without touching the mouse.
+      setTimeout(() => {
+        const i = document.getElementById('fsPathInput');
+        if (i) i.focus();
+      }, 50);
+    }
+
+    function closeWorkspacePicker() {
+      document.getElementById('fsPickerOverlay').classList.remove('open');
+    }
+    function maybeCloseFsPicker(e) {
+      if (e.target === document.getElementById('fsPickerOverlay')) closeWorkspacePicker();
+    }
+
+    // Fetch and render one directory.  `path=null` lets the server
+    // choose a safe default (usually $HOME).
+    async function fsBrowse(path) {
+      const qs = new URLSearchParams();
+      if (path) qs.set('path', path);
+      let data;
+      try {
+        const res = await fetch(`${API}/fs/browse?${qs.toString()}`);
+        if (!res.ok) {
+          const txt = await res.text();
+          toast('無法列出資料夾：' + txt, true);
+          return;
+        }
+        data = await res.json();
+      } catch (e) {
+        toast('無法列出資料夾：' + e.message, true);
+        return;
+      }
+      _fsCurrentPath = data.path;
+      _fsKnownRoots  = data.roots || [];
+
+      document.getElementById('fsPathInput').value = data.path;
+      renderFsRoots(_fsKnownRoots, data.path);
+      renderFsBreadcrumb(data.path);
+      renderFsEntries(data.entries || [], data.parent);
+    }
+
+    function fsNavigateTo(path) { fsBrowse(path); }
+
+    function fsGoToInputPath() {
+      const p = (document.getElementById('fsPathInput').value || '').trim();
+      if (!p) return;
+      fsBrowse(p);
+    }
+
+    function renderFsRoots(roots, currentPath) {
+      const wrap = document.getElementById('fsRoots');
+      wrap.innerHTML = '';
+      for (const r of roots) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'fs-root-btn';
+        if (currentPath === r.path || currentPath.startsWith(r.path + '/')) {
+          b.classList.add('active');
+        }
+        b.textContent = r.label;
+        b.title = r.path;
+        b.onclick = () => fsNavigateTo(r.path);
+        wrap.appendChild(b);
+      }
+    }
+
+    function renderFsBreadcrumb(path) {
+      const bc = document.getElementById('fsBreadcrumb');
+      bc.innerHTML = '';
+      // Split "/a/b/c" into clickable crumbs.
+      const parts = path.split('/').filter(Boolean);
+      const rootSpan = document.createElement('span');
+      rootSpan.className = 'crumb';
+      rootSpan.textContent = '/';
+      rootSpan.onclick = () => fsNavigateTo('/');
+      bc.appendChild(rootSpan);
+      let acc = '';
+      parts.forEach((p, i) => {
+        acc += '/' + p;
+        if (i > 0) {
+          const sep = document.createElement('span');
+          sep.className = 'crumb-sep';
+          sep.textContent = '/';
+          bc.appendChild(sep);
+        }
+        const a = document.createElement('span');
+        a.className = 'crumb';
+        a.textContent = p;
+        const here = acc;
+        a.onclick = () => fsNavigateTo(here);
+        bc.appendChild(a);
+      });
+    }
+
+    function renderFsEntries(entries, parent) {
+      const ul = document.getElementById('fsEntries');
+      ul.innerHTML = '';
+
+      // Always lead with ".." (unless we're already at a root boundary).
+      if (parent) {
+        const li = document.createElement('li');
+        li.className = 'fs-entry fs-entry-up';
+        li.innerHTML = `<span class="fs-entry-icon">⬆</span><span class="fs-entry-name">.. (parent)</span>`;
+        li.onclick = () => fsNavigateTo(parent);
+        ul.appendChild(li);
+      }
+
+      let shown = 0;
+      for (const e of entries) {
+        const li = document.createElement('li');
+        li.className = 'fs-entry' + (e.is_dir ? '' : ' is-file');
+        const icon = e.is_dir ? '📁' : '📄';
+        const nameEl = document.createElement('span');
+        nameEl.className = 'fs-entry-name';
+        nameEl.textContent = e.name;
+        const iconEl = document.createElement('span');
+        iconEl.className = 'fs-entry-icon';
+        iconEl.textContent = icon;
+        li.appendChild(iconEl);
+        li.appendChild(nameEl);
+        if (e.is_dir) {
+          li.onclick = () => {
+            // Compose child path; rely on server to normalise.
+            const sep = _fsCurrentPath.endsWith('/') ? '' : '/';
+            fsNavigateTo(_fsCurrentPath + sep + e.name);
+          };
+        }
+        ul.appendChild(li);
+        shown++;
+      }
+
+      if (!shown && !parent) {
+        const li = document.createElement('li');
+        li.className = 'fs-empty';
+        li.textContent = '(empty)';
+        ul.appendChild(li);
+      }
+    }
+
+    async function fsSelectCurrent() {
+      const chosen = (document.getElementById('fsPathInput').value || '').trim()
+                     || _fsCurrentPath
+                     || '';
+      if (!chosen) {
+        toast('未選擇任何資料夾', true);
+        return;
+      }
+      await patchSessionWorkspace(chosen);
+    }
+
+    async function fsClearOverride() {
+      // Empty string / whitespace on the backend clears the override.
+      await patchSessionWorkspace('');
+    }
+
+    async function patchSessionWorkspace(next) {
+      if (!_currentSessionId) return;
       try {
         const res = await fetch(`${API}/sessions/${_currentSessionId}`, {
           method: 'PATCH',
@@ -2391,6 +2872,7 @@
         toast(trimmed
           ? `Session workspace 已設為：${trimmed}`
           : 'Session workspace 清除，回到全域預設');
+        closeWorkspacePicker();
         await refreshWorkspaceIndicator();
       } catch (e) {
         toast('更新失敗：' + e.message, true);
@@ -2850,18 +3332,37 @@
 
     // Renders a list of artifacts as download chips. Used in both the
     // real-time flow (task result message) and history re-render.
+    //
+    // Each chip actually renders TWO links side-by-side:
+    //   📎 <name>     → force-downloads (Content-Disposition: attachment)
+    //   👁 Preview    → opens the file inline in a new tab (useful for
+    //                  .html reports, images, etc.)
+    // Previously the single chip used inline disposition and just opened
+    // the page — the user complained that clicking the chip didn't
+    // actually save the file, so the primary action is now download.
     function renderArtifactList(artifacts) {
       if (!artifacts || !artifacts.length) return '';
       const sessionQS = _currentSessionId
         ? `&session_id=${encodeURIComponent(_currentSessionId)}`
         : '';
       const chips = artifacts.map(a => {
-        const href  = `${API}/files?path=${encodeURIComponent(a.path)}${sessionQS}`;
-        const size  = a.size ? ` · ${formatBytes(a.size)}` : '';
-        return `<a class="artifact-chip" href="${escHtml(href)}" target="_blank"
-                  title="${escHtml(a.path)}">
-                  📎 ${escHtml(a.name)}${escHtml(size)}
-                </a>`;
+        const base     = `${API}/files?path=${encodeURIComponent(a.path)}${sessionQS}`;
+        const dlHref   = `${base}&download=1`;
+        const size     = a.size ? ` · ${formatBytes(a.size)}` : '';
+        const ext      = (a.name.split('.').pop() || '').toLowerCase();
+        const previewable = ['html','htm','txt','md','json','csv','log','png','jpg','jpeg','gif','svg','pdf'].includes(ext);
+        const previewLink = previewable
+          ? `<a class="artifact-preview" href="${escHtml(base)}" target="_blank" rel="noopener"
+                title="在新分頁預覽">👁</a>`
+          : '';
+        return `<span class="artifact-chip-wrap">
+                  <a class="artifact-chip" href="${escHtml(dlHref)}"
+                     download="${escHtml(a.name)}"
+                     title="下載 ${escHtml(a.path)}">
+                    📎 ${escHtml(a.name)}${escHtml(size)}
+                  </a>
+                  ${previewLink}
+                </span>`;
       }).join('');
       return `<div class="artifact-row">${chips}</div>`;
     }
@@ -4167,10 +4668,25 @@
       });
     }
 
+    // ESC should also close the workspace picker when it's open (matches
+    // native file-picker UX). Kept separate from the approval shortcuts
+    // so they don't interact.
+    function installFsPickerShortcuts() {
+      document.addEventListener('keydown', (e) => {
+        if (e.key !== 'Escape') return;
+        const overlay = document.getElementById('fsPickerOverlay');
+        if (overlay && overlay.classList.contains('open')) {
+          e.preventDefault();
+          closeWorkspacePicker();
+        }
+      });
+    }
+
     // ── Init ─────────────────────────────────────────────────────────────────
     window.onload = async () => {
       initWS();
       installApprovalShortcuts();
+      installFsPickerShortcuts();
       await loadSessions();
       await loadChatHistory();
       refreshMemoryCount();        // initial fill for the 🧠 badge

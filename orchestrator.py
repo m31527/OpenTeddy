@@ -300,12 +300,14 @@ class Orchestrator:
         from config import set_session_workspace, set_session_local_only
         session_ws: Optional[str] = None
         session_local_only = False
+        session_mode = "code"
         if req.session_id:
             try:
                 sess = await self.tracker.get_session(req.session_id)
                 if sess:
                     session_ws = sess.get("workspace_dir") or None
                     session_local_only = bool(sess.get("local_only"))
+                    session_mode = (sess.get("mode") or "code").lower()
             except Exception:  # noqa: BLE001
                 pass
         set_session_workspace(session_ws)
@@ -395,8 +397,12 @@ class Orchestrator:
                 summary = await self._gemma_summarize(req.goal, tool_log_text, task_id=req.id)
 
             # 6. 任務完成後自動執行確認指令，把結果附加到 summary
+            #    Only runs for Code-mode deploys — Chat/Analytic don't
+            #    need a shell-based "did docker come up?" block, and
+            #    surfacing a raw `ls -la ~/` in the middle of an analysis
+            #    report is noise the user explicitly complained about.
             confirmation_output = await self._run_confirmation_checks(
-                req.goal, subtasks=subtasks,
+                req.goal, subtasks=subtasks, session_mode=session_mode,
             )
             if confirmation_output:
                 summary += confirmation_output
@@ -917,17 +923,46 @@ class Orchestrator:
 
     async def _run_confirmation_checks(
         self, goal: str, subtasks: Optional[List[SubTask]] = None,
+        session_mode: str = "code",
     ) -> str:
         """根據任務目標關鍵字，執行確認指令並回傳格式化結果。
 
         對於 Docker 任務，會從子任務描述中擷取 compose 路徑（``cd X`` 或
         ``-f path``），優先使用 ``docker compose ps`` 只看本次任務的服務，
         不汙染主機上其他既有容器。擷取不到才退回全域 ``docker ps``。
+
+        Gated by session mode:
+          - **Code** mode: runs the block (deploys, installs, git ops
+            all genuinely benefit from a "did it actually come up?"
+            confirmation at the end).
+          - **Chat / Analytic**: skipped. Analytic produces markdown or
+            a chart report — dumping ``ls -la ~/`` after an analysis
+            summary is pure noise (the user explicitly complained).
+
+        Keyword matching also uses word boundaries for short tokens
+        (``git``, ``repo``, ``npm``, ``node``) so that a goal like
+        "generate an analysis **report**" no longer matches "repo" and
+        triggers an irrelevant home-directory listing.
         """
+        # Skip entirely for non-code modes.
+        if session_mode not in ("code", "coding"):
+            return ""
+
+        import re as _re
+
+        def _has_word(text: str, word: str) -> bool:
+            """Substring match for multi-char tokens, word-boundary match
+            for short ones where a substring match would produce false
+            positives (repo → report, npm → nympo, node → anode).
+            """
+            if len(word) <= 4:
+                return bool(_re.search(rf"\b{_re.escape(word)}\b", text))
+            return word in text
+
         goal_lower = goal.lower()
         confirmation_cmds: List[Tuple[str, str]] = []
 
-        if "docker" in goal_lower:
+        if _has_word(goal_lower, "docker"):
             scoped_cmd = None
             for st in (subtasks or []):
                 scoped_cmd = self._compose_scoped_ps_cmd(st.description or "")
@@ -937,11 +972,17 @@ class Orchestrator:
                 confirmation_cmds.append(("本任務容器狀態", scoped_cmd))
             else:
                 confirmation_cmds.append(("Docker 容器狀態", "docker ps"))
-        if any(kw in goal_lower for kw in ["clone", "git", "repository", "repo"]):
-            confirmation_cmds.append(("目錄內容", "ls -la ~/ 2>/dev/null || ls -la ."))
-        if any(kw in goal_lower for kw in ["install", "pip", "package"]):
+        if any(_has_word(goal_lower, kw) for kw in ["clone", "git", "repository", "repo"]):
+            # Use the effective workspace, not `~/` — listing the user's
+            # whole home dir was leaking personal files into the summary.
+            from config import effective_workspace_dir
+            ws = effective_workspace_dir()
+            confirmation_cmds.append(
+                ("工作目錄內容", f"ls -la {ws!r} 2>/dev/null || ls -la .")
+            )
+        if any(_has_word(goal_lower, kw) for kw in ["install", "pip", "package"]):
             confirmation_cmds.append(("已安裝套件（前20個）", "pip list 2>/dev/null | head -20"))
-        if any(kw in goal_lower for kw in ["npm", "node", "yarn"]):
+        if any(_has_word(goal_lower, kw) for kw in ["npm", "node", "yarn"]):
             confirmation_cmds.append(("Node 套件", "ls node_modules 2>/dev/null | head -10 || echo 'node_modules not found'"))
 
         if not confirmation_cmds:
