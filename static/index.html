@@ -1201,15 +1201,82 @@
     .pagination { display: flex; align-items: center; gap: 0.75rem; margin-top: 1rem; }
     .pagination .page-info { color: var(--text-muted); font-size: 0.82rem; flex: 1; text-align: center; }
 
-    .settings-section { margin-bottom: 1.75rem; }
+    .ollama-hint {
+      margin: 0.5rem 0 0.25rem;
+      border: 1px solid var(--accent);
+      background: var(--accent-light);
+      border-radius: 10px;
+      padding: 0.75rem 0.9rem;
+      font-size: 0.85rem;
+      color: var(--text-primary);
+      line-height: 1.55;
+    }
+    .ollama-hint-head {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      margin-bottom: 0.35rem;
+    }
+    .ollama-hint-emoji { font-size: 1rem; }
+    .ollama-hint-head strong { flex: 1; font-size: 0.9rem; }
+    .ollama-hint-close {
+      background: transparent;
+      border: none;
+      color: var(--text-muted);
+      font-size: 1.1rem;
+      cursor: pointer;
+      line-height: 1;
+      padding: 0 0.25rem;
+    }
+    .ollama-hint-close:hover { color: var(--text-primary); background: transparent; }
+    .ollama-hint-body ul { margin: 0.35rem 0 0.45rem 1.2rem; padding: 0; }
+    .ollama-hint-body li { margin-bottom: 0.2rem; }
+    .ollama-hint-body code {
+      background: var(--bg-primary);
+      border: 1px solid var(--border);
+      padding: 1px 5px;
+      border-radius: 4px;
+      font-size: 0.8rem;
+    }
+    .ollama-hint-actions { font-size: 0.8rem; color: var(--text-secondary); margin-top: 0.3rem; }
+    .ollama-hint-actions a { color: var(--accent); text-decoration: underline; cursor: pointer; }
+
+    .settings-section {
+      margin-bottom: 0.75rem;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: var(--bg-primary);
+      overflow: hidden;
+    }
     .settings-section h3 {
       font-size: 0.875rem;
       font-weight: 600;
       color: var(--text-primary);
-      margin-bottom: 1rem;
-      padding-bottom: 0.5rem;
-      border-bottom: 1px solid var(--border);
+      margin: 0;
+      padding: 0.8rem 1rem;
+      cursor: pointer;
+      user-select: none;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.5rem;
+      transition: background 0.15s;
     }
+    .settings-section h3:hover { background: var(--bg-secondary); }
+    .settings-section h3::after {
+      content: '▾';
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      transition: transform 0.2s;
+      flex-shrink: 0;
+    }
+    .settings-section.collapsed h3::after { transform: rotate(-90deg); }
+    .settings-section-body {
+      padding: 0.2rem 1rem 1rem;
+      border-top: 1px solid var(--border);
+    }
+    .settings-section.collapsed .settings-section-body { display: none; }
+    .settings-section.collapsed h3 { padding-bottom: 0.8rem; }
     .ollama-status {
       display: flex;
       align-items: center;
@@ -1999,6 +2066,25 @@
             <div class="msg-agent">
               Hello! I'm OpenTeddy 🐩 Describe what you'd like me to do and I'll get started.
             </div>
+            <div id="ollamaNoModelsHint" class="ollama-hint" style="display:none">
+              <div class="ollama-hint-head">
+                <span class="ollama-hint-emoji">💡</span>
+                <strong>沒偵測到 Ollama 模型</strong>
+                <button type="button" class="ollama-hint-close"
+                  onclick="dismissOllamaHint()" title="Dismiss">×</button>
+              </div>
+              <div class="ollama-hint-body">
+                <div>OpenTeddy 需要本地模型才能跑任務，建議先 pull 一個：</div>
+                <ul>
+                  <li><strong>DGX Spark（大顯存）</strong>：<code>qwen3:32b</code> 或 <code>gemma3:27b</code></li>
+                  <li><strong>Mac 16–24 GB RAM</strong>：<code>gemma3:4b</code>（輕量、速度快）</li>
+                </ul>
+                <div class="ollama-hint-actions">
+                  在 terminal 執行 <code>ollama pull gemma3:4b</code>，
+                  或到 <a href="#" onclick="event.preventDefault();switchTab('settings')">Settings → Model Settings</a> 的「Pull New Model」欄位下載。
+                </div>
+              </div>
+            </div>
           </div>
           <div class="chat-input-area">
             <!-- Workspace bar — shows the effective working directory
@@ -2200,7 +2286,8 @@
           <div class="card">
 
             <div class="settings-section">
-              <h3>Model Settings</h3>
+              <h3 onclick="toggleSettingsSection(this)">Model Settings</h3>
+              <div class="settings-section-body">
               <div class="ollama-status">
                 <span id="ollamaDot" class="ollama-dot"></span>
                 <span id="ollamaLabel" class="ollama-label">Checking…</span>
@@ -2253,10 +2340,12 @@
                   <div class="progress-bar-inner" id="pullBar"></div>
                 </div>
               </div>
+              </div>
             </div>
 
             <div class="settings-section">
-              <h3>Agent Workspace</h3>
+              <h3 onclick="toggleSettingsSection(this)">Agent Workspace</h3>
+              <div class="settings-section-body">
               <div class="row" style="margin-bottom:0.25rem">
                 <div class="field" style="flex:2">
                   <label>Workspace Directory (Code / Analytic 模式的預設 cwd)</label>
@@ -2268,10 +2357,12 @@
                 （<code>git clone</code>、<code>pip install</code>、檔案寫入等）。
                 相對路徑會從專案根目錄算起。目錄不存在時會自動建立。
               </div>
+              </div>
             </div>
 
             <div class="settings-section">
-              <h3>Notification Credentials</h3>
+              <h3 onclick="toggleSettingsSection(this)">Notification Credentials</h3>
+              <div class="settings-section-body">
               <div style="font-size:0.78rem;color:var(--text-secondary);margin-bottom:0.9rem;line-height:1.5">
                 讓 agent 可以呼叫 <code>telegram_send</code> / <code>email_send</code> 推播。
                 設定一次所有 session 共用。工具會在模型呼叫時讀取這裡的值；
@@ -2335,10 +2426,12 @@
   -H "X-OpenTeddy-Webhook-Secret: YOUR_SECRET" \
   -d '{"goal": "check for new orders and telegram me if any"}'</pre>
               </div>
+              </div>
             </div>
 
             <div class="settings-section">
-              <h3>Parameter Settings</h3>
+              <h3 onclick="toggleSettingsSection(this)">Parameter Settings</h3>
+              <div class="settings-section-body">
               <div class="param-row">
                 <div class="param-field">
                   <label>Escalation Confidence Threshold
@@ -2420,6 +2513,7 @@
                   <input type="range" id="rng_qwen_temperature" min="0" max="1" step="0.05" value="0.2"
                     oninput="document.getElementById('val_qwen_temperature').textContent=parseFloat(this.value).toFixed(2)" />
                 </div>
+              </div>
               </div>
             </div>
 
@@ -4394,6 +4488,35 @@
     let _ollamaModels   = [];
     let _settingsLoaded = false;
 
+    function toggleSettingsSection(h3) {
+      h3.parentElement.classList.toggle('collapsed');
+    }
+
+    function dismissOllamaHint() {
+      const hint = document.getElementById('ollamaNoModelsHint');
+      if (hint) hint.style.display = 'none';
+      try { sessionStorage.setItem('ollamaHintDismissed', '1'); } catch {}
+    }
+
+    async function checkOllamaModelsForHome() {
+      const hint = document.getElementById('ollamaNoModelsHint');
+      if (!hint) return;
+      try {
+        if (sessionStorage.getItem('ollamaHintDismissed') === '1') {
+          hint.style.display = 'none';
+          return;
+        }
+      } catch {}
+      try {
+        const res  = await fetch(`${API}/settings/ollama/models`);
+        const data = await res.json();
+        const models = data.data?.models ?? [];
+        hint.style.display = models.length ? 'none' : 'block';
+      } catch {
+        hint.style.display = 'block';
+      }
+    }
+
     async function loadSettings() {
       try {
         const res  = await fetch(`${API}/settings`);
@@ -4551,7 +4674,7 @@
         statusTx.textContent = '✅ Pull complete!';
         btn.disabled = false;
         toast(`✅ ${data.model} pulled successfully!`);
-        setTimeout(async () => { wrap.classList.remove('active'); await loadOllamaModels(); }, 1500);
+        setTimeout(async () => { wrap.classList.remove('active'); await loadOllamaModels(); checkOllamaModelsForHome(); }, 1500);
       } else if (data.status === 'error') {
         statusTx.textContent = '❌ Pull failed: ' + (data.error ?? '');
         btn.disabled = false;
@@ -4703,6 +4826,7 @@
       updatePrivacyIndicator();    // show 🔓/🔒 privacy pill
       loadSkills();
       loadTools();
+      checkOllamaModelsForHome();
       pollApprovals();
       setInterval(pollApprovals, 3000);
       setInterval(() => {
