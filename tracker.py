@@ -574,6 +574,17 @@ class Tracker:
         ) as cur:
             commercial = dict(await cur.fetchone() or {})
 
+        # ── Local (non-anthropic) token volume ────────────────────────────────
+        # Any record not attributed to Anthropic is treated as "ran on a local
+        # model" for the purposes of the GPT-4-baseline savings estimate.
+        async with self.db.execute(
+            "SELECT COUNT(*) as local_calls, "
+            "SUM(tokens_in) as local_in, SUM(tokens_out) as local_out "
+            "FROM usage_records "
+            "WHERE model_provider IS NULL OR model_provider != 'anthropic'"
+        ) as cur:
+            local = dict(await cur.fetchone() or {})
+
         # ── Escalation count (usage records from anthropic == escalations) ────
         escalation_count = commercial.get("comm_calls") or 0
 
@@ -597,6 +608,15 @@ class Tracker:
             for r in rows
         ]
 
+        local_in  = local.get("local_in")  or 0
+        local_out = local.get("local_out") or 0
+        # GPT-4 (8k) public API pricing as of 2024: $30/1M input, $60/1M output.
+        # Used as a "what would this have cost on GPT-4?" baseline for the
+        # savings callout on the Usage page.
+        gpt4_in_rate  = 30.0 / 1_000_000
+        gpt4_out_rate = 60.0 / 1_000_000
+        gpt4_equiv_cost = local_in * gpt4_in_rate + local_out * gpt4_out_rate
+
         return {
             "total_calls":        totals.get("total_calls") or 0,
             "commercial_calls":   commercial.get("comm_calls") or 0,
@@ -607,4 +627,10 @@ class Tracker:
             "cost_by_model":      cost_by_model,
             "cost_by_day":        cost_by_day,
             "escalation_count":   escalation_count,
+            "local_calls":        local.get("local_calls") or 0,
+            "local_tokens_in":    local_in,
+            "local_tokens_out":   local_out,
+            "gpt4_equiv_cost_usd": round(gpt4_equiv_cost, 6),
+            "gpt4_price_in_per_mtok":  30.0,
+            "gpt4_price_out_per_mtok": 60.0,
         }

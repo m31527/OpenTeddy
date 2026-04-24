@@ -1154,6 +1154,53 @@
       font-weight: 500;
     }
     #usageChart { width: 100%; height: 160px; display: block; }
+
+    /* Local-model savings callout. Deliberately flashy — the whole point
+       is to make the "you saved $X" number feel satisfying. */
+    .savings-card {
+      background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%);
+      border: 1px solid #86efac;
+      border-radius: 12px;
+      padding: 1.25rem 1.4rem;
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 1rem;
+      align-items: center;
+    }
+    .savings-label {
+      font-size: 0.72rem;
+      color: #166534;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      font-weight: 600;
+      margin-bottom: 0.3rem;
+    }
+    .savings-amount {
+      font-size: 2.4rem;
+      font-weight: 800;
+      color: #15803d;
+      letter-spacing: -0.02em;
+      line-height: 1;
+    }
+    .savings-sub {
+      font-size: 0.82rem;
+      color: #166534;
+      margin-top: 0.45rem;
+    }
+    .savings-breakdown {
+      display: flex;
+      flex-direction: column;
+      gap: 0.3rem;
+      font-size: 0.78rem;
+      color: #166534;
+      text-align: right;
+      white-space: nowrap;
+    }
+    .savings-breakdown b { color: #14532d; font-weight: 700; }
+    @media (max-width: 560px) {
+      .savings-card { grid-template-columns: 1fr; }
+      .savings-breakdown { text-align: left; }
+    }
     .usage-filters {
       display: flex;
       gap: 0.75rem;
@@ -2234,6 +2281,27 @@
               </div>
             </div>
             <button class="btn-ghost btn-sm" onclick="loadUsageSummary()">Refresh Stats</button>
+          </div>
+
+          <div class="card">
+            <h2>Local Model Savings</h2>
+            <div class="savings-card">
+              <div>
+                <div class="savings-label">Estimated savings vs GPT-4 API</div>
+                <div class="savings-amount" id="statSavings">—</div>
+                <div class="savings-sub" id="statSavingsSub">
+                  Running locally instead of paying per token.
+                </div>
+              </div>
+              <div class="savings-breakdown">
+                <div>Local calls: <b id="statLocalCalls">—</b></div>
+                <div>Tokens in: <b id="statLocalTokensIn">—</b></div>
+                <div>Tokens out: <b id="statLocalTokensOut">—</b></div>
+                <div style="color:var(--text-muted);font-size:0.7rem;margin-top:0.2rem">
+                  GPT-4 rate: $30 / $60 per 1M tok
+                </div>
+              </div>
+            </div>
           </div>
 
           <div class="card">
@@ -4273,6 +4341,31 @@
         document.getElementById('statTokensIn').textContent     = fmtK(data.total_tokens_in);
         document.getElementById('statTokensOut').textContent    = fmtK(data.total_tokens_out);
         document.getElementById('statEscalations').textContent  = fmt(data.escalation_count);
+
+        // ── Local-model savings vs GPT-4 API baseline ──────────────────────
+        const gpt4Cost = data.gpt4_equiv_cost_usd || 0;
+        // What we actually paid to run those same tokens locally is ~0 for
+        // Ollama; for any non-anthropic records with a logged cost we subtract
+        // it so the number stays honest even if someone plugs in a paid
+        // non-Anthropic provider later.
+        const localCost = Math.max(
+          (data.total_cost_usd || 0) - (data.commercial_cost_usd || 0),
+          0,
+        );
+        const savings = Math.max(gpt4Cost - localCost, 0);
+        document.getElementById('statSavings').textContent =
+          '$' + savings.toFixed(2);
+        document.getElementById('statLocalCalls').textContent =
+          fmt(data.local_calls || 0);
+        document.getElementById('statLocalTokensIn').textContent =
+          fmtK(data.local_tokens_in || 0);
+        document.getElementById('statLocalTokensOut').textContent =
+          fmtK(data.local_tokens_out || 0);
+        document.getElementById('statSavingsSub').textContent =
+          (data.local_calls || 0) > 0
+            ? `Would have cost ~$${gpt4Cost.toFixed(2)} on GPT-4 — you paid $${localCost.toFixed(2)}.`
+            : 'Run a task on a local model to start saving.';
+
         drawChart(data.cost_by_day || []);
       } catch (e) { console.error('Usage summary error:', e); }
     }
