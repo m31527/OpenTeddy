@@ -129,6 +129,32 @@ class Config:
         default_factory=lambda: os.getenv("SKILLS_DIR", "skills")
     )
 
+    # ── Notification credentials (Slice 1: agent-as-service) ────────────────
+    # Used by tools/notify_tool.py. All blank by default — the tools
+    # return a "credential not configured" error pointing at Settings
+    # if the agent tries to use them before the user fills these in.
+    telegram_bot_token: str = field(
+        default_factory=lambda: os.getenv("TELEGRAM_BOT_TOKEN", "")
+    )
+    telegram_default_chat_id: str = field(
+        default_factory=lambda: os.getenv("TELEGRAM_DEFAULT_CHAT_ID", "")
+    )
+    smtp_host: str = field(default_factory=lambda: os.getenv("SMTP_HOST", ""))
+    smtp_port: int = field(
+        default_factory=lambda: int(os.getenv("SMTP_PORT", "587") or "587")
+    )
+    smtp_user: str = field(default_factory=lambda: os.getenv("SMTP_USER", ""))
+    smtp_password: str = field(default_factory=lambda: os.getenv("SMTP_PASSWORD", ""))
+    smtp_from: str = field(default_factory=lambda: os.getenv("SMTP_FROM", ""))
+
+    # Webhook shared-secret. If set, POST /webhooks/{session_id} requires
+    # either `X-OpenTeddy-Webhook-Secret: <this>` header or ?secret=<this>
+    # query param. Empty = endpoint is OPEN (anyone on the network can
+    # trigger); the UI surfaces a clear warning in that case.
+    webhook_secret: str = field(
+        default_factory=lambda: os.getenv("WEBHOOK_SECRET", "")
+    )
+
     # ── Agent workspace ──────────────────────────────────────────────────────
     # Default working directory for shell_exec_* in Code / Analytic modes.
     # Any command that doesn't specify its own working_dir lands here, so
@@ -301,6 +327,16 @@ class Config:
             # Always store as absolute — keeps every downstream resolution
             # consistent regardless of what cwd uvicorn happens to be in.
             self.agent_workspace_dir = os.path.abspath(settings["agent_workspace_dir"])
+
+        # Notification credentials — strings only (port parsed as int).
+        for k in ("telegram_bot_token", "telegram_default_chat_id",
+                  "smtp_host", "smtp_user", "smtp_password", "smtp_from",
+                  "webhook_secret"):
+            if k in settings:
+                setattr(self, k, settings[k] or "")
+        smtp_port_val = _i("smtp_port")
+        if smtp_port_val is not None:
+            self.smtp_port = smtp_port_val
 
 
 # Module-level singleton
