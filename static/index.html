@@ -1404,17 +1404,25 @@
       font-weight: 600;
     }
 
-    /* Tool execution card — collapsible */
+    /* Tool execution card — collapsed = subtle chip, expanded = full card */
     .tool-call-card {
+      background: transparent;
+      border: 1px solid transparent;
+      border-left: 2px solid var(--purple);
+      border-radius: 6px;
+      padding: 3px 10px;
+      font-size: 0.78rem;
+      align-self: stretch;
+      transition: background 0.2s ease, border-color 0.2s ease, padding 0.18s ease;
+    }
+    .tool-call-card:hover { background: var(--bg-secondary); }
+    .tool-call-card.expanded {
       background: var(--bg-secondary);
-      border: 1px solid var(--border);
-      border-left: 3px solid var(--purple);
-      border-radius: 8px;
+      border-color: var(--border);
       padding: 7px 12px;
       font-size: 0.82rem;
-      align-self: stretch;
-      transition: border-left-color 0.25s;
     }
+    .tool-call-card:not(.expanded) .tool-call-name { opacity: 0.85; }
     .tool-call-card.success { border-left-color: var(--success); }
     .tool-call-card.failure { border-left-color: var(--error); }
     .tool-call-header {
@@ -1423,7 +1431,7 @@
       gap: 0.45rem;
       font-weight: 600;
       color: var(--text-secondary);
-      font-size: 0.82rem;
+      font-size: inherit;
       cursor: pointer;
       user-select: none;
     }
@@ -3248,7 +3256,7 @@
       const argsStr = data.args ? JSON.stringify(data.args, null, 2) : '(no args)';
 
       const card = document.createElement('div');
-      card.className = 'tool-call-card expanded';
+      card.className = 'tool-call-card';
       card.id = `tc-${key}`;
       card.innerHTML = `
         <div class="tool-call-header" onclick="toggleToolCard(this)">
@@ -3401,6 +3409,7 @@
         summaryEl.textContent = firstLine || (success ? 'done' : 'error');
       }
       if (success) card.classList.remove('expanded');
+      else card.classList.add('expanded');
 
       const chat = document.getElementById('chatMessages');
       chat.scrollTop = chat.scrollHeight;
