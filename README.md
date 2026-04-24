@@ -1,10 +1,10 @@
 <div align="center">
 
-<img src="static/teddy.png" alt="OpenTeddy" width="180" />
+<img src="static/OpenTeddy-logo.svg" alt="OpenTeddy" width="240" />
 
 # OpenTeddy
 
-**A self-growing multi-agent system built on Gemma + Qwen + Claude**
+**A free, Claude-like agent — local models + skills + a dash of commercial LLM.**
 
 <p>
   <img alt="Python" src="https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white" />
@@ -12,6 +12,7 @@
   <img alt="Ollama" src="https://img.shields.io/badge/Ollama-local-black?logo=ollama&logoColor=white" />
   <img alt="Anthropic" src="https://img.shields.io/badge/Claude-Anthropic-D97757" />
   <img alt="License" src="https://img.shields.io/badge/license-MIT-green" />
+  <a href="https://github.com/m31527/OpenTeddy/stargazers"><img alt="Stars" src="https://img.shields.io/github/stars/m31527/OpenTeddy?style=social" /></a>
 </p>
 
 OpenTeddy orchestrates a trio of AI agents to autonomously plan, execute,
@@ -21,6 +22,27 @@ recurring tasks faster on future runs.
 </div>
 
 ---
+
+## Mission
+
+The goal is to build a **free, Claude-like experience** that anyone can run at
+home. We get there by **mixing three layers**:
+
+1. **Local models (Gemma / Qwen via Ollama)** handle the bulk of planning and
+   execution — no per-token cost, no data leaving your machine.
+2. **Skills** turn repeated work into plain Python functions, so the same job
+   stops costing LLM calls after the second or third run.
+3. **A commercial model (Claude)** is pulled in only when the local path
+   genuinely can't finish the task — timeouts, low confidence, hard failures.
+
+The result is a hybrid that aims for **high capability at a fraction of the
+cost** of calling a frontier model for every single step. The Usage dashboard
+estimates how much you'd have paid on GPT-4 for the same token volume, so you
+can see the savings pile up in real time.
+
+> **If this resonates with you — or you just want to cheer the project on —
+> please drop a ⭐ on the repo. It genuinely helps and keeps me motivated to
+> ship more.** → [github.com/m31527/OpenTeddy](https://github.com/m31527/OpenTeddy)
 
 ## Highlights
 
@@ -86,7 +108,7 @@ OpenTeddy/
 ├── tool_registry.py   # Tool registration + risk gating
 ├── tools/             # shell / file / http / db / gcp / package
 ├── skills/            # Auto-generated skill .py files
-├── static/            # Web dashboard (index.html + teddy.png)
+├── static/            # Web dashboard (index.html + OpenTeddy-logo.svg)
 ├── main.py            # FastAPI server + CLI entry point
 └── .env.example       # Environment variable template
 ```
@@ -210,6 +232,16 @@ Notes:
 - The container reaches host Ollama via the `host-gateway` alias set in `docker-compose.yml`.
 - Skills and the usage database persist in the `openteddy_data` Docker volume.
 - Rebuild image: `docker compose up -d --build`.
+
+## Support the project
+
+OpenTeddy is a solo side-project trying to prove that a small open stack can
+get close to the big commercial agents. If you want to see it keep growing:
+
+- ⭐ **Star the repo** — [github.com/m31527/OpenTeddy](https://github.com/m31527/OpenTeddy) —
+  it's the single biggest encouragement I get.
+- 🐛 **Open an issue** if something breaks or a model setup confuses you.
+- 🧠 **Share a skill** you built on top of OpenTeddy — PRs welcome.
 
 ## License
 
