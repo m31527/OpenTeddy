@@ -12,6 +12,9 @@
   <link rel="icon" type="image/png" sizes="16x16" href="/static/favicon-16x16.png">
   <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon.png">
   <link rel="manifest" href="/static/site.webmanifest">
+  <!-- Chart.js for Analytic-mode charts rendered from ```chart JSON
+       blocks in agent responses. UMD build ships the global `Chart`. -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
   <style>
     :root {
       --bg-primary:    #faf9f7;
@@ -1414,6 +1417,101 @@
       margin-right: auto;
     }
 
+    /* File-upload + chips */
+    .upload-btn {
+      background: transparent;
+      border: 1.5px solid var(--border);
+      color: var(--text-secondary);
+      border-radius: 50%;
+      width: 36px; height: 36px;
+      font-size: 1.2rem;
+      font-weight: 500;
+      font-family: inherit;
+      line-height: 1;
+      cursor: pointer;
+      flex-shrink: 0;
+      transition: background 0.15s, border-color 0.15s, color 0.15s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .upload-btn:hover {
+      background: var(--bg-secondary);
+      color: var(--text-primary);
+      border-color: var(--text-secondary);
+    }
+    .upload-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    .attach-chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      max-width: 800px;
+      margin: 0 auto 6px;
+      padding: 0 4px;
+    }
+    .attach-chips:empty { display: none; }
+    .attach-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 4px 10px 4px 12px;
+      font-size: 0.78rem;
+      color: var(--text-primary);
+      max-width: 280px;
+    }
+    .attach-chip.uploading { opacity: 0.6; }
+    .attach-chip .attach-name {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      max-width: 180px;
+    }
+    .attach-chip .attach-size {
+      font-size: 0.7rem;
+      color: var(--text-muted);
+      flex-shrink: 0;
+    }
+    .attach-chip .attach-remove {
+      background: transparent;
+      border: none;
+      color: var(--text-muted);
+      font-size: 0.9rem;
+      line-height: 1;
+      padding: 0 2px;
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+    .attach-chip .attach-remove:hover { color: var(--error); }
+
+    /* Chart.js-rendered blocks inside agent summaries */
+    .chart-container {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 14px 14px 8px;
+      margin: 0.7rem 0;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+      position: relative;
+      min-height: 220px;
+    }
+    .chart-container canvas {
+      max-width: 100%;
+      height: 260px !important;
+    }
+    .chart-error {
+      color: var(--error);
+      font-family: 'Courier New', monospace;
+      font-size: 0.78rem;
+      padding: 0.4rem 0.6rem;
+      background: #fff0f0;
+      border: 1px solid #fca5a5;
+      border-radius: 6px;
+    }
+
     #streamCard, #resultCard { display: none !important; }
 
     .subtask-list { list-style: none; }
@@ -1520,8 +1618,8 @@
             <button type="button" class="mode-btn active" data-mode="code" onclick="changeMode('code')" title="寫代碼自主執行（部署、安裝、診斷、修改檔案）">
               <span class="mode-emoji">💻</span><span>Code</span>
             </button>
-            <button type="button" class="mode-btn" data-mode="analytic" onclick="changeMode('analytic')" title="分析 csv / xlsx / json 並繪圖（Beta）">
-              <span class="mode-emoji">📊</span><span>Analytic</span><span class="mode-beta">BETA</span>
+            <button type="button" class="mode-btn" data-mode="analytic" onclick="changeMode('analytic')" title="分析 csv / xlsx / json 並用 Chart.js 繪圖">
+              <span class="mode-emoji">📊</span><span>Analytic</span>
             </button>
           </div>
           <button type="button" id="memoryBtn" class="mem-btn" onclick="clearSessionMemory()"
@@ -1536,11 +1634,24 @@
             </div>
           </div>
           <div class="chat-input-area">
+            <!-- Attachment chips — populated as the user adds files via
+                 the + button. Each chip carries the server-returned
+                 rel_path so runTask() can pass the list to the agent. -->
+            <div id="attachmentChips" class="attach-chips"></div>
+
             <div class="chat-input-row">
               <div class="priority-field">
                 <label>Priority</label>
                 <input type="number" id="priority" value="5" min="1" max="10" />
               </div>
+              <!-- Hidden file input, triggered by the + button.
+                   accept list covers typical Analytic data files. -->
+              <input type="file" id="fileInput" multiple
+                accept=".csv,.tsv,.json,.xlsx,.xls,.txt,.md,.log,.yaml,.yml,.parquet"
+                onchange="onFilesPicked(event)" style="display:none">
+              <button class="upload-btn" id="uploadBtn" type="button"
+                onclick="document.getElementById('fileInput').click()"
+                title="Attach files to this task (analytic mode: csv / xlsx / json etc.)">+</button>
               <div class="chat-input-wrap">
                 <textarea id="goal" rows="1" placeholder="Describe your task… (click ↑ to send)"
                   onkeydown="handleGoalKey(event)"
@@ -1548,7 +1659,7 @@
                 <button class="send-btn" id="runBtn" onclick="onSendOrStop()" title="Send">↑</button>
               </div>
             </div>
-            <div class="input-hint">Enter 換行 · 點擊 ↑ 送出 · 執行中可按 ■ 中斷（⌘/Ctrl+Enter 亦可送出）</div>
+            <div class="input-hint">Enter 換行 · 點擊 ↑ 送出 · 執行中可按 ■ 中斷（⌘/Ctrl+Enter 亦可送出）· + 附加檔案</div>
           </div>
         </div>
 
@@ -1905,6 +2016,11 @@
     let _currentSessionId = localStorage.getItem('teddy.session_id') || null;
     let _sessionTitles = {};
     let _sessionModes  = {};  // id → 'chat' | 'code' | 'analytic'
+
+    // Pending attachments for the next /run call. Each entry:
+    //   { name, rel_path, size_bytes, content_type }
+    // Cleared when a task actually sends (so files are "per message").
+    let _pendingAttachments = [];
 
     // Valid mode values — kept in sync with backend SessionMode enum.
     const MODES = ['chat', 'code', 'analytic'];
@@ -2274,6 +2390,8 @@
             : `<span style="color:var(--text-muted)">(${escHtml(t.status || 'no summary')})</span>`;
           a.innerHTML = body;
           chat.appendChild(a);
+          // Re-render any ```chart blocks that were in the saved summary.
+          renderPendingCharts(a);
         }
         chat.scrollTop = chat.scrollHeight;
       } catch (e) {
@@ -2292,7 +2410,46 @@
       el.className = 'msg-agent';
       if (asText) el.textContent = html;
       else el.innerHTML = html;
-      return appendToChat(el);
+      appendToChat(el);
+      // Analytic-mode ```chart blocks leave .chart-pending canvases
+      // behind. Instantiate Chart.js now that the DOM has them.
+      if (!asText) renderPendingCharts(el);
+      return el;
+    }
+
+    // Walk a subtree for canvases emitted by the markdown renderer
+    // from ```chart blocks, decode the base64 spec, and hand it to
+    // Chart.js. Errors become a red notice inside the container so
+    // the user sees "this chart's JSON is broken" instead of a blank
+    // box — vital for debugging the agent's output.
+    function renderPendingCharts(root) {
+      if (typeof Chart === 'undefined') return;  // CDN blocked or offline
+      const canvases = root.querySelectorAll('canvas.chart-pending');
+      canvases.forEach(canvas => {
+        canvas.classList.remove('chart-pending');
+        const payload = canvas.getAttribute('data-chart-spec') || '';
+        let spec;
+        try {
+          const json = decodeURIComponent(escape(atob(payload)));
+          spec = JSON.parse(json);
+        } catch (e) {
+          const container = canvas.parentElement;
+          container.innerHTML =
+            `<div class="chart-error">Invalid chart JSON: ${escHtml(e.message)}</div>`;
+          return;
+        }
+        try {
+          // Baseline defaults so a minimal spec still looks decent.
+          spec.options = spec.options || {};
+          spec.options.responsive = spec.options.responsive !== false;
+          spec.options.maintainAspectRatio = false;
+          new Chart(canvas.getContext('2d'), spec);
+        } catch (e) {
+          const container = canvas.parentElement;
+          container.innerHTML =
+            `<div class="chart-error">Chart.js error: ${escHtml(e.message)}</div>`;
+        }
+      });
     }
     function addSystemMessage(text) {
       const el = document.createElement('div');
@@ -2455,6 +2612,86 @@
       // Everything else falls through — default newline behavior.
     }
 
+    // ── File attachments (Analytic mode + general) ─────────────────────────
+    // User picks files via the + button → hidden <input type="file">
+    // fires onFilesPicked → we POST each to /upload, collect the server's
+    // {name, rel_path, size_bytes} responses into _pendingAttachments,
+    // and render chips above the chat input. When the user sends the
+    // message, runTask() inlines the chip list at the top of the goal
+    // text so the agent sees exactly which files to read, with their
+    // workspace-relative paths.
+    function formatBytes(n) {
+      if (n < 1024)      return `${n} B`;
+      if (n < 1024*1024) return `${(n/1024).toFixed(1)} KB`;
+      return `${(n/1024/1024).toFixed(1)} MB`;
+    }
+
+    async function onFilesPicked(event) {
+      const files = Array.from(event.target.files || []);
+      event.target.value = '';  // allow same-file re-pick later
+      if (!files.length) return;
+
+      const chipWrap = document.getElementById('attachmentChips');
+      for (const file of files) {
+        // Optimistic chip with an "uploading" state while the POST is in flight.
+        const tempId = 'chip-' + Math.random().toString(36).slice(2, 9);
+        const chip = document.createElement('div');
+        chip.className = 'attach-chip uploading';
+        chip.id = tempId;
+        chip.innerHTML = `
+          <span>📎</span>
+          <span class="attach-name">${escHtml(file.name)}</span>
+          <span class="attach-size">${formatBytes(file.size)}…</span>
+        `;
+        chipWrap.appendChild(chip);
+
+        try {
+          const fd = new FormData();
+          fd.append('file', file);
+          if (_currentSessionId) fd.append('session_id', _currentSessionId);
+          const res = await fetch(`${API}/upload`, { method: 'POST', body: fd });
+          if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+          const data = await res.json();
+
+          // Upgrade chip to "uploaded" state and register with the attach list.
+          _pendingAttachments.push({
+            name:      data.name,
+            rel_path:  data.rel_path,
+            size_bytes: data.size_bytes,
+            content_type: data.content_type,
+          });
+          const idx = _pendingAttachments.length - 1;
+          chip.classList.remove('uploading');
+          chip.dataset.attachIdx = String(idx);
+          chip.dataset.relPath   = data.rel_path;
+          chip.innerHTML = `
+            <span>📎</span>
+            <span class="attach-name" title="${escHtml(data.rel_path)}">${escHtml(data.name)}</span>
+            <span class="attach-size">${formatBytes(data.size_bytes)}</span>
+            <button class="attach-remove" onclick="removeAttachment('${escHtml(data.rel_path)}')" title="Remove">✕</button>
+          `;
+          toast(`Attached ${data.name}`);
+        } catch (e) {
+          chip.remove();
+          toast(`Upload failed: ${file.name} — ${e.message}`, true);
+        }
+      }
+    }
+
+    function removeAttachment(relPath) {
+      _pendingAttachments = _pendingAttachments.filter(a => a.rel_path !== relPath);
+      const chipWrap = document.getElementById('attachmentChips');
+      chipWrap.querySelectorAll('.attach-chip').forEach(c => {
+        if (c.dataset.relPath === relPath) c.remove();
+      });
+    }
+
+    function clearAttachments() {
+      _pendingAttachments = [];
+      const chipWrap = document.getElementById('attachmentChips');
+      if (chipWrap) chipWrap.innerHTML = '';
+    }
+
     // ── Send / Stop ─────────────────────────────────────────────────────────
     function onSendOrStop() {
       if (_isRunning) cancelRunning();
@@ -2571,6 +2808,22 @@
       if (!goal) { toast('Please describe your task.'); return; }
       const priority = parseInt(document.getElementById('priority').value) || 5;
 
+      // If the user attached files via the + button, build a manifest
+      // block at the top of the goal so Gemma/Qwen see exactly which
+      // workspace-relative paths are available. Without this, the
+      // agent would have to `ls uploads/` first (wastes a round).
+      let effectiveGoal = goal;
+      const attaches = _pendingAttachments.slice();
+      if (attaches.length) {
+        const manifest = attaches.map(a =>
+          `  - ${a.rel_path} (${formatBytes(a.size_bytes)}${a.content_type ? ', ' + a.content_type : ''})`
+        ).join('\n');
+        effectiveGoal =
+          `[Attachments in workspace — use these paths directly, do not re-upload:\n` +
+          `${manifest}\n]\n\n` +
+          goal;
+      }
+
       // Pre-generate task_id so /tasks/{id}/cancel works before /run returns.
       const taskId = uuid4();
       _currentTaskId = taskId;
@@ -2578,9 +2831,14 @@
       _runAbort      = new AbortController();
       setRunningState(true);
 
-      addUserMessage(goal);
+      // Show what the user actually sees (plain goal) plus chip count.
+      const userDisplay = attaches.length
+        ? `${goal}\n\n📎 ${attaches.length} file${attaches.length > 1 ? 's' : ''} attached`
+        : goal;
+      addUserMessage(userDisplay);
       goalEl.value = '';
       goalEl.style.height = 'auto';
+      clearAttachments();   // chips consumed with this message
 
       const thinkingEl = addAgentMessage('⏳ Working on it…');
 
@@ -2591,9 +2849,11 @@
           headers: { 'Content-Type': 'application/json' },
           body:    JSON.stringify({
             task_id: taskId,
-            goal,
+            // effectiveGoal = goal + (optional) attachment manifest prefix.
+            // The agent sees file paths, the user sees just their message.
+            goal: effectiveGoal,
             priority,
-            context: {},
+            context: attaches.length ? { attachments: attaches.map(a => a.rel_path) } : {},
             session_id: _currentSessionId || undefined,
             // Explicitly sending mode is belt-and-braces — the server would
             // look it up from the session row anyway, but sending it means
@@ -3157,9 +3417,14 @@
       if (!text) return '';
       let src = String(text).replace(/\r\n/g, '\n');
 
+      // Capture both the language tag and the content so we can tell
+      // ```chart JSON blocks apart from regular code blocks.
       const codeBlocks = [];
-      src = src.replace(/```(?:[\w-]*\n)?([\s\S]*?)```/g, (_, code) => {
-        codeBlocks.push(code.replace(/\n+$/, ''));
+      src = src.replace(/```([\w-]*)?\n?([\s\S]*?)```/g, (_, lang, code) => {
+        codeBlocks.push({
+          lang: (lang || '').trim().toLowerCase(),
+          code: code.replace(/\n+$/, ''),
+        });
         return `\n\n§§CB${codeBlocks.length - 1}§§\n\n`;
       });
 
@@ -3177,7 +3442,24 @@
 
         const cb = block.match(/^§§CB(\d+)§§$/);
         if (cb) {
-          out.push(`<pre class="md-pre">${escHtml(codeBlocks[+cb[1]])}</pre>`);
+          const entry = codeBlocks[+cb[1]];
+          // ```chart blocks → inject a canvas placeholder; a post-pass
+          // (renderPendingCharts) instantiates Chart.js after the HTML
+          // is inserted into the DOM. innerHTML can't execute scripts,
+          // so we have to defer instantiation. The raw JSON is
+          // base64-encoded into a data-attr to survive HTML escaping
+          // in attribute context.
+          if (entry && entry.lang === 'chart') {
+            const payload = btoa(unescape(encodeURIComponent(entry.code)));
+            const cid = 'chart-' + Math.random().toString(36).slice(2, 10);
+            out.push(
+              `<div class="chart-container">` +
+              `<canvas id="${cid}" data-chart-spec="${payload}" class="chart-pending"></canvas>` +
+              `</div>`
+            );
+            continue;
+          }
+          out.push(`<pre class="md-pre">${escHtml(entry.code)}</pre>`);
           continue;
         }
 

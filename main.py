@@ -11,9 +11,10 @@ import logging
 import os
 import uuid
 from contextlib import asynccontextmanager
+from datetime import datetime
 from typing import AsyncGenerator, Optional
 
-from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -282,6 +283,87 @@ async def debug_workspace(session_id: Optional[str] = None) -> dict:
         "project_root": os.path.dirname(os.path.abspath(__file__)),
         "entry_count":  len(entries),
         "entries":      entries[:50],  # cap to keep the response small
+    }
+
+
+@app.post("/upload")
+async def upload_file(
+    file: UploadFile = File(...),
+    session_id: Optional[str] = Form(None),
+) -> dict:
+    """Upload a file into the session's workspace under ``uploads/``.
+
+    Used by Analytic mode (CSV/XLSX/JSON ingestion) but general-purpose.
+    The file lands where shell tools already run from, so the agent can
+    read it by just referring to ``uploads/<name>`` without any extra
+    plumbing.
+
+    Filenames are sanitized (basename only, no path traversal) and
+    collisions get a timestamp suffix so a second upload of the same
+    name doesn't overwrite the first.
+    """
+    # Resolve which workspace we're uploading into — session override
+    # wins if one is configured, otherwise the global default.
+    from config import config as _cfg, set_session_workspace
+    workspace = _cfg.agent_workspace_dir
+    if session_id:
+        try:
+            sess = await tracker.get_session(session_id)
+            if sess and sess.get("workspace_dir"):
+                workspace = os.path.abspath(sess["workspace_dir"])
+                # Also prime the context var so any parallel /run
+                # requests in the same event-loop task see the right ws.
+                set_session_workspace(sess["workspace_dir"])
+        except Exception:  # noqa: BLE001
+            pass
+
+    uploads_dir = os.path.join(workspace, "uploads")
+    try:
+        os.makedirs(uploads_dir, exist_ok=True)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(500, f"Cannot create uploads dir: {exc}")
+
+    # Sanitize: basename only, no path traversal, no null bytes.
+    safe_name = os.path.basename(file.filename or "upload.bin")
+    safe_name = safe_name.replace("\x00", "").strip() or "upload.bin"
+
+    dest = os.path.join(uploads_dir, safe_name)
+    # Collision → append timestamp before the extension.
+    if os.path.exists(dest):
+        base, ext = os.path.splitext(safe_name)
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        safe_name = f"{base}_{ts}{ext}"
+        dest = os.path.join(uploads_dir, safe_name)
+
+    size_bytes = 0
+    try:
+        with open(dest, "wb") as f:
+            while True:
+                chunk = await file.read(1 << 20)  # 1 MiB chunks
+                if not chunk:
+                    break
+                f.write(chunk)
+                size_bytes += len(chunk)
+    except Exception as exc:  # noqa: BLE001
+        # Best-effort cleanup on partial write
+        try: os.remove(dest)
+        except Exception: pass
+        raise HTTPException(500, f"Upload write failed: {exc}")
+
+    # Return the path relative to the workspace — that's what agents
+    # see as the working cwd, so the path is portable.
+    rel_path = os.path.relpath(dest, workspace)
+    logger.info(
+        "Uploaded %s (%d bytes, session=%s) → %s",
+        safe_name, size_bytes, session_id or "(global)", dest,
+    )
+    return {
+        "ok": True,
+        "name": safe_name,
+        "rel_path": rel_path,          # e.g. "uploads/data.csv"
+        "abs_path": dest,
+        "size_bytes": size_bytes,
+        "content_type": file.content_type or "application/octet-stream",
     }
 
 

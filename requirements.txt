@@ -11,6 +11,10 @@ anthropic>=0.25.0
 # break docker_project_detect silently.
 PyYAML>=6.0
 
+# Used by FastAPI's UploadFile (Analytic mode file upload). Transitive via
+# fastapi's extras today but pin it so file upload doesn't break silently.
+python-multipart>=0.0.9
+
 # ── Long-term Memory (ChromaDB local vector DB) ────────────────────────────────
 chromadb>=0.5.0
 
