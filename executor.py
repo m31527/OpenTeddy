@@ -196,10 +196,16 @@ ABSOLUTE RULES — violating these is a task failure:
    sub-task is "執行 git clone https://github.com/foo/bar", you MUST call
    shell_exec_write with command="git clone https://github.com/foo/bar".
 
-4. Only emit the final JSON (below) AFTER all tool work is done, or when the
+4. DO NOT repeat identical tool calls. Before calling a tool, scan the
+   recent messages — if you already called it with the same arguments
+   within this subtask, DO NOT call it again. Use the previous output
+   instead. The system will refuse a 3rd duplicate and force you to
+   stop. Repeated identical calls waste GPU and produce no new information.
+
+5. Only emit the final JSON (below) AFTER all tool work is done, or when the
    task is genuinely a pure-reasoning question that needs no tools.
 
-5. Analytic mode — if the subtask is to produce a data-analysis report,
+6. Analytic mode — if the subtask is to produce a data-analysis report,
    put charts in fenced ```chart blocks inside the "result" field. The
    frontend renders them as interactive Chart.js v4 figures. Example:
 
@@ -365,6 +371,23 @@ class Executor:
         tools = [] if mode == "chat" else self.registry.get_schemas()
         objective_failure_seen = False
 
+        # Duplicate-call tracker. Small local models (Qwen 2.5 3B) routinely
+        # re-call the same tool with the same args because their
+        # short-term attention over tool results is weak. Each extra
+        # round burns full GPU inference. We:
+        #   - Nudge Qwen on the 2nd identical call (warning in the result)
+        #   - Force-end the loop on the 3rd (inject a terminate message,
+        #     don't execute the tool — just tell Qwen to emit its final
+        #     JSON answer instead of burning another round).
+        # Key = (tool_name, canonical args JSON). Stable across retries.
+        call_counts: Dict[str, int] = {}
+
+        def _call_key(tname: str, targs: Dict[str, Any]) -> str:
+            try:
+                return f"{tname}::{json.dumps(targs, sort_keys=True, ensure_ascii=False)}"
+            except Exception:  # noqa: BLE001
+                return f"{tname}::{targs!r}"
+
         for round_idx in range(_MAX_TOOL_ROUNDS):
             payload: Dict[str, Any] = {
                 "model": config.qwen_model,
@@ -420,6 +443,7 @@ class Executor:
             })
 
             # Execute each tool and collect results
+            force_finalize = False  # set True if we detect a runaway loop
             for call_idx, call in enumerate(tool_calls):
                 fn_info = call.get("function", {})
                 tool_name: str = fn_info.get("name", "")
@@ -434,6 +458,15 @@ class Executor:
                     round_idx, call_idx, tool_name, args, task_id,
                 )
 
+                # Dedup gate: count how many times this exact (tool, args)
+                # has been invoked in this subtask. On the 3rd attempt we
+                # short-circuit — don't execute, don't burn GPU, just
+                # synthesize a fail-fast tool_result that tells Qwen
+                # "stop looping, emit your final answer".
+                k = _call_key(tool_name, args)
+                prev_count = call_counts.get(k, 0)
+                call_counts[k] = prev_count + 1
+
                 # Push event to Web UI. call_idx disambiguates multiple calls
                 # of the same tool within a single round so each gets its own
                 # card instead of sharing a DOM id.
@@ -445,6 +478,48 @@ class Executor:
                     "args": args,
                     "task_id": task_id,
                 })
+
+                if prev_count >= 2:
+                    # 3rd+ identical call — refuse to execute, synthesize
+                    # a nudge result, and schedule a hard break after this
+                    # round. The nudge stays visible in the tool card so
+                    # the user can see why the loop stopped.
+                    logger.warning(
+                        "Qwen loop detected: %s called %d times with same "
+                        "args — refusing further executions this subtask.",
+                        tool_name, prev_count + 1,
+                    )
+                    tool_result = {
+                        "success": False,
+                        "error": (
+                            f"⛔ LOOP DETECTED: You have called `{tool_name}` "
+                            f"{prev_count + 1} times with identical args in "
+                            "this subtask. The output will not change. Stop "
+                            "calling tools and emit your final JSON answer "
+                            "RIGHT NOW using information you already have."
+                        ),
+                        "result": {"stdout": "", "stderr": "", "exit_code": -2},
+                        "duration_ms": 0,
+                    }
+                    force_finalize = True
+                    await self._push_event({
+                        "event":    "tool_result",
+                        "round":    round_idx,
+                        "call_idx": call_idx,
+                        "tool":     tool_name,
+                        "success":  False,
+                        "error":    "Loop detected — refusing to re-run (saves GPU)",
+                        "output":   "",
+                        "task_id":  task_id,
+                    })
+                    # Record the synthesized result as a tool_result message
+                    # so Qwen sees the termination notice next round.
+                    messages.append({
+                        "role": "tool",
+                        "content": tool_result["error"],
+                        "tool_call_id": call.get("id", ""),
+                    })
+                    continue  # skip real execution
 
                 try:
                     tool_result = await self.registry.execute(
@@ -529,11 +604,44 @@ class Executor:
                     "task_id": task_id,
                 })
 
+                # Soft nudge: if this is the 2nd identical call, append a
+                # visible warning to the tool result so Qwen sees "you're
+                # about to loop — don't". Real output is preserved (state
+                # might have legitimately changed between calls), just
+                # prefixed with a comment.
+                if prev_count == 1:
+                    warn_note = (
+                        f"\n\n[⚠️ OpenTeddy notice: This is the 2nd call to "
+                        f"`{tool_name}` with identical args. If the output "
+                        "looks the same as before, MOVE ON — do not call it "
+                        "a 3rd time. The system will refuse a 3rd duplicate "
+                        "and force you to emit your final answer.]"
+                    )
+                    # Attach to whichever field the model will actually read.
+                    if isinstance(tool_result.get("result"), dict):
+                        tool_result["result"]["stderr"] = (
+                            (tool_result["result"].get("stderr") or "") + warn_note
+                        )
+                    else:
+                        tool_result["_dedup_notice"] = warn_note
+
                 # Add tool result to conversation history
                 messages.append({
                     "role": "tool",
                     "content": json.dumps(tool_result, ensure_ascii=False),
                 })
+
+            # If any call in this round tripped the loop-detector, bail
+            # out NOW — no more Qwen inference rounds, force the final
+            # answer path below. Saves the GPU from another pointless
+            # round while the synthesized "LOOP DETECTED" message is
+            # already in the messages list.
+            if force_finalize:
+                logger.warning(
+                    "Forcing final answer for task %s — loop detector fired.",
+                    task_id,
+                )
+                break
 
         # Hit max rounds — ask for a final forced answer
         logger.warning(
