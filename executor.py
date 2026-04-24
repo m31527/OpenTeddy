@@ -84,6 +84,88 @@ _REFUSAL_SIGNAL_RE = re.compile(
 )
 
 
+def _format_tool_result_for_model(
+    tool_name: str, tool_result: Dict[str, Any],
+) -> str:
+    """Render a tool result as a labeled plain-text block instead of a
+    JSON dump.
+
+    Why not json.dumps()?
+      - Nested JSON with mid-string truncation markers (`... [truncated]`)
+        makes bigger local models think they've received incomplete
+        information, which pushes them to re-call the tool "to confirm".
+      - Labeled plain text makes exit_code / stdout / stderr / error
+        unambiguous at a glance, cutting the re-call reflex.
+
+    Output shape:
+        [tool_name] OK (32ms)
+        exit_code: 0
+        --- stdout ---
+        <stdout text>
+        --- stderr ---
+        <stderr text>
+        --- error ---
+        <error text, if any>
+
+    Missing sections are simply omitted (e.g. no stdout block on a
+    write_file success). Arbitrary string results become a single
+    'result:' section.
+    """
+    success = tool_result.get("success")
+    duration = tool_result.get("duration_ms", 0)
+    status = "OK" if success else "FAILED"
+    lines: List[str] = [f"[{tool_name}] {status} ({duration}ms)"]
+
+    inner = tool_result.get("result")
+    if isinstance(inner, dict):
+        if "exit_code" in inner:
+            lines.append(f"exit_code: {inner['exit_code']}")
+        stdout = (inner.get("stdout") or "").rstrip()
+        stderr = (inner.get("stderr") or "").rstrip()
+        if stdout:
+            lines.append("--- stdout ---")
+            lines.append(stdout)
+        if stderr:
+            lines.append("--- stderr ---")
+            lines.append(stderr)
+        # For non-shell tools (file_read, docker_project_detect) the
+        # result dict carries domain-specific fields — surface whatever
+        # else is there as a compact JSON line so the model can still
+        # see structured data without us hiding it entirely.
+        extra = {k: v for k, v in inner.items()
+                 if k not in ("stdout", "stderr", "exit_code")}
+        if extra:
+            try:
+                lines.append("--- result fields ---")
+                lines.append(json.dumps(extra, ensure_ascii=False, default=str)[:2000])
+            except Exception:  # noqa: BLE001
+                pass
+        if not stdout and not stderr and not extra:
+            lines.append("(no output)")
+    elif isinstance(inner, str):
+        if inner.strip():
+            lines.append("--- result ---")
+            lines.append(inner)
+    elif inner is not None:
+        try:
+            lines.append("--- result ---")
+            lines.append(json.dumps(inner, ensure_ascii=False, default=str)[:2000])
+        except Exception:  # noqa: BLE001
+            lines.append(str(inner)[:2000])
+
+    err = tool_result.get("error")
+    if err:
+        lines.append("--- error ---")
+        lines.append(str(err))
+
+    # Preserve any dedup notice attached when the inner result wasn't a dict.
+    notice = tool_result.get("_dedup_notice")
+    if notice:
+        lines.append(str(notice).strip())
+
+    return "\n".join(lines)
+
+
 def _preview_tool_output(tool_result: Dict[str, Any]) -> str:
     """Produce a short string preview of a tool result for the Web UI.
 
@@ -394,7 +476,10 @@ class Executor:
                 "messages": messages,
                 "system": system_prompt,
                 "stream": False,
-                "options": {"temperature": 0.2, "num_predict": config.qwen_max_tokens},
+                "options": {
+                    "temperature": float(getattr(config, "qwen_temperature", 0.2)),
+                    "num_predict": config.qwen_max_tokens,
+                },
             }
             if tools:
                 payload["tools"] = tools
@@ -625,10 +710,17 @@ class Executor:
                     else:
                         tool_result["_dedup_notice"] = warn_note
 
-                # Add tool result to conversation history
+                # Add tool result to conversation history. We used to
+                # just json.dumps() the entire result dict, but bigger
+                # models (Qwen 3 MoE, Gemma 4) over-interpreted the
+                # nested structure — seeing a `"stdout":"..."` truncated
+                # mid-string would make them "want to double-check" by
+                # re-calling the tool. A flat labeled plain-text view
+                # is far easier for any model to consume and produces
+                # fewer spurious repeat calls.
                 messages.append({
                     "role": "tool",
-                    "content": json.dumps(tool_result, ensure_ascii=False),
+                    "content": _format_tool_result_for_model(tool_name, tool_result),
                 })
 
             # If any call in this round tripped the loop-detector, bail
@@ -663,7 +755,10 @@ class Executor:
                     "messages": messages,
                     "system": _SYSTEM_PROMPT,
                     "stream": False,
-                    "options": {"temperature": 0.2, "num_predict": config.qwen_max_tokens},
+                    "options": {
+                    "temperature": float(getattr(config, "qwen_temperature", 0.2)),
+                    "num_predict": config.qwen_max_tokens,
+                },
                 },
             )
             resp.raise_for_status()

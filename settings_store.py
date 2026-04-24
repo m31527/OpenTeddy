@@ -76,6 +76,25 @@ SETTINGS_META: dict[str, dict[str, Any]] = {
         "min":         512,
         "max":         8192,
     },
+    "gemma_temperature": {
+        "label":       "Gemma Temperature",
+        "description": "Sampling temperature for the orchestrator planner. "
+                       "Lower = more deterministic plans.",
+        "type":        "float",
+        "min":         0.0,
+        "max":         1.0,
+        "step":        0.05,
+    },
+    "qwen_temperature": {
+        "label":       "Qwen Temperature",
+        "description": "Sampling temperature for the executor. Set to 0.0 "
+                       "for highly deterministic tool-use (recommended "
+                       "for deploy / analytic flows).",
+        "type":        "float",
+        "min":         0.0,
+        "max":         1.0,
+        "step":        0.05,
+    },
     "skill_match_threshold": {
         "label":       "Skill Match Threshold",
         "description": "Minimum similarity score to reuse an existing skill",
@@ -134,6 +153,8 @@ def _defaults_from_config() -> dict[str, str]:
         "subtask_timeout":           str(config.subtask_timeout),
         "shell_silence_timeout":     str(config.shell_silence_timeout),
         "agent_workspace_dir":       str(config.agent_workspace_dir),
+        "gemma_temperature":         str(config.gemma_temperature),
+        "qwen_temperature":          str(config.qwen_temperature),
     }
 
 
@@ -336,6 +357,13 @@ class SettingsStore:
         v8 = _int("shell_silence_timeout")
         if v8 is not None:
             config.shell_silence_timeout = v8
+
+        vgt = _float("gemma_temperature")
+        if vgt is not None:
+            config.gemma_temperature = vgt
+        vqt = _float("qwen_temperature")
+        if vqt is not None:
+            config.qwen_temperature = vqt
 
         if "agent_workspace_dir" in settings and settings["agent_workspace_dir"]:
             # Resolve to absolute once here — see config.py for the rationale.
