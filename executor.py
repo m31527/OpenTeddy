@@ -199,6 +199,25 @@ ABSOLUTE RULES — violating these is a task failure:
 4. Only emit the final JSON (below) AFTER all tool work is done, or when the
    task is genuinely a pure-reasoning question that needs no tools.
 
+5. Analytic mode — if the subtask is to produce a data-analysis report,
+   put charts in fenced ```chart blocks inside the "result" field. The
+   frontend renders them as interactive Chart.js v4 figures. Example:
+
+     ```chart
+     {
+       "type": "bar",
+       "data": {
+         "labels": ["Jan","Feb","Mar"],
+         "datasets": [{"label":"Revenue","data":[100,150,130],"backgroundColor":"#d97757"}]
+       },
+       "options": {"plugins":{"title":{"display":true,"text":"Q1 Revenue"}}}
+     }
+     ```
+
+   Pick the chart type to match the data (line=trend, bar=compare, pie=share,
+   scatter=correlation, radar=multi-dim). Include 2–5 charts + a short
+   markdown summary with headings + bullet findings.
+
 FINAL OUTPUT FORMAT (emit exactly one JSON object, no prose, no markdown):
   {
     "result": "<string: your answer / action result>",
