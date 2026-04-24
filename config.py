@@ -131,6 +131,19 @@ class Config:
         default_factory=lambda: int(os.getenv("QWEN_MAX_TOKENS", "4096"))
     )
 
+    # ── Sampling temperatures ───────────────────────────────────────────────
+    # Lower = more deterministic (less "let me try a different path"
+    # randomness). For tool-use-heavy tasks like deploys, 0.0–0.1 is a
+    # reasonable floor — reduces the chance the executor decides to
+    # re-run an already-done step on a lucky token roll. Raise these
+    # for more creative tasks (writing, brainstorming).
+    gemma_temperature: float = field(
+        default_factory=lambda: float(os.getenv("GEMMA_TEMPERATURE", "0.1"))
+    )
+    qwen_temperature: float = field(
+        default_factory=lambda: float(os.getenv("QWEN_TEMPERATURE", "0.2"))
+    )
+
     # ── Escalation thresholds ────────────────────────────────────────────────
     # If Qwen confidence < this value, escalate to Claude
     escalation_confidence_threshold: float = field(
@@ -239,6 +252,13 @@ class Config:
         v4 = _i("qwen_max_tokens")
         if v4 is not None:
             self.qwen_max_tokens = v4
+
+        vgt = _f("gemma_temperature")
+        if vgt is not None:
+            self.gemma_temperature = vgt
+        vqt = _f("qwen_temperature")
+        if vqt is not None:
+            self.qwen_temperature = vqt
 
         v5 = _f("skill_match_threshold")
         if v5 is not None:

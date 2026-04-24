@@ -1956,6 +1956,23 @@
                     oninput="document.getElementById('val_shell_silence_timeout').textContent=this.value" />
                 </div>
               </div>
+
+              <div class="param-row">
+                <div class="param-field">
+                  <label>Gemma Temperature
+                    <span class="param-value" id="val_gemma_temperature">0.10</span>
+                  </label>
+                  <input type="range" id="rng_gemma_temperature" min="0" max="1" step="0.05" value="0.1"
+                    oninput="document.getElementById('val_gemma_temperature').textContent=parseFloat(this.value).toFixed(2)" />
+                </div>
+                <div class="param-field">
+                  <label>Qwen Temperature
+                    <span class="param-value" id="val_qwen_temperature">0.20</span>
+                  </label>
+                  <input type="range" id="rng_qwen_temperature" min="0" max="1" step="0.05" value="0.2"
+                    oninput="document.getElementById('val_qwen_temperature').textContent=parseFloat(this.value).toFixed(2)" />
+                </div>
+              </div>
             </div>
 
             <div class="settings-save-row">
@@ -3525,6 +3542,8 @@
         _setSlider('skill_promotion_threshold', s.skill_promotion_threshold?.value ?? 5);
         _setSlider('subtask_timeout',           s.subtask_timeout?.value           ?? 900);
         _setSlider('shell_silence_timeout',     s.shell_silence_timeout?.value     ?? 90);
+        _setSlider('gemma_temperature',         s.gemma_temperature?.value         ?? 0.1);
+        _setSlider('qwen_temperature',          s.qwen_temperature?.value          ?? 0.2);
         _settingsLoaded = true;
         await refreshOllamaStatus();
         await loadOllamaModels(s.orchestrator_model?.value ?? '', s.executor_model?.value ?? '');
@@ -3680,6 +3699,8 @@
         skill_promotion_threshold: document.getElementById('rng_skill_promotion_threshold').value,
         subtask_timeout:           document.getElementById('rng_subtask_timeout').value,
         shell_silence_timeout:     document.getElementById('rng_shell_silence_timeout').value,
+        gemma_temperature:         document.getElementById('rng_gemma_temperature').value,
+        qwen_temperature:          document.getElementById('rng_qwen_temperature').value,
         agent_workspace_dir:       document.getElementById('inp_agent_workspace_dir').value.trim(),
       };
       Object.keys(payload).forEach(k => { if (payload[k] === '') delete payload[k]; });

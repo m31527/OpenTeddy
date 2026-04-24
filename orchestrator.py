@@ -912,7 +912,10 @@ class Orchestrator:
             "prompt":  prompt,
             "system":  system or _PLAN_SYSTEM_BASE,
             "stream":  False,
-            "options": {"temperature": 0.1, "num_predict": config.gemma_max_tokens},
+            "options": {
+                "temperature": float(getattr(config, "gemma_temperature", 0.1)),
+                "num_predict": config.gemma_max_tokens,
+            },
         }
         try:
             resp = await self._http.post(
