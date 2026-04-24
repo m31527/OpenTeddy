@@ -66,6 +66,7 @@
       height: 100vh;
       overflow: hidden;
       border-right: 1px solid #000;
+      transition: width 0.2s ease, min-width 0.2s ease;
     }
     .sidebar-header { padding: 0.75rem 0.75rem 0.5rem; }
     .sidebar-brand {
@@ -74,6 +75,29 @@
       gap: 0.55rem;
       padding: 0.35rem 0.4rem 0.75rem;
     }
+    .sidebar-collapse-btn {
+      margin-left: auto;
+      background: transparent;
+      border: none;
+      color: var(--sidebar-muted);
+      cursor: pointer;
+      width: 26px;
+      height: 26px;
+      border-radius: 6px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.95rem;
+      line-height: 1;
+      font-family: inherit;
+      transition: background 0.1s, color 0.1s;
+    }
+    .sidebar-collapse-btn:hover { background: var(--sidebar-hover); color: var(--sidebar-text); }
+    .sidebar-collapse-btn .collapse-icon {
+      display: inline-block;
+      transition: transform 0.2s ease;
+    }
+    .sidebar.collapsed .sidebar-collapse-btn .collapse-icon { transform: rotate(180deg); }
     .sidebar-logo {
       height: 30px;
       width: auto;
@@ -156,6 +180,18 @@
       overflow: hidden;
       text-overflow: ellipsis;
     }
+    .session-item-title.editing {
+      background: rgba(255,255,255,0.08);
+      outline: 1px solid rgba(255,255,255,0.25);
+      border-radius: 4px;
+      padding: 1px 4px;
+      margin: -1px -4px;
+      overflow: auto;
+      text-overflow: clip;
+      cursor: text;
+      color: var(--sidebar-text);
+    }
+    .session-item-title.editing:focus { outline-color: rgba(255,255,255,0.45); }
     .session-item-actions {
       display: flex;
       gap: 2px;
@@ -216,6 +252,40 @@
       font-size: 0.72rem;
       color: var(--sidebar-muted);
     }
+
+    /* ── Collapsed sidebar (icon-only, ~56px) ────────────────────────────── */
+    .sidebar.collapsed { width: 56px; min-width: 56px; }
+    .sidebar.collapsed .sidebar-header { padding: 0.6rem 0.3rem 0.4rem; }
+    .sidebar.collapsed .sidebar-brand {
+      flex-direction: column;
+      gap: 0.3rem;
+      padding: 0.2rem 0 0.5rem;
+      justify-content: center;
+    }
+    .sidebar.collapsed .sidebar-brand-name { display: none; }
+    .sidebar.collapsed .sidebar-logo { height: 26px; max-width: 40px; }
+    .sidebar.collapsed .sidebar-collapse-btn { margin-left: 0; }
+    .sidebar.collapsed .new-chat-btn {
+      padding: 0.55rem;
+      justify-content: center;
+      gap: 0;
+    }
+    .sidebar.collapsed .new-chat-btn .new-chat-label { display: none; }
+    .sidebar.collapsed .sidebar-section-label { display: none; }
+    .sidebar.collapsed .session-list-wrap { display: none; }
+    .sidebar.collapsed .sidebar-footer { padding: 0.4rem 0.3rem 0.55rem; }
+    .sidebar.collapsed .sidebar-nav-btn {
+      padding: 0.5rem;
+      justify-content: center;
+      gap: 0;
+    }
+    .sidebar.collapsed .sidebar-nav-btn .nav-label { display: none; }
+    .sidebar.collapsed .sidebar-nav-btn .nav-icon { width: auto; }
+    .sidebar.collapsed .sidebar-status {
+      justify-content: center;
+      padding: 0.4rem 0;
+    }
+    .sidebar.collapsed .sidebar-status #wsLabel { display: none; }
 
     /* ── Main content ────────────────────────────────────────────────────── */
     .main-content {
@@ -536,40 +606,6 @@
     }
     #toast.show { opacity: 1; }
 
-    /* ── Approval Banner ────────────────────────────────────────────────── */
-    #approval-banner {
-      display: none;
-      position: fixed;
-      top: 0; left: 0; right: 0;
-      z-index: 9999;
-      background: var(--surface);
-      color: var(--text-primary);
-      border-bottom: 1px solid var(--accent);
-      padding: 10px 20px;
-      align-items: center;
-      justify-content: space-between;
-      font-size: 0.88rem;
-      font-weight: 500;
-      box-shadow: 0 1px 4px rgba(0,0,0,0.08);
-    }
-    #approval-banner.visible { display: flex; }
-    #approval-banner .banner-btn {
-      background: var(--text-primary);
-      color: #fff;
-      border: none;
-      border-radius: 7px;
-      padding: 6px 14px;
-      font-size: 0.82rem;
-      font-weight: 500;
-      cursor: pointer;
-      white-space: nowrap;
-      flex-shrink: 0;
-    }
-    #approval-banner .banner-btn:hover { background: #333; }
-
-    /* Push whole layout down when banner is visible */
-    body.has-banner .app-layout { height: calc(100vh - 53px); margin-top: 53px; }
-
     /* ── Approval Card (in-chat) — Claude Code style ─────────────────────── */
     .approval-card {
       background: var(--surface);
@@ -668,98 +704,7 @@
       box-shadow: none;
     }
 
-    /* ── Approval FAB ────────────────────────────────────────────────────── */
-    #approvalFab {
-      position: fixed;
-      bottom: 1.5rem;
-      right: 1.5rem;
-      background: var(--text-primary);
-      color: #fff;
-      border: none;
-      border-radius: 999px;
-      padding: 0.6rem 1.1rem;
-      font-size: 0.875rem;
-      font-weight: 600;
-      cursor: pointer;
-      display: none;
-      align-items: center;
-      gap: 0.5rem;
-      box-shadow: 0 4px 14px rgba(0,0,0,0.18);
-      z-index: 800;
-      transition: background 0.15s, transform 0.1s;
-    }
-    #approvalFab:hover { background: #333; transform: scale(1.02); }
-    #approvalFab .fab-badge {
-      background: var(--accent);
-      color: #fff;
-      border-radius: 999px;
-      font-size: 0.7rem;
-      font-weight: 700;
-      padding: 0.05rem 0.45rem;
-      min-width: 1.3rem;
-      text-align: center;
-    }
-
-    /* ── Approval Modal ──────────────────────────────────────────────────── */
-    #approvalOverlay {
-      display: none;
-      position: fixed;
-      inset: 0;
-      background: rgba(0,0,0,0.3);
-      z-index: 1000;
-      align-items: center;
-      justify-content: center;
-    }
-    #approvalOverlay.open { display: flex; }
-    #approvalModal {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 16px;
-      padding: 1.75rem;
-      width: min(680px, 92vw);
-      max-height: 80vh;
-      overflow-y: auto;
-      box-shadow: 0 8px 32px rgba(0,0,0,0.12);
-    }
-    #approvalModal h3 {
-      font-size: 1rem;
-      font-weight: 600;
-      color: var(--text-primary);
-      margin-bottom: 1rem;
-    }
-    .approval-item {
-      background: var(--bg-primary);
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      padding: 1rem;
-      margin-bottom: 0.85rem;
-    }
-    .approval-item .tool-name {
-      font-weight: 600;
-      font-size: 0.9rem;
-      color: var(--text-primary);
-      margin-bottom: 0.4rem;
-    }
-    .approval-item .tool-args {
-      font-family: 'Courier New', monospace;
-      font-size: 0.78rem;
-      color: var(--text-secondary);
-      white-space: pre-wrap;
-      word-break: break-all;
-      background: var(--bg-secondary);
-      border-radius: 6px;
-      padding: 0.5rem 0.65rem;
-      margin-bottom: 0.75rem;
-      max-height: 140px;
-      overflow-y: auto;
-    }
-    .approval-item .approval-meta {
-      font-size: 0.74rem;
-      color: var(--text-muted);
-      margin-bottom: 0.75rem;
-    }
-    .approval-actions { display: flex; gap: 0.6rem; }
-    .approval-actions button { padding: 0.38rem 0.85rem; font-size: 0.82rem; }
+    /* Generic modal-close button (also used by the workspace-picker). */
     .modal-close {
       float: right;
       border: 1.5px solid var(--border);
@@ -769,12 +714,6 @@
       margin-bottom: 0.5rem;
     }
     .modal-close:hover { background: var(--bg-secondary); }
-    .empty-approvals {
-      color: var(--text-muted);
-      font-size: 0.875rem;
-      text-align: center;
-      padding: 1.5rem 0;
-    }
 
     /* ── Workspace bar (inside chat-input-area) ──────────────────────────── */
     .workspace-bar {
@@ -2033,12 +1972,6 @@
 </head>
 <body>
 
-  <!-- ── Approval Banner ────────────────────────────────────────────────── -->
-  <div id="approval-banner">
-    <span>⚠️ 有 <span id="banner-count">0</span> 個操作需要你確認</span>
-    <button class="banner-btn" onclick="openApprovalModal()">查看並確認 →</button>
-  </div>
-
   <!-- ── App Layout ──────────────────────────────────────────────────────── -->
   <div class="app-layout">
 
@@ -2048,10 +1981,14 @@
         <div class="sidebar-brand">
           <img src="/static/OpenTeddy-logo.svg" alt="OpenTeddy" class="sidebar-logo">
           <span class="sidebar-brand-name">OpenTeddy</span>
+          <button class="sidebar-collapse-btn" onclick="toggleSidebarCollapse()"
+                  title="Collapse sidebar" aria-label="Collapse sidebar">
+            <span class="collapse-icon">«</span>
+          </button>
         </div>
-        <button class="new-chat-btn" onclick="createNewSession()">
+        <button class="new-chat-btn" onclick="createNewSession()" title="New chat">
           <span class="plus-icon">+</span>
-          <span>New chat</span>
+          <span class="new-chat-label">New chat</span>
         </button>
       </div>
 
@@ -2064,11 +2001,11 @@
 
       <div class="sidebar-footer">
         <nav class="sidebar-nav">
-          <button class="sidebar-nav-btn" data-tab="skills"   onclick="switchTab('skills')"><span class="nav-icon">📚</span>Skills</button>
-          <button class="sidebar-nav-btn" data-tab="tools"    onclick="switchTab('tools')"><span class="nav-icon">🔧</span>Tools</button>
-          <button class="sidebar-nav-btn" data-tab="memory"   onclick="switchTab('memory')"><span class="nav-icon">🧠</span>Memory</button>
-          <button class="sidebar-nav-btn" data-tab="usage"    onclick="switchTab('usage')"><span class="nav-icon">📊</span>Usage</button>
-          <button class="sidebar-nav-btn" data-tab="settings" onclick="switchTab('settings')"><span class="nav-icon">⚙️</span>Settings</button>
+          <button class="sidebar-nav-btn" data-tab="skills"   onclick="switchTab('skills')"   title="Skills"><span class="nav-icon">📚</span><span class="nav-label">Skills</span></button>
+          <button class="sidebar-nav-btn" data-tab="tools"    onclick="switchTab('tools')"    title="Tools"><span class="nav-icon">🔧</span><span class="nav-label">Tools</span></button>
+          <button class="sidebar-nav-btn" data-tab="memory"   onclick="switchTab('memory')"   title="Memory"><span class="nav-icon">🧠</span><span class="nav-label">Memory</span></button>
+          <button class="sidebar-nav-btn" data-tab="usage"    onclick="switchTab('usage')"    title="Usage"><span class="nav-icon">📊</span><span class="nav-label">Usage</span></button>
+          <button class="sidebar-nav-btn" data-tab="settings" onclick="switchTab('settings')" title="Settings"><span class="nav-icon">⚙️</span><span class="nav-label">Settings</span></button>
         </nav>
         <div class="sidebar-status">
           <span id="wsBadge" class="ws-badge" title="WebSocket connection"></span>
@@ -2597,21 +2534,6 @@
     </div><!-- /main-content -->
   </div><!-- /app-layout -->
 
-  <button id="approvalFab" onclick="openApprovalModal()">
-    ⚠️ Approvals
-    <span class="fab-badge" id="approvalCount">0</span>
-  </button>
-
-  <div id="approvalOverlay" onclick="maybeCloseModal(event)">
-    <div id="approvalModal">
-      <button class="modal-close" onclick="closeApprovalModal()">✕ Close</button>
-      <h3>⚠️ High-Risk Tool Approvals</h3>
-      <div id="approvalList">
-        <div class="empty-approvals">No pending approvals.</div>
-      </div>
-    </div>
-  </div>
-
   <!-- ── Workspace folder-picker modal ──────────────────────────────────── -->
   <!-- Replaces the old JS prompt() flow. Shortcut roots on the left,
        directory listing on the right, breadcrumb on top, and a manual
@@ -2742,6 +2664,29 @@
       document.getElementById('sidebarOverlay').classList.remove('open');
     }
 
+    // ── Desktop sidebar collapse (icon-only mode) ──────────────────────────
+    // Persists across reloads. The mobile flow (.open / .hamburger) is
+    // unaffected — .collapsed just narrows the sidebar to 56px and hides
+    // the text labels. Tooltips on every button keep it usable in that
+    // state.
+    const SIDEBAR_COLLAPSED_KEY = 'teddy.sidebar_collapsed';
+    function applySidebarCollapsed(collapsed) {
+      const el  = document.getElementById('sidebar');
+      const btn = el.querySelector('.sidebar-collapse-btn');
+      el.classList.toggle('collapsed', collapsed);
+      if (btn) {
+        btn.title = collapsed ? 'Expand sidebar' : 'Collapse sidebar';
+        btn.setAttribute('aria-label', btn.title);
+      }
+    }
+    function toggleSidebarCollapse() {
+      const next = !document.getElementById('sidebar').classList.contains('collapsed');
+      applySidebarCollapsed(next);
+      try { localStorage.setItem(SIDEBAR_COLLAPSED_KEY, next ? '1' : '0'); } catch {}
+    }
+    // Hydrate saved state ASAP so there is no visible flash at load.
+    applySidebarCollapsed(localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === '1');
+
     // ── Chat helpers ────────────────────────────────────────────────────────
     function appendToChat(el) {
       const chat = document.getElementById('chatMessages');
@@ -2791,7 +2736,10 @@
               <button class="session-action-btn" title="Rename" onclick="event.stopPropagation(); renameSession('${escHtml(s.id)}')">✎</button>
               <button class="session-action-btn" title="Delete" onclick="event.stopPropagation(); deleteSession('${escHtml(s.id)}')">✕</button>
             </div>`;
-          item.onclick = () => switchSession(s.id);
+          item.onclick = () => {
+            if (item.classList.contains('is-editing')) return;
+            switchSession(s.id);
+          };
           list.appendChild(item);
         }
         updateChatHeaderTitle();
@@ -3273,22 +3221,68 @@
       closeSidebar();
     }
 
-    async function renameSession(id) {
-      const current = _sessionTitles[id] || '';
-      const next = prompt('Rename this session:', current);
-      if (next === null) return;
-      const trimmed = next.trim();
-      if (!trimmed || trimmed === current) return;
-      try {
-        const res = await fetch(`${API}/sessions/${id}`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ title: trimmed }),
-        });
-        if (!res.ok) throw new Error(res.statusText);
-        await loadSessions();
-        toast('Renamed.');
-      } catch (e) { toast('Rename failed: ' + e.message, true); }
+    // Inline rename: turn the session-item-title into a contenteditable
+    // span, select the whole title, and commit on Enter/blur (Escape
+    // cancels).  Avoids the old prompt() popup which felt disruptive.
+    function renameSession(id) {
+      const item = document.querySelector(`.session-item[data-id="${CSS.escape(id)}"]`);
+      if (!item) return;
+      const titleEl = item.querySelector('.session-item-title');
+      if (!titleEl || item.classList.contains('is-editing')) return;
+
+      const original = _sessionTitles[id] || titleEl.textContent || '';
+      item.classList.add('is-editing');
+      titleEl.classList.add('editing');
+      titleEl.textContent = original;
+      titleEl.contentEditable = 'true';
+      titleEl.spellcheck = false;
+      titleEl.focus();
+
+      const range = document.createRange();
+      range.selectNodeContents(titleEl);
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+
+      let done = false;
+      const finish = async (save) => {
+        if (done) return;
+        done = true;
+        titleEl.contentEditable = 'false';
+        titleEl.classList.remove('editing');
+        item.classList.remove('is-editing');
+        const next = (titleEl.textContent || '').trim();
+        if (!save || !next || next === original) {
+          titleEl.textContent = original || 'Untitled';
+          return;
+        }
+        try {
+          const res = await fetch(`${API}/sessions/${id}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ title: next }),
+          });
+          if (!res.ok) throw new Error(res.statusText);
+          _sessionTitles[id] = next;
+          titleEl.textContent = next;
+          titleEl.setAttribute('title', next);
+          updateChatHeaderTitle();
+          toast('Renamed.');
+        } catch (e) {
+          titleEl.textContent = original || 'Untitled';
+          toast('Rename failed: ' + e.message, true);
+        }
+      };
+
+      titleEl.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); titleEl.blur(); }
+        else if (e.key === 'Escape') { e.preventDefault(); finish(false); titleEl.blur(); }
+      });
+      titleEl.addEventListener('blur', () => finish(true), { once: true });
+      // Stop clicks inside the editable from bubbling to the row's
+      // switchSession handler while we're editing.
+      titleEl.addEventListener('mousedown', (e) => e.stopPropagation());
+      titleEl.addEventListener('click',     (e) => e.stopPropagation());
     }
 
     async function deleteSession(id) {
@@ -4069,25 +4063,23 @@
     }
 
     // ── Approvals ────────────────────────────────────────────────────────────
+    // Sync any server-side pending approvals into the in-chat card flow.
+    // Runs on startup + on a timer so approvals that were created while the
+    // WebSocket was disconnected (page reload, network blip) still appear as
+    // cards above the chat-input-area. There is no banner / FAB / modal —
+    // clicking a card's Approve button is the one and only action path.
     async function pollApprovals() {
       try {
-        const res    = await fetch(`${API}/approvals`);
-        const data   = await res.json();
-        const count  = (data.approvals || []).length;
-        const fab    = document.getElementById('approvalFab');
-        const banner = document.getElementById('approval-banner');
-        document.getElementById('approvalCount').textContent = count;
-        document.getElementById('banner-count').textContent  = count;
-        fab.style.display = count > 0 ? 'flex' : 'none';
-        if (count > 0) {
-          banner.classList.add('visible');
-          document.body.classList.add('has-banner');
-        } else {
-          banner.classList.remove('visible');
-          document.body.classList.remove('has-banner');
-        }
-        if (document.getElementById('approvalOverlay').classList.contains('open')) {
-          renderApprovals(data.approvals || []);
+        const res  = await fetch(`${API}/approvals`);
+        const data = await res.json();
+        for (const a of (data.approvals || [])) {
+          if (document.getElementById(`chat-approval-${a.id}`)) continue;
+          handleApprovalRequired({
+            approval_id: a.id,
+            tool_name:   a.tool_name || a.tool,
+            args:        a.args,
+            task_id:     a.task_id,
+          });
         }
       } catch (e) { /* ignore */ }
     }
@@ -4148,7 +4140,6 @@
         </div>`;
       appendToChat(card);
       _activeApprovalCard = card;
-      pollApprovals();
     }
 
     async function resolveChatApproval(approvalId, action, btn) {
@@ -4193,56 +4184,10 @@
           always: `✅ Always allow: ${card?.dataset.toolName || ''}`,
         }[action];
         toast(toastMsg);
-        setTimeout(pollApprovals, 400);
       } catch (e) {
         toast('Error: ' + e.message, true);
         if (btn) btn.disabled = false;
       }
-    }
-
-    function openApprovalModal()  { document.getElementById('approvalOverlay').classList.add('open'); refreshApprovals(); }
-    function closeApprovalModal() { document.getElementById('approvalOverlay').classList.remove('open'); }
-    function maybeCloseModal(e) {
-      if (e.target === document.getElementById('approvalOverlay')) closeApprovalModal();
-    }
-
-    async function refreshApprovals() {
-      try {
-        const res  = await fetch(`${API}/approvals`);
-        const data = await res.json();
-        renderApprovals(data.approvals || []);
-      } catch (e) { toast('Could not load approvals: ' + e.message, true); }
-    }
-
-    function renderApprovals(approvals) {
-      const list = document.getElementById('approvalList');
-      if (!approvals.length) {
-        list.innerHTML = '<div class="empty-approvals">✅ No pending approvals.</div>';
-        return;
-      }
-      list.innerHTML = approvals.map(a => `
-        <div class="approval-item" id="approval-${escHtml(a.id)}">
-          <div class="tool-name">🔧 ${escHtml(a.tool_name)}</div>
-          <div class="approval-meta">Task: <code>${escHtml(a.task_id)}</code> &nbsp;·&nbsp; ${new Date(a.created_at).toLocaleTimeString()}</div>
-          <div class="tool-args">${escHtml(JSON.stringify(a.args, null, 2))}</div>
-          <div class="approval-actions">
-            <button class="btn-approve" onclick="resolveApproval('${escHtml(a.id)}', true)">✅ Approve</button>
-            <button class="btn-reject"  onclick="resolveApproval('${escHtml(a.id)}', false)">❌ Reject</button>
-          </div>
-        </div>
-      `).join('');
-    }
-
-    async function resolveApproval(approvalId, approved) {
-      const action = approved ? 'approve' : 'reject';
-      try {
-        const res = await fetch(`${API}/approvals/${approvalId}/${action}`, { method: 'POST' });
-        if (!res.ok) { const err = await res.json(); toast(err.detail || 'Failed', true); return; }
-        const el = document.getElementById(`approval-${approvalId}`);
-        if (el) { el.style.opacity = '0.4'; el.style.transition = 'opacity 0.3s'; setTimeout(() => el.remove(), 350); }
-        toast(approved ? '✅ Approved — task continuing' : '❌ Rejected — agent will try alternative');
-        setTimeout(refreshApprovals, 400);
-      } catch (e) { toast('Error: ' + e.message, true); }
     }
 
     // ── Memory ───────────────────────────────────────────────────────────────
@@ -4473,10 +4418,8 @@
 
     // ── Toast / helpers ─────────────────────────────────────────────────────
     function toast(msg, isError = false) {
-      const fab    = document.getElementById('approvalFab');
       const toastEl = document.getElementById('toast');
-      toastEl.style.bottom    = fab.style.display !== 'none' ? '4.5rem' : '1.5rem';
-      toastEl.textContent     = msg;
+      toastEl.textContent       = msg;
       toastEl.style.borderColor = isError ? 'var(--error)' : 'var(--border)';
       toastEl.classList.add('show');
       setTimeout(() => toastEl.classList.remove('show'), 3000);
