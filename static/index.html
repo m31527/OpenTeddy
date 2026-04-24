@@ -1310,11 +1310,62 @@
       margin: 0.7rem 0;
     }
 
-    .chat-subtasks {
+    /* Artifact download chips shown inside a task's result message */
+    .artifact-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin: 0.6rem 0 0.2rem;
+    }
+    .artifact-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 5px 12px;
+      font-size: 0.82rem;
+      color: var(--text-primary);
+      text-decoration: none;
+      transition: background 0.12s, border-color 0.12s;
+    }
+    .artifact-chip:hover {
+      background: var(--bg-secondary);
+      border-color: var(--text-secondary);
+    }
+
+    /* Collapsible "N steps" block under each task result */
+    .chat-steps-details {
       margin-top: 0.6rem;
-      list-style: none;
       border-top: 1px solid var(--border);
-      padding-top: 0.5rem;
+      padding-top: 0.45rem;
+    }
+    .chat-steps-summary {
+      cursor: pointer;
+      user-select: none;
+      font-size: 0.78rem;
+      color: var(--text-secondary);
+      padding: 2px 0;
+      list-style: none;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .chat-steps-summary::-webkit-details-marker { display: none; }
+    .chat-steps-summary::before {
+      content: '▸';
+      color: var(--text-muted);
+      transition: transform 0.15s;
+      display: inline-block;
+      width: 10px;
+    }
+    .chat-steps-details[open] > .chat-steps-summary::before { transform: rotate(90deg); }
+
+    .chat-subtasks {
+      margin-top: 0.5rem;
+      list-style: none;
+      padding-top: 0.3rem;
     }
 
     /* "Let Claude fix" button — shown inside a failed task's result
@@ -2149,6 +2200,12 @@
     let _runAbort = null;
     let _isRunning = false;
 
+    // Files produced by the current task (populated from `artifact` WS
+    // events fired by the executor when a tool writes a file). Drained
+    // into the task result message so the user gets clickable download
+    // chips without having to find the paths on disk.
+    let _currentArtifacts = [];
+
     // Session state
     let _currentSessionId = localStorage.getItem('teddy.session_id') || null;
     let _sessionTitles = {};
@@ -2187,6 +2244,7 @@
           if (_currentTaskId && data.task_id && data.task_id !== _currentTaskId) return;
           if (data.event === 'tool_call')         handleToolCall(data);
           if (data.event === 'tool_result')       handleToolResult(data);
+          if (data.event === 'artifact')          handleArtifact(data);
           if (data.event === 'claude_fix_done')   handleClaudeFixDone(data);
           if (data.type  === 'pull_progress')     handlePullProgress(data);
           if (data.type  === 'approval_required') handleApprovalRequired(data);
@@ -2775,6 +2833,39 @@
       _activeCalls = {};
     }
 
+    // Collect file-produced artifacts from the stream. They're attached
+    // to the final task message so the user can download without SSH.
+    // Also drop a chip into the chat immediately — gives instant
+    // feedback that a file was produced, even before the task summary.
+    function handleArtifact(data) {
+      if (!data || !data.path) return;
+      _currentArtifacts.push({
+        path:      data.path,
+        rel:       data.relative_path || data.name || data.path,
+        name:      data.name || data.path.split('/').pop(),
+        size:      data.size_bytes || 0,
+        tool:      data.tool || '',
+      });
+    }
+
+    // Renders a list of artifacts as download chips. Used in both the
+    // real-time flow (task result message) and history re-render.
+    function renderArtifactList(artifacts) {
+      if (!artifacts || !artifacts.length) return '';
+      const sessionQS = _currentSessionId
+        ? `&session_id=${encodeURIComponent(_currentSessionId)}`
+        : '';
+      const chips = artifacts.map(a => {
+        const href  = `${API}/files?path=${encodeURIComponent(a.path)}${sessionQS}`;
+        const size  = a.size ? ` · ${formatBytes(a.size)}` : '';
+        return `<a class="artifact-chip" href="${escHtml(href)}" target="_blank"
+                  title="${escHtml(a.path)}">
+                  📎 ${escHtml(a.name)}${escHtml(size)}
+                </a>`;
+      }).join('');
+      return `<div class="artifact-row">${chips}</div>`;
+    }
+
     function handleToolResult(data) {
       const idx       = data.call_idx ?? 0;
       const key       = `${data.round}-${idx}-${data.tool}`;
@@ -3083,6 +3174,7 @@
       const taskId = uuid4();
       _currentTaskId = taskId;
       _activeCalls   = {};
+      _currentArtifacts = [];     // fresh list per task
       _runAbort      = new AbortController();
       setRunningState(true);
 
@@ -3176,14 +3268,38 @@
         let resultHTML = '<div class="md-body">' +
           (summary ? renderMarkdown(summary) : escHtml('Task ' + data.status + '.')) +
           '</div>';
+        // Download chips for any files the agent produced — render
+        // FIRST so they sit right under the summary (before the steps),
+        // since that's what the user typically wants to click on.
+        if (_currentArtifacts.length) {
+          resultHTML += renderArtifactList(_currentArtifacts);
+        }
+
+        // Subtask list — COLLAPSED by default. The summary above is the
+        // simple view; users who want per-step detail can expand.
+        // Counts successes vs failures for the toggle label so at a
+        // glance you can see if everything passed.
         if (data.subtasks && data.subtasks.length) {
-          resultHTML += '<ul class="chat-subtasks">' +
-            data.subtasks.map(st =>
+          const total  = data.subtasks.length;
+          const failed = data.subtasks.filter(s =>
+            ['failed', 'escalated'].includes(s.status)).length;
+          const dotColor = failed > 0 ? 'var(--error)' : 'var(--success)';
+          const toggleLabel =
+            failed > 0
+              ? `<span style="color:${dotColor}">●</span> ${total - failed}/${total} steps · ${failed} failed`
+              : `<span style="color:${dotColor}">●</span> ${total} steps`;
+          const stepsHtml = data.subtasks.map(st =>
               `<li><span class="status-badge status-${st.status}" style="flex-shrink:0">${st.status}</span>
                <span>${escHtml(st.description)}</span>
                <span style="color:var(--text-muted);font-size:0.78rem;margin-left:auto">${(st.confidence * 100).toFixed(0)}%</span>
               </li>`
-            ).join('') + '</ul>';
+            ).join('');
+          resultHTML += `
+            <details class="chat-steps-details">
+              <summary class="chat-steps-summary">${toggleLabel}</summary>
+              <ul class="chat-subtasks">${stepsHtml}</ul>
+            </details>`;
+          // Keep the old hidden panel in sync for the compat-ID code path.
           document.getElementById('subtaskSection').style.display = 'block';
           document.getElementById('subtaskList').innerHTML = data.subtasks.map(st =>
             `<li>

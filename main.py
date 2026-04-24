@@ -237,6 +237,66 @@ async def health() -> dict:
     }
 
 
+@app.get("/files")
+async def download_file(path: str, session_id: Optional[str] = None) -> FileResponse:
+    """Serve a file produced by the agent (Analytic HTML reports,
+    written files, etc.) so the UI can show a download link instead of
+    the user having to SSH in.
+
+    Security model: the file MUST live under either
+      - the global agent_workspace_dir, OR
+      - the session's workspace_dir (when session_id is supplied and that
+        session has an override)
+    Any path that resolves outside those boundaries is rejected — we
+    don't want /files turning into an arbitrary-file-read.
+    """
+    if not path:
+        raise HTTPException(status_code=400, detail="`path` required")
+
+    target = os.path.abspath(path)
+
+    # Collect allowed root directories.
+    allowed_roots: list[str] = [os.path.abspath(config.agent_workspace_dir)]
+    if session_id:
+        try:
+            sess = await tracker.get_session(session_id)
+            if sess and sess.get("workspace_dir"):
+                allowed_roots.append(os.path.abspath(sess["workspace_dir"]))
+        except Exception:  # noqa: BLE001
+            pass
+
+    # Path must be INSIDE one of the allowed roots.
+    is_inside = any(
+        target == root or target.startswith(root + os.sep)
+        for root in allowed_roots
+    )
+    if not is_inside:
+        logger.warning(
+            "Refused /files download — path %s outside allowed roots %s",
+            target, allowed_roots,
+        )
+        raise HTTPException(
+            status_code=403,
+            detail="Path is outside the agent workspace. Refusing to serve.",
+        )
+
+    if not os.path.isfile(target):
+        raise HTTPException(status_code=404, detail="File not found")
+
+    # Content-Disposition: pick inline for browsers to render .html
+    # in a new tab, attachment for binary types.
+    filename = os.path.basename(target)
+    ext = os.path.splitext(filename)[1].lower()
+    inline_exts = {".html", ".htm", ".txt", ".md", ".json", ".csv", ".log",
+                   ".png", ".jpg", ".jpeg", ".gif", ".svg", ".pdf"}
+    disposition = "inline" if ext in inline_exts else "attachment"
+    return FileResponse(
+        target,
+        filename=filename,
+        headers={"Content-Disposition": f'{disposition}; filename="{filename}"'},
+    )
+
+
 @app.get("/debug/workspace")
 async def debug_workspace(session_id: Optional[str] = None) -> dict:
     """Return absolute path state so the user can verify where clones go.

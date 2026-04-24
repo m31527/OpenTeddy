@@ -689,6 +689,38 @@ class Executor:
                     "task_id": task_id,
                 })
 
+                # ── Artifact event ───────────────────────────────────
+                # When a tool produces a file on disk, surface a
+                # dedicated `artifact` event so the UI can attach a
+                # download chip to the task's result message. Without
+                # this the user has to ssh in to find the file —
+                # which they actively complained about on the
+                # Analytic report flow.
+                if tool_result.get("success"):
+                    inner = tool_result.get("result")
+                    if isinstance(inner, dict):
+                        # render_chart_report + write_file both use the
+                        # "path" key. delete_file also uses "deleted"
+                        # which we intentionally skip (nothing to download).
+                        file_path = inner.get("path")
+                        if file_path and tool_name != "delete_file":
+                            try:
+                                import os as _os
+                                if _os.path.isfile(file_path):
+                                    await self._push_event({
+                                        "event":    "artifact",
+                                        "task_id":  task_id,
+                                        "tool":     tool_name,
+                                        "path":     file_path,
+                                        "relative_path": inner.get("relative_path", ""),
+                                        "size_bytes":    inner.get("size_bytes")
+                                                        or inner.get("bytes_written")
+                                                        or _os.path.getsize(file_path),
+                                        "name":     _os.path.basename(file_path),
+                                    })
+                            except Exception:  # noqa: BLE001
+                                pass
+
                 # Soft nudge: if this is the 2nd identical call, append a
                 # visible warning to the tool result so Qwen sees "you're
                 # about to loop — don't". Real output is preserved (state
