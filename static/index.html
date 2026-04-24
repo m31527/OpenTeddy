@@ -1514,6 +1514,43 @@
     .tool-call-card.failure .tool-call-summary { color: var(--error); }
     .tool-call-body { display: none; margin-top: 0.4rem; }
     .tool-call-card.expanded .tool-call-body { display: block; }
+
+    /* Group wrapper: when a task finishes, all of its tool-call-cards are
+       moved into this <details> so the chat is tidy by default but the
+       full trace is still one click away. */
+    .tool-calls-group {
+      align-self: stretch;
+      margin: 2px 0;
+    }
+    .tool-calls-group > summary {
+      cursor: pointer;
+      color: var(--text-muted);
+      font-size: 0.78rem;
+      padding: 4px 10px;
+      border-left: 2px solid var(--text-muted);
+      border-radius: 6px;
+      list-style: none;
+      display: flex;
+      align-items: center;
+      gap: 0.45rem;
+      user-select: none;
+      font-weight: 500;
+    }
+    .tool-calls-group > summary::marker,
+    .tool-calls-group > summary::-webkit-details-marker { display: none; }
+    .tool-calls-group > summary::before {
+      content: '▸';
+      font-size: 0.7rem;
+      color: var(--text-muted);
+      width: 10px;
+      text-align: center;
+      display: inline-block;
+      transition: transform 0.18s ease-out;
+    }
+    .tool-calls-group[open] > summary::before { transform: rotate(90deg); }
+    .tool-calls-group > summary:hover { background: var(--bg-secondary); }
+    .tool-calls-group.has-failure > summary { border-left-color: var(--error); }
+    .tool-calls-group[open] > summary { margin-bottom: 4px; }
     .tool-call-args {
       font-family: 'Courier New', monospace;
       font-size: 0.75rem;
@@ -2349,7 +2386,7 @@
               </div>
             </div>
 
-            <div class="settings-section">
+            <div class="settings-section collapsed">
               <h3 onclick="toggleSettingsSection(this)">Agent Workspace</h3>
               <div class="settings-section-body">
               <div class="row" style="margin-bottom:0.25rem">
@@ -2366,76 +2403,7 @@
               </div>
             </div>
 
-            <div class="settings-section">
-              <h3 onclick="toggleSettingsSection(this)">Notification Credentials</h3>
-              <div class="settings-section-body">
-              <div style="font-size:0.78rem;color:var(--text-secondary);margin-bottom:0.9rem;line-height:1.5">
-                讓 agent 可以呼叫 <code>telegram_send</code> / <code>email_send</code> 推播。
-                設定一次所有 session 共用。工具會在模型呼叫時讀取這裡的值；
-                留白時工具會回「未設定」錯誤，所以不影響其他功能。
-              </div>
-
-              <div style="font-size:0.76rem;color:var(--text-muted);margin-bottom:0.4rem;font-weight:500">Telegram</div>
-              <div class="row" style="margin-bottom:0.85rem">
-                <div class="field" style="flex:2">
-                  <label>Bot Token</label>
-                  <input type="password" id="inp_telegram_bot_token"
-                    placeholder="123456:ABC-DEF... (from @BotFather)" autocomplete="off" />
-                </div>
-                <div class="field">
-                  <label>Default Chat ID (optional)</label>
-                  <input type="text" id="inp_telegram_default_chat_id" placeholder="-1001234567890" />
-                </div>
-              </div>
-
-              <div style="font-size:0.76rem;color:var(--text-muted);margin:0.9rem 0 0.4rem;font-weight:500">SMTP / Email</div>
-              <div class="row" style="margin-bottom:0.85rem">
-                <div class="field" style="flex:2">
-                  <label>SMTP Host</label>
-                  <input type="text" id="inp_smtp_host" placeholder="smtp.gmail.com" />
-                </div>
-                <div class="field" style="max-width:110px">
-                  <label>Port</label>
-                  <input type="number" id="inp_smtp_port" placeholder="587" min="1" max="65535" />
-                </div>
-              </div>
-              <div class="row" style="margin-bottom:0.85rem">
-                <div class="field">
-                  <label>SMTP User</label>
-                  <input type="text" id="inp_smtp_user" placeholder="you@gmail.com" />
-                </div>
-                <div class="field">
-                  <label>Password / App Password</label>
-                  <input type="password" id="inp_smtp_password" placeholder="••••••••" autocomplete="off" />
-                </div>
-                <div class="field">
-                  <label>From Address (optional)</label>
-                  <input type="text" id="inp_smtp_from" placeholder="defaults to SMTP User" />
-                </div>
-              </div>
-
-              <div style="font-size:0.76rem;color:var(--text-muted);margin:0.9rem 0 0.4rem;font-weight:500">Webhook Endpoint</div>
-              <div class="row" style="margin-bottom:0.3rem">
-                <div class="field" style="flex:2">
-                  <label>Webhook Secret (recommended)</label>
-                  <input type="password" id="inp_webhook_secret"
-                    placeholder="Leave blank = open endpoint (NOT recommended)" autocomplete="off" />
-                </div>
-                <button type="button" class="btn-ghost" onclick="generateWebhookSecret()"
-                  style="align-self:flex-end">🔐 Generate random</button>
-              </div>
-              <div id="webhookHint" style="font-size:0.72rem;color:var(--text-muted);line-height:1.5;margin-top:6px">
-                外部系統可 POST 到 <code>/webhooks/&lt;session_id&gt;</code> 觸發該 session。
-                範例：
-                <pre style="background:var(--bg-secondary);padding:8px 10px;border-radius:6px;font-size:0.72rem;white-space:pre-wrap;margin-top:4px">curl -X POST http://localhost:8000/webhooks/YOUR_SESSION_ID \
-  -H "Content-Type: application/json" \
-  -H "X-OpenTeddy-Webhook-Secret: YOUR_SECRET" \
-  -d '{"goal": "check for new orders and telegram me if any"}'</pre>
-              </div>
-              </div>
-            </div>
-
-            <div class="settings-section">
+            <div class="settings-section collapsed">
               <h3 onclick="toggleSettingsSection(this)">Parameter Settings</h3>
               <div class="settings-section-body">
               <div class="param-row">
@@ -2519,6 +2487,75 @@
                   <input type="range" id="rng_qwen_temperature" min="0" max="1" step="0.05" value="0.2"
                     oninput="document.getElementById('val_qwen_temperature').textContent=parseFloat(this.value).toFixed(2)" />
                 </div>
+              </div>
+              </div>
+            </div>
+
+            <div class="settings-section collapsed">
+              <h3 onclick="toggleSettingsSection(this)">Notification Credentials</h3>
+              <div class="settings-section-body">
+              <div style="font-size:0.78rem;color:var(--text-secondary);margin-bottom:0.9rem;line-height:1.5">
+                讓 agent 可以呼叫 <code>telegram_send</code> / <code>email_send</code> 推播。
+                設定一次所有 session 共用。工具會在模型呼叫時讀取這裡的值；
+                留白時工具會回「未設定」錯誤，所以不影響其他功能。
+              </div>
+
+              <div style="font-size:0.76rem;color:var(--text-muted);margin-bottom:0.4rem;font-weight:500">Telegram</div>
+              <div class="row" style="margin-bottom:0.85rem">
+                <div class="field" style="flex:2">
+                  <label>Bot Token</label>
+                  <input type="password" id="inp_telegram_bot_token"
+                    placeholder="123456:ABC-DEF... (from @BotFather)" autocomplete="off" />
+                </div>
+                <div class="field">
+                  <label>Default Chat ID (optional)</label>
+                  <input type="text" id="inp_telegram_default_chat_id" placeholder="-1001234567890" />
+                </div>
+              </div>
+
+              <div style="font-size:0.76rem;color:var(--text-muted);margin:0.9rem 0 0.4rem;font-weight:500">SMTP / Email</div>
+              <div class="row" style="margin-bottom:0.85rem">
+                <div class="field" style="flex:2">
+                  <label>SMTP Host</label>
+                  <input type="text" id="inp_smtp_host" placeholder="smtp.gmail.com" />
+                </div>
+                <div class="field" style="max-width:110px">
+                  <label>Port</label>
+                  <input type="number" id="inp_smtp_port" placeholder="587" min="1" max="65535" />
+                </div>
+              </div>
+              <div class="row" style="margin-bottom:0.85rem">
+                <div class="field">
+                  <label>SMTP User</label>
+                  <input type="text" id="inp_smtp_user" placeholder="you@gmail.com" />
+                </div>
+                <div class="field">
+                  <label>Password / App Password</label>
+                  <input type="password" id="inp_smtp_password" placeholder="••••••••" autocomplete="off" />
+                </div>
+                <div class="field">
+                  <label>From Address (optional)</label>
+                  <input type="text" id="inp_smtp_from" placeholder="defaults to SMTP User" />
+                </div>
+              </div>
+
+              <div style="font-size:0.76rem;color:var(--text-muted);margin:0.9rem 0 0.4rem;font-weight:500">Webhook Endpoint</div>
+              <div class="row" style="margin-bottom:0.3rem">
+                <div class="field" style="flex:2">
+                  <label>Webhook Secret (recommended)</label>
+                  <input type="password" id="inp_webhook_secret"
+                    placeholder="Leave blank = open endpoint (NOT recommended)" autocomplete="off" />
+                </div>
+                <button type="button" class="btn-ghost" onclick="generateWebhookSecret()"
+                  style="align-self:flex-end">🔐 Generate random</button>
+              </div>
+              <div id="webhookHint" style="font-size:0.72rem;color:var(--text-muted);line-height:1.5;margin-top:6px">
+                外部系統可 POST 到 <code>/webhooks/&lt;session_id&gt;</code> 觸發該 session。
+                範例：
+                <pre style="background:var(--bg-secondary);padding:8px 10px;border-radius:6px;font-size:0.72rem;white-space:pre-wrap;margin-top:4px">curl -X POST http://localhost:8000/webhooks/YOUR_SESSION_ID \
+  -H "Content-Type: application/json" \
+  -H "X-OpenTeddy-Webhook-Secret: YOUR_SECRET" \
+  -d '{"goal": "check for new orders and telegram me if any"}'</pre>
               </div>
               </div>
             </div>
@@ -2607,6 +2644,11 @@
     // into the task result message so the user gets clickable download
     // chips without having to find the paths on disk.
     let _currentArtifacts = [];
+    // Tool-call cards that streamed during the current run. When the task
+    // finishes we move them all into a single collapsed <details> so the
+    // final chat reads clean while still letting the user dig into the
+    // trace (reasoning + tools).
+    let _currentRunToolCards = [];
 
     // Session state
     let _currentSessionId = localStorage.getItem('teddy.session_id') || null;
@@ -3431,6 +3473,7 @@
           <div id="stuck-${escHtml(key)}" style="display:none;font-size:0.72rem;margin-top:4px;padding:3px 6px;border-radius:4px;background:var(--accent-light);color:var(--warning)"></div>
         </div>`;
       appendToChat(card);
+      _currentRunToolCards.push(card);
       _activeCalls[key] = true;
 
       const stuckEl = document.getElementById(`stuck-${key}`);
@@ -3452,6 +3495,35 @@
       }, 90_000);
 
       _stuckTimers[key] = { t30, t90 };
+    }
+
+    // Collapse the current run's tool-call cards into a single <details>
+    // block. Call this right before the final agent message is rendered
+    // so the chat ends up as: [user msg] → [🔧 N tool calls ▸] → [summary].
+    // The details stays CLOSED by default — the user expands only when
+    // they want to audit tools or read the reasoning trace.
+    function collapseCurrentRunToolCards() {
+      const cards = _currentRunToolCards.filter(c => c && c.isConnected);
+      _currentRunToolCards = [];
+      if (!cards.length) return;
+      const first  = cards[0];
+      const parent = first.parentNode;
+      if (!parent) return;
+
+      const total  = cards.length;
+      const failed = cards.filter(c => c.classList.contains('failure')).length;
+      const dot    = failed > 0 ? 'var(--error)' : 'var(--success)';
+      const label  = failed > 0
+        ? `<span style="color:${dot}">●</span> ${total - failed}/${total} tool calls · ${failed} failed`
+        : `<span style="color:${dot}">●</span> ${total} tool calls`;
+
+      const details = document.createElement('details');
+      details.className = 'tool-calls-group' + (failed > 0 ? ' has-failure' : '');
+      details.innerHTML = `<summary>${label}</summary>`;
+
+      parent.insertBefore(details, first);
+      // Move cards in original order (they're already in DOM order on chat).
+      for (const card of cards) details.appendChild(card);
     }
 
     function cancelStragglers(reason) {
@@ -3794,6 +3866,7 @@
       if (subtitle) {
         html += `<div style="font-size:0.72rem;color:var(--text-muted);margin-top:6px">${escHtml(subtitle)}</div>`;
       }
+      collapseCurrentRunToolCards();
       addAgentMessage(html, false);
       // Remove the now-stale "Let Claude fix this" buttons so the user
       // doesn't accidentally double-fire (and re-burn tokens).
@@ -3842,6 +3915,7 @@
       _currentTaskId = taskId;
       _activeCalls   = {};
       _currentArtifacts = [];     // fresh list per task
+      _currentRunToolCards = [];  // fresh tool-call bucket per task
       _runAbort      = new AbortController();
       setRunningState(true);
 
@@ -4002,6 +4076,7 @@
             </div>`;
         }
 
+        collapseCurrentRunToolCards();
         addAgentMessage(resultHTML, false);
 
       } catch (e) { /* silently ignore */ }
