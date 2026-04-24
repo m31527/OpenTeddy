@@ -172,6 +172,13 @@ class Session(BaseModel):
     # at an existing project on disk (e.g. /home/me/my-repo) so the
     # agent can work on it directly instead of cloning into a sandbox.
     workspace_dir: Optional[str] = None
+    # Privacy guardrail: when True, this session NEVER dispatches work
+    # to the Claude (Anthropic) API. Auto-escalation on low confidence
+    # is skipped; the "Let Claude fix" button is hidden; skill
+    # generation via Claude is also blocked for this session. Intended
+    # for Analytic sessions handling customer data / PII / secrets that
+    # must stay on the local machine.
+    local_only: bool = False
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
@@ -184,6 +191,7 @@ class CreateSessionRequest(BaseModel):
     title: Optional[str] = None
     mode: Optional[SessionMode] = None
     workspace_dir: Optional[str] = None
+    local_only: Optional[bool] = None
 
 
 class RunResponse(BaseModel):
@@ -211,11 +219,12 @@ CREATE TABLE IF NOT EXISTS sessions (
     title         TEXT NOT NULL DEFAULT 'New session',
     mode          TEXT NOT NULL DEFAULT 'code',
     workspace_dir TEXT,
+    local_only    INTEGER NOT NULL DEFAULT 0,  -- boolean 0/1
     created_at    TEXT NOT NULL,
     updated_at    TEXT NOT NULL
 );
--- NOTE: for pre-existing DBs the `mode` and `workspace_dir` columns
--- are added in tracker._migrate_usage_columns.
+-- NOTE: for pre-existing DBs the `mode`, `workspace_dir` and
+-- `local_only` columns are added in tracker._migrate_usage_columns.
 
 CREATE TABLE IF NOT EXISTS tasks (
     id          TEXT PRIMARY KEY,

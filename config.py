@@ -24,10 +24,31 @@ _session_workspace_var: contextvars.ContextVar[Optional[str]] = contextvars.Cont
     "openteddy_session_workspace", default=None,
 )
 
+# Privacy guardrail. When the orchestrator starts a task for a
+# local-only session, it sets this to True and every code path that
+# might dispatch work to Claude checks it via `is_session_local_only()`.
+_session_local_only_var: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "openteddy_session_local_only", default=False,
+)
+
 
 def set_session_workspace(path: Optional[str]) -> None:
     """Orchestrator calls this at the start of a task. Pass None to clear."""
     _session_workspace_var.set(path or None)
+
+
+def set_session_local_only(flag: bool) -> None:
+    """Orchestrator calls this at the start of a task so downstream
+    code paths (auto-escalation, skill factory Claude calls) can
+    cheaply check the guardrail without re-fetching the session row.
+    """
+    _session_local_only_var.set(bool(flag))
+
+
+def is_session_local_only() -> bool:
+    """Returns True when the current async task is running under a
+    session that has opted out of all Anthropic API calls."""
+    return bool(_session_local_only_var.get())
 
 
 def effective_workspace_dir() -> str:

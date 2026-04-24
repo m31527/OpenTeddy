@@ -467,6 +467,29 @@ async def claude_fix_task(task_id: str, body: Optional[dict] = None) -> dict:
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
 
+    # Privacy guardrail: refuse the whole flow if the session is
+    # local-only. This is the point at which task history (including
+    # tool outputs that may contain uploaded file contents) would
+    # otherwise be sent to Anthropic's API.
+    session_id = task.get("session_id")
+    if session_id:
+        try:
+            sess = await tracker.get_session(session_id)
+            if sess and bool(sess.get("local_only")):
+                raise HTTPException(
+                    status_code=403,
+                    detail=(
+                        "This session is marked local-only. Claude escalation "
+                        "is disabled to keep task data on this machine. "
+                        "Turn off local-only in the chat header (🔒 → 🔓) if "
+                        "you want to dispatch this task to Claude."
+                    ),
+                )
+        except HTTPException:
+            raise
+        except Exception:  # noqa: BLE001
+            pass
+
     subtasks_raw = await tracker.get_subtasks(task_id)
     # Tracker returns SubTask objects; normalise to plain dicts for the
     # escalation agent so it doesn't need to know the SubTask shape.
@@ -475,7 +498,6 @@ async def claude_fix_task(task_id: str, body: Optional[dict] = None) -> dict:
 
     # Apply the session's workspace context var so any shell commands
     # Claude runs land in the same dir as the original task.
-    session_id = task.get("session_id")
     if session_id:
         try:
             sess = await tracker.get_session(session_id)
@@ -551,6 +573,9 @@ async def list_tasks(
 @app.get("/sessions", response_model=SessionListResponse)
 async def list_sessions(limit: int = 50) -> SessionListResponse:
     rows = await tracker.list_sessions(limit=limit)
+    for r in rows:
+        if "local_only" in r:
+            r["local_only"] = bool(r["local_only"])
     return SessionListResponse(sessions=[Session(**r) for r in rows])
 
 
@@ -560,10 +585,13 @@ async def create_session(body: CreateSessionRequest) -> Session:
         title=body.title or "New session",
         mode=body.mode or SessionMode.CODE,
         workspace_dir=body.workspace_dir,
+        local_only=bool(body.local_only) if body.local_only is not None else False,
     )
     await tracker.create_session(s.id, s.title, mode=s.mode.value)
     if s.workspace_dir:
         await tracker.update_session_workspace(s.id, s.workspace_dir)
+    if s.local_only:
+        await tracker.update_session_local_only(s.id, True)
     return s
 
 
@@ -584,9 +612,15 @@ async def update_session(session_id: str, body: CreateSessionRequest) -> Session
         if ws and not os.path.isabs(ws):
             ws = os.path.abspath(os.path.join(config.agent_workspace_dir, ws))
         await tracker.update_session_workspace(session_id, ws)
+    if body.local_only is not None:
+        await tracker.update_session_local_only(session_id, bool(body.local_only))
     row = await tracker.get_session(session_id)
     if not row:
         raise HTTPException(status_code=404, detail="Session not found")
+    # SQLite returns local_only as 0/1 int — coerce to bool so the
+    # Pydantic model serialises cleanly.
+    if "local_only" in row:
+        row["local_only"] = bool(row["local_only"])
     return Session(**row)
 
 

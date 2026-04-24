@@ -380,6 +380,17 @@
       background: #fde8d6;
     }
 
+    /* Privacy pill (local-only mode) — uses the same chip shape as 🧠
+       but with a distinct palette so "this session is sealed off from
+       the cloud" is obvious at a glance. */
+    #privacyBtn.local-only {
+      background: #eef4ff;
+      color: #1d4ed8;
+      border-color: #93c5fd;
+      font-weight: 600;
+    }
+    #privacyBtn.local-only:hover { background: #dce6ff; }
+
     /* Mode badge next to each session item in the sidebar */
     .session-mode-badge {
       font-size: 0.6rem;
@@ -1664,6 +1675,10 @@
             title="這個 session 累積的長期記憶數量（舊專案記憶可能干擾新任務 → 點一下清空）">
             <span>🧠</span><span id="memoryCount">—</span>
           </button>
+          <button type="button" id="privacyBtn" class="mem-btn" onclick="togglePrivacy()"
+            title="點擊切換本地端模式 — 開啟後絕對不會把任務資料送到 Anthropic Claude API（auto escalation + Let Claude fix 都停用）。適合處理機敏資料。">
+            <span id="privacyIcon">🔓</span><span id="privacyLabel">Cloud</span>
+          </button>
         </div>
         <div class="chat-layout">
           <div class="chat-messages" id="chatMessages">
@@ -2071,6 +2086,7 @@
     let _currentSessionId = localStorage.getItem('teddy.session_id') || null;
     let _sessionTitles = {};
     let _sessionModes  = {};  // id → 'chat' | 'code' | 'analytic'
+    let _sessionLocalOnly = {}; // id → bool (Claude escalation disabled)
 
     // Pending attachments for the next /run call. Each entry:
     //   { name, rel_path, size_bytes, content_type }
@@ -2137,6 +2153,7 @@
         const data = await res.json();
         _sessionTitles = {};
         _sessionModes  = {};
+        _sessionLocalOnly = {};
         let sessions = data.sessions || [];
 
         if (sessions.length === 0) {
@@ -2155,6 +2172,7 @@
         for (const s of sessions) {
           _sessionTitles[s.id] = s.title;
           _sessionModes[s.id]  = s.mode || MODE_DEFAULT;
+          _sessionLocalOnly[s.id] = !!s.local_only;
           const item = document.createElement('div');
           item.className = 'session-item' + (s.id === _currentSessionId ? ' active' : '');
           item.dataset.id = s.id;
@@ -2173,6 +2191,7 @@
         }
         updateChatHeaderTitle();
         updateModeSwitchUI();
+        updatePrivacyIndicator();
       } catch (e) {
         console.debug('loadSessions error:', e);
       }
@@ -2259,6 +2278,74 @@
       document.querySelectorAll('.mode-btn').forEach(btn => {
         btn.classList.toggle('active', btn.dataset.mode === m);
       });
+    }
+
+    // Reflect the current session's local_only flag on the 🔒/🔓 pill
+    // in the chat header. Also hides/disables the per-task "Let Claude
+    // fix" buttons so the user can't accidentally dispatch sensitive
+    // data after flipping the switch on.
+    function isLocalOnly() {
+      return !!(_currentSessionId && _sessionLocalOnly[_currentSessionId]);
+    }
+    function updatePrivacyIndicator() {
+      const btn   = document.getElementById('privacyBtn');
+      const icon  = document.getElementById('privacyIcon');
+      const label = document.getElementById('privacyLabel');
+      if (!btn) return;
+      const lo = isLocalOnly();
+      btn.classList.toggle('local-only', lo);
+      if (icon)  icon.textContent  = lo ? '🔒' : '🔓';
+      if (label) label.textContent = lo ? 'Local only' : 'Cloud';
+      btn.title = lo
+        ? '🔒 本地端模式 — 這個 session 絕對不會把任務資料送到 Anthropic Claude API。點擊關閉。'
+        : '🔓 可用 Claude — 地端失敗時會自動升級、「Let Claude fix」按鈕可用。點擊改為本地端模式。';
+      // Hide all "Let Claude fix" buttons when local-only, so a stale
+      // button from a previous task can't be clicked to bypass.
+      document.querySelectorAll('.btn-claude-fix').forEach(b => {
+        b.style.display = lo ? 'none' : '';
+      });
+    }
+
+    async function togglePrivacy() {
+      if (!_currentSessionId) return;
+      const curr = isLocalOnly();
+      const next = !curr;
+      if (next) {
+        // Turning ON → explicit disclosure of what changes. We default
+        // local_only=false so flipping it ON is the significant action
+        // that deserves a dialog; flipping OFF is just restoring the
+        // permissive default so we let that through without friction.
+        const ok = confirm(
+          '🔒 啟用「本地端模式」？\n\n' +
+          '這個 session 將：\n' +
+          '  ✓ 完全停用 Claude 自動升級（低信心、timeout、驗證失敗 → 直接標失敗）\n' +
+          '  ✓ 隱藏「🛠️ Let Claude fix」按鈕\n' +
+          '  ✓ 不會把 task goal / 子任務結果 / tool output / 錯誤訊息送到 Anthropic\n\n' +
+          '仍然本機進行：\n' +
+          '  • 上傳的檔案、Gemma 規劃、Qwen 執行、Memory、SQLite 全部在本機\n\n' +
+          '建議用於：客戶資料、PII、機密文件分析。\n' +
+          '隨時可以關回來。'
+        );
+        if (!ok) return;
+      }
+      // Optimistic update
+      _sessionLocalOnly[_currentSessionId] = next;
+      updatePrivacyIndicator();
+      try {
+        const res = await fetch(`${API}/sessions/${_currentSessionId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ local_only: next }),
+        });
+        if (!res.ok) throw new Error(res.statusText);
+        toast(next
+          ? '🔒 已切到本地端模式 — Claude 升級已停用'
+          : '🔓 已切到 Cloud 模式 — Claude 升級可用');
+      } catch (e) {
+        _sessionLocalOnly[_currentSessionId] = curr;
+        updatePrivacyIndicator();
+        toast('切換失敗：' + e.message, true);
+      }
     }
 
     // Refresh the "🧠 N" badge in the chat header so the user can see
@@ -2401,6 +2488,7 @@
       showChatPanel();
       updateChatHeaderTitle();
       updateModeSwitchUI();
+      updatePrivacyIndicator();    // reflect this session's local_only
       refreshMemoryCount();        // intentionally not awaited — fire and forget
       refreshWorkspaceIndicator(); // session workspace may differ from prev
       await loadChatHistory();
@@ -2804,12 +2892,29 @@
     // final summary and swaps the button for a completed notice.
     async function letClaudeFix(taskId, btn) {
       if (!taskId) return;
-      // Optional user hint for tricky cases ("the port should be 18000
-      // not 8000", etc.). Empty → Claude works with only the task log.
+
+      // Hard stop: local-only session should never reach here (the
+      // button is display:none'd by updatePrivacyIndicator), but
+      // double-check anyway in case of stale DOM.
+      if (isLocalOnly()) {
+        toast('🔒 本地端模式啟用中，不能呼叫 Claude。關閉後再試。', true);
+        return;
+      }
+
+      // Privacy disclosure + optional hint, combined into a single
+      // dialog so the user sees WHAT gets sent before deciding.
       const hint = prompt(
-        '給 Claude 一個提示（可選）\n\n' +
-        '如果你知道失敗的可能原因，或想指定修法，寫在這裡。\n' +
-        '留空也 OK — Claude 會自己讀專案檔案找根因。',
+        '🛠️ Let Claude fix — 請注意資料流向\n\n' +
+        '按下「確定」後會送到 Anthropic Claude API：\n' +
+        '  • 任務目標（你打的那句話）\n' +
+        '  • 所有子任務的描述 + 執行結果 + 錯誤訊息\n' +
+        '  • 所有 tool output（包含 shell 印出的內容、docker log、檔案內容）\n' +
+        '  • 你填的 hint（下面這欄）\n\n' +
+        '注意：上傳的檔案本身不會被送，但若 Qwen 之前有 cat / head / pandas 印出過\n' +
+        '檔案內容，那段 output 會包在 tool_result 裡一起送。\n\n' +
+        '如果這是機敏資料，建議改切到 🔒 本地端模式（聊天標題右側的 pill）。\n\n' +
+        '─────────────────────────────────\n' +
+        '提示（可選，留空也 OK）：',
         '',
       );
       if (hint === null) return;  // cancelled
@@ -3030,8 +3135,14 @@
           ['failed', 'escalated'].includes(data.status) ||
           (data.subtasks || []).some(s => ['failed', 'escalated'].includes(s.status));
         if (hadAnyFailure && data.task_id) {
+          // Hide the fix button when the session is in local-only mode
+          // so the user doesn't see an option they actively opted out
+          // of. (The button is also rendered with display:none by
+          // updatePrivacyIndicator if they flip the toggle AFTER
+          // render, so this inline style is just the initial state.)
+          const hidden = isLocalOnly() ? ' style="display:none"' : '';
           resultHTML += `
-            <div class="claude-fix-wrap">
+            <div class="claude-fix-wrap"${hidden}>
               <button class="btn-claude-fix" onclick="letClaudeFix('${escHtml(data.task_id)}', this)">
                 🛠️ Let Claude fix this
               </button>
@@ -3835,6 +3946,7 @@
       await loadChatHistory();
       refreshMemoryCount();        // initial fill for the 🧠 badge
       refreshWorkspaceIndicator(); // show 📂 absolute workspace path
+      updatePrivacyIndicator();    // show 🔓/🔒 privacy pill
       loadSkills();
       loadTools();
       pollApprovals();
