@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content" />
   <title>OpenTeddy - Unlock the Power of Local AI</title>
   <!-- Favicons served from FastAPI's /static mount. `/favicon.ico` at the
        root is also resolved by the root route in main.py for browsers that
@@ -40,7 +40,8 @@
       --error:         #cc3333;
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    html, body { height: 100%; overflow: hidden; }
+    html { height: 100%; height: -webkit-fill-available; }
+    body { height: 100%; overflow: hidden; }
     body {
       background: var(--bg-primary);
       color: var(--text-primary);
@@ -51,6 +52,7 @@
     .app-layout {
       display: flex;
       height: 100vh;
+      height: 100dvh;
       overflow: hidden;
     }
 
@@ -64,6 +66,7 @@
       display: flex;
       flex-direction: column;
       height: 100vh;
+      height: 100dvh;
       overflow: hidden;
       border-right: 1px solid #000;
       transition: width 0.2s ease, min-width 0.2s ease;
@@ -1777,6 +1780,8 @@
       background: var(--surface);
       border-top: 1px solid var(--border);
       padding: 0.85rem 1.5rem 1rem;
+      padding-bottom: max(1rem, env(safe-area-inset-bottom));
+      flex-shrink: 0;
     }
     .chat-input-row {
       display: flex;
@@ -1998,12 +2003,18 @@
         position: fixed;
         left: -280px;
         top: 0;
+        height: 100vh;
+        height: 100dvh;
         z-index: 500;
         transition: left 0.25s ease;
         box-shadow: 4px 0 20px rgba(0,0,0,0.2);
       }
       .sidebar.open { left: 0; }
       .hamburger { display: inline-flex; }
+      .chat-input-area {
+        padding-left: 1rem;
+        padding-right: 1rem;
+      }
     }
   </style>
 </head>
