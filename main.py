@@ -7,6 +7,7 @@ Run with: uvicorn main:app --reload
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import uuid
@@ -14,7 +15,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import AsyncGenerator, Optional
 
-from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -283,6 +284,129 @@ async def debug_workspace(session_id: Optional[str] = None) -> dict:
         "project_root": os.path.dirname(os.path.abspath(__file__)),
         "entry_count":  len(entries),
         "entries":      entries[:50],  # cap to keep the response small
+    }
+
+
+@app.post("/webhooks/{session_id}", status_code=202)
+async def webhook_trigger(
+    session_id: str,
+    request: Request,
+) -> dict:
+    """External-trigger entrypoint for the agent-as-service pattern.
+
+    POST a JSON payload here to fire a task in the given session —
+    cron / Stripe / GitHub / your own backend can all hit this. The
+    body shape is flexible:
+
+      {"goal": "check for new orders"}          → uses that goal literally
+      {"order_id": 1234, "amount": 50000}       → no `goal` key, so we
+                                                   auto-wrap as "process
+                                                   webhook payload: ..."
+                                                   and stash the payload
+                                                   in context.webhook_payload
+
+    Security: if `webhook_secret` is configured (Settings → Notification
+    Credentials), requests MUST include it either as an
+    `X-OpenTeddy-Webhook-Secret` header or a `?secret=` query param, else
+    401. If no secret is configured, the endpoint is open — the UI warns
+    about this explicitly so it's an informed choice for localhost-only
+    deployments.
+
+    Returns 202 immediately with the spawned task_id; the task runs in
+    the background. Progress is visible in the session's chat via the
+    usual WebSocket stream.
+    """
+    # Header / query-param auth
+    configured = (getattr(config, "webhook_secret", "") or "").strip()
+    if configured:
+        provided = (
+            request.headers.get("x-openteddy-webhook-secret")
+            or request.query_params.get("secret")
+            or ""
+        )
+        if provided != configured:
+            raise HTTPException(
+                status_code=401,
+                detail=(
+                    "Invalid or missing webhook secret. Supply it via "
+                    "`X-OpenTeddy-Webhook-Secret` header or `?secret=` query."
+                ),
+            )
+
+    # Session must exist — refuse to auto-create on webhook path, since
+    # that would let a mis-sent webhook spawn random sessions.
+    sess = await tracker.get_session(session_id)
+    if not sess:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "Session not found. Create it first in the UI (so the user "
+                "has explicitly decided what workspace / mode / local_only "
+                "settings apply), then point the webhook at its id."
+            ),
+        )
+
+    # Parse body (JSON). If not JSON, treat as empty.
+    body: dict = {}
+    try:
+        body = await request.json()
+        if not isinstance(body, dict):
+            body = {"payload": body}
+    except Exception:  # noqa: BLE001
+        body = {}
+
+    # Pick the goal: explicit `goal` field wins; otherwise auto-wrap
+    # so Gemma has something concrete to plan from.
+    goal = body.get("goal") if isinstance(body, dict) else None
+    if not goal:
+        summary = json.dumps(
+            {k: v for k, v in body.items() if k != "goal"},
+            ensure_ascii=False, default=str,
+        )[:600]
+        goal = (
+            f"[Webhook trigger] Process this incoming payload:\n{summary}\n\n"
+            "Decide what action is appropriate based on the session's purpose. "
+            "If a notification is warranted, use telegram_send / email_send."
+        )
+
+    task_id = str(uuid.uuid4())
+    session_mode = sess.get("mode", "code")
+    try:
+        from models import SessionMode
+        mode_enum = SessionMode(session_mode)
+    except Exception:  # noqa: BLE001
+        from models import SessionMode
+        mode_enum = SessionMode.CODE
+
+    req = TaskRequest(
+        id=task_id,
+        goal=goal,
+        context={"webhook_payload": body} if body else {},
+        priority=5,
+        session_id=session_id,
+        mode=mode_enum,
+    )
+
+    # Fire-and-forget — respond 202 so the caller (cron / stripe / etc.)
+    # doesn't sit waiting for the full task to finish. The usual task
+    # lifecycle (tracker, WebSocket events, memory) all kicks in
+    # automatically since we route through orchestrator.run().
+    async def _run_bg() -> None:
+        try:
+            await orchestrator.run(req)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Webhook-triggered task %s crashed: %s", task_id, exc)
+
+    asyncio.create_task(_run_bg())
+    logger.info(
+        "Webhook triggered session=%s task=%s (payload keys: %s)",
+        session_id, task_id, list(body.keys()),
+    )
+    return {
+        "ok": True,
+        "task_id": task_id,
+        "session_id": session_id,
+        "message": "Task queued; watch progress in the UI or poll /tasks/{task_id}.",
     }
 
 

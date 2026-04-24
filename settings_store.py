@@ -133,6 +133,54 @@ SETTINGS_META: dict[str, dict[str, Any]] = {
                        "Relative paths resolve against the project root.",
         "type":        "text",
     },
+
+    # ── Notification credentials (Slice 1: agent-as-service) ──────────────
+    "telegram_bot_token": {
+        "label":       "Telegram Bot Token",
+        "description": "Bot token from @BotFather. Used by the telegram_send tool.",
+        "type":        "secret",  # UI masks the value
+    },
+    "telegram_default_chat_id": {
+        "label":       "Telegram Default Chat ID",
+        "description": "Optional. When set, telegram_send can omit chat_id "
+                       "and send here by default.",
+        "type":        "text",
+    },
+    "smtp_host": {
+        "label":       "SMTP Host",
+        "description": "e.g. smtp.gmail.com, smtp.sendgrid.net",
+        "type":        "text",
+    },
+    "smtp_port": {
+        "label":       "SMTP Port",
+        "description": "Typically 587 (STARTTLS) or 465 (SSL)",
+        "type":        "int",
+        "min":         1,
+        "max":         65535,
+    },
+    "smtp_user": {
+        "label":       "SMTP User",
+        "description": "Usually your email address or API key user.",
+        "type":        "text",
+    },
+    "smtp_password": {
+        "label":       "SMTP Password",
+        "description": "SMTP password or app-specific password.",
+        "type":        "secret",
+    },
+    "smtp_from": {
+        "label":       "SMTP From Address",
+        "description": "Sender address. Defaults to SMTP User when empty.",
+        "type":        "text",
+    },
+    "webhook_secret": {
+        "label":       "Webhook Secret",
+        "description": "If set, POST /webhooks/{session_id} requires this as "
+                       "an X-OpenTeddy-Webhook-Secret header or ?secret= query "
+                       "param. Empty = webhook endpoint is OPEN to anyone on "
+                       "the network (NOT recommended for public servers).",
+        "type":        "secret",
+    },
 }
 
 
@@ -155,6 +203,14 @@ def _defaults_from_config() -> dict[str, str]:
         "agent_workspace_dir":       str(config.agent_workspace_dir),
         "gemma_temperature":         str(config.gemma_temperature),
         "qwen_temperature":          str(config.qwen_temperature),
+        "telegram_bot_token":        str(config.telegram_bot_token),
+        "telegram_default_chat_id":  str(config.telegram_default_chat_id),
+        "smtp_host":                 str(config.smtp_host),
+        "smtp_port":                 str(config.smtp_port),
+        "smtp_user":                 str(config.smtp_user),
+        "smtp_password":             str(config.smtp_password),
+        "smtp_from":                 str(config.smtp_from),
+        "webhook_secret":            str(config.webhook_secret),
     }
 
 
@@ -369,6 +425,17 @@ class SettingsStore:
             # Resolve to absolute once here — see config.py for the rationale.
             import os as _os
             config.agent_workspace_dir = _os.path.abspath(settings["agent_workspace_dir"])
+
+        # Notification credentials. All strings; blanks are meaningful
+        # (= "not configured", tools will return a clear error).
+        for k in ("telegram_bot_token", "telegram_default_chat_id",
+                  "smtp_host", "smtp_user", "smtp_password", "smtp_from",
+                  "webhook_secret"):
+            if k in settings:
+                setattr(config, k, settings[k] or "")
+        port_val = _int("smtp_port")
+        if port_val is not None:
+            config.smtp_port = port_val
 
         logger.info("Config updated from SettingsStore.")
 

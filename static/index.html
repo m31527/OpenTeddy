@@ -1943,6 +1943,73 @@
             </div>
 
             <div class="settings-section">
+              <h3>Notification Credentials</h3>
+              <div style="font-size:0.78rem;color:var(--text-secondary);margin-bottom:0.9rem;line-height:1.5">
+                讓 agent 可以呼叫 <code>telegram_send</code> / <code>email_send</code> 推播。
+                設定一次所有 session 共用。工具會在模型呼叫時讀取這裡的值；
+                留白時工具會回「未設定」錯誤，所以不影響其他功能。
+              </div>
+
+              <div style="font-size:0.76rem;color:var(--text-muted);margin-bottom:0.4rem;font-weight:500">Telegram</div>
+              <div class="row" style="margin-bottom:0.85rem">
+                <div class="field" style="flex:2">
+                  <label>Bot Token</label>
+                  <input type="password" id="inp_telegram_bot_token"
+                    placeholder="123456:ABC-DEF... (from @BotFather)" autocomplete="off" />
+                </div>
+                <div class="field">
+                  <label>Default Chat ID (optional)</label>
+                  <input type="text" id="inp_telegram_default_chat_id" placeholder="-1001234567890" />
+                </div>
+              </div>
+
+              <div style="font-size:0.76rem;color:var(--text-muted);margin:0.9rem 0 0.4rem;font-weight:500">SMTP / Email</div>
+              <div class="row" style="margin-bottom:0.85rem">
+                <div class="field" style="flex:2">
+                  <label>SMTP Host</label>
+                  <input type="text" id="inp_smtp_host" placeholder="smtp.gmail.com" />
+                </div>
+                <div class="field" style="max-width:110px">
+                  <label>Port</label>
+                  <input type="number" id="inp_smtp_port" placeholder="587" min="1" max="65535" />
+                </div>
+              </div>
+              <div class="row" style="margin-bottom:0.85rem">
+                <div class="field">
+                  <label>SMTP User</label>
+                  <input type="text" id="inp_smtp_user" placeholder="you@gmail.com" />
+                </div>
+                <div class="field">
+                  <label>Password / App Password</label>
+                  <input type="password" id="inp_smtp_password" placeholder="••••••••" autocomplete="off" />
+                </div>
+                <div class="field">
+                  <label>From Address (optional)</label>
+                  <input type="text" id="inp_smtp_from" placeholder="defaults to SMTP User" />
+                </div>
+              </div>
+
+              <div style="font-size:0.76rem;color:var(--text-muted);margin:0.9rem 0 0.4rem;font-weight:500">Webhook Endpoint</div>
+              <div class="row" style="margin-bottom:0.3rem">
+                <div class="field" style="flex:2">
+                  <label>Webhook Secret (recommended)</label>
+                  <input type="password" id="inp_webhook_secret"
+                    placeholder="Leave blank = open endpoint (NOT recommended)" autocomplete="off" />
+                </div>
+                <button type="button" class="btn-ghost" onclick="generateWebhookSecret()"
+                  style="align-self:flex-end">🔐 Generate random</button>
+              </div>
+              <div id="webhookHint" style="font-size:0.72rem;color:var(--text-muted);line-height:1.5;margin-top:6px">
+                外部系統可 POST 到 <code>/webhooks/&lt;session_id&gt;</code> 觸發該 session。
+                範例：
+                <pre style="background:var(--bg-secondary);padding:8px 10px;border-radius:6px;font-size:0.72rem;white-space:pre-wrap;margin-top:4px">curl -X POST http://localhost:8000/webhooks/YOUR_SESSION_ID \
+  -H "Content-Type: application/json" \
+  -H "X-OpenTeddy-Webhook-Secret: YOUR_SECRET" \
+  -d '{"goal": "check for new orders and telegram me if any"}'</pre>
+              </div>
+            </div>
+
+            <div class="settings-section">
               <h3>Parameter Settings</h3>
               <div class="param-row">
                 <div class="param-field">
@@ -3711,6 +3778,14 @@
         _setInput('inp_gemma_base_url', s.gemma_base_url?.value ?? '');
         _setInput('inp_qwen_base_url',  s.qwen_base_url?.value  ?? '');
         _setInput('inp_agent_workspace_dir', s.agent_workspace_dir?.value ?? './agent-workspace');
+        _setInput('inp_telegram_bot_token',       s.telegram_bot_token?.value       ?? '');
+        _setInput('inp_telegram_default_chat_id', s.telegram_default_chat_id?.value ?? '');
+        _setInput('inp_smtp_host',                s.smtp_host?.value                ?? '');
+        _setInput('inp_smtp_port',                s.smtp_port?.value                ?? '587');
+        _setInput('inp_smtp_user',                s.smtp_user?.value                ?? '');
+        _setInput('inp_smtp_password',            s.smtp_password?.value            ?? '');
+        _setInput('inp_smtp_from',                s.smtp_from?.value                ?? '');
+        _setInput('inp_webhook_secret',           s.webhook_secret?.value           ?? '');
         _setSlider('escalation_threshold',      s.escalation_threshold?.value      ?? 0.6);
         _setSlider('escalation_failure_limit',  s.escalation_failure_limit?.value  ?? 3);
         _setSlider('gemma_max_tokens',          s.gemma_max_tokens?.value          ?? 4096);
@@ -3858,6 +3933,20 @@
       }
     }
 
+    // Generate a cryptographically-random secret into the input field.
+    // Doesn't auto-save — user still needs to hit Save (so they can
+    // see + copy the value first for the webhook caller side).
+    function generateWebhookSecret() {
+      const arr = new Uint8Array(24);
+      (crypto || window.crypto).getRandomValues(arr);
+      const b64 = btoa(String.fromCharCode(...arr))
+        .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+      const inp = document.getElementById('inp_webhook_secret');
+      inp.type = 'text';  // reveal so the user can copy it
+      inp.value = b64;
+      toast('🔐 Generated secret — copy it, then click Save Settings');
+    }
+
     async function saveSettings() {
       const btn = document.getElementById('saveSettingsBtn');
       const msg = document.getElementById('settingsMsg');
@@ -3879,8 +3968,32 @@
         gemma_temperature:         document.getElementById('rng_gemma_temperature').value,
         qwen_temperature:          document.getElementById('rng_qwen_temperature').value,
         agent_workspace_dir:       document.getElementById('inp_agent_workspace_dir').value.trim(),
+        // Notification credentials. We intentionally keep empty strings
+        // (no `|| undefined`) so the user can CLEAR a credential they
+        // previously set by wiping the field and hitting Save.
+        telegram_bot_token:       document.getElementById('inp_telegram_bot_token').value,
+        telegram_default_chat_id: document.getElementById('inp_telegram_default_chat_id').value.trim(),
+        smtp_host:                document.getElementById('inp_smtp_host').value.trim(),
+        smtp_port:                document.getElementById('inp_smtp_port').value || '587',
+        smtp_user:                document.getElementById('inp_smtp_user').value.trim(),
+        smtp_password:            document.getElementById('inp_smtp_password').value,
+        smtp_from:                document.getElementById('inp_smtp_from').value.trim(),
+        webhook_secret:           document.getElementById('inp_webhook_secret').value,
       };
-      Object.keys(payload).forEach(k => { if (payload[k] === '') delete payload[k]; });
+      // Most settings shouldn't be overwritten with a blank on save
+      // (e.g. you don't want the Ollama model dropdown going empty
+      // because Ollama was temporarily offline when you hit Save).
+      // BUT notification credentials need the opposite — an empty
+      // string is a valid "clear this credential" signal. So we
+      // whitelist keys that are allowed to be saved as "".
+      const ALLOW_EMPTY = new Set([
+        'telegram_bot_token', 'telegram_default_chat_id',
+        'smtp_host', 'smtp_user', 'smtp_password', 'smtp_from',
+        'webhook_secret',
+      ]);
+      Object.keys(payload).forEach(k => {
+        if (payload[k] === '' && !ALLOW_EMPTY.has(k)) delete payload[k];
+      });
       try {
         const res  = await fetch(`${API}/settings`, {
           method:  'POST',
