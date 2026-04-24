@@ -81,6 +81,11 @@ class Tracker:
             "ALTER TABLE sessions ADD COLUMN mode TEXT NOT NULL DEFAULT 'code'",
             # Per-session workspace override. Null = use global default.
             "ALTER TABLE sessions ADD COLUMN workspace_dir TEXT",
+            # Privacy: when 1, this session refuses to call the
+            # Anthropic (Claude) API. Auto-escalation + Let-Claude-fix
+            # are both disabled. Intended for Analytic sessions
+            # handling customer data / PII.
+            "ALTER TABLE sessions ADD COLUMN local_only INTEGER NOT NULL DEFAULT 0",
         ]
         for sql in migrations:
             try:
@@ -235,6 +240,18 @@ class Tracker:
         await self.db.execute(
             "UPDATE sessions SET workspace_dir=?, updated_at=? WHERE id=?",
             (workspace_dir, datetime.utcnow().isoformat(), session_id),
+        )
+        await self.db.commit()
+
+    async def update_session_local_only(
+        self, session_id: str, local_only: bool,
+    ) -> None:
+        """Flip the privacy guardrail on/off for a session. When True,
+        orchestrator skips Claude escalation; Let-Claude-fix endpoint
+        returns 403. Stored as 0/1 integer for SQLite portability."""
+        await self.db.execute(
+            "UPDATE sessions SET local_only=?, updated_at=? WHERE id=?",
+            (1 if local_only else 0, datetime.utcnow().isoformat(), session_id),
         )
         await self.db.commit()
 

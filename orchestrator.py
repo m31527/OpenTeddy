@@ -243,6 +243,12 @@ def _plan_prompt_for_mode(mode: str) -> str:
     return _PLAN_SYSTEM_CODE   # default — safest for unknown modes
 
 
+def _is_local_only() -> bool:
+    """Thin wrapper so orchestrator code reads cleanly at call sites."""
+    from config import is_session_local_only
+    return is_session_local_only()
+
+
 class Orchestrator:
     """Gemma-powered orchestrator that plans, dispatches, and aggregates."""
 
@@ -271,24 +277,33 @@ class Orchestrator:
         """Full lifecycle: plan → execute → escalate → summarise."""
         logger.info("Orchestrator starting task %s: %s", req.id, req.goal)
 
-        # Apply per-session workspace override if one is configured.
-        # Setting this ContextVar scopes the override to this async task,
-        # so concurrent tasks in other sessions keep their own setting.
-        # The value is cleared in the `finally` at the end of run().
-        from config import set_session_workspace
+        # Apply per-session workspace override + privacy flag. Both are
+        # ContextVars so concurrent tasks in other sessions keep their
+        # own setting. Values are NOT manually cleared — asyncio
+        # ContextVars are task-local, so they naturally scope to this run.
+        from config import set_session_workspace, set_session_local_only
         session_ws: Optional[str] = None
+        session_local_only = False
         if req.session_id:
             try:
                 sess = await self.tracker.get_session(req.session_id)
                 if sess:
                     session_ws = sess.get("workspace_dir") or None
+                    session_local_only = bool(sess.get("local_only"))
             except Exception:  # noqa: BLE001
                 pass
         set_session_workspace(session_ws)
+        set_session_local_only(session_local_only)
         if session_ws:
             logger.info(
                 "Task %s using session-specific workspace: %s",
                 req.id, session_ws,
+            )
+        if session_local_only:
+            logger.info(
+                "Task %s is local-only — Claude escalation will be skipped "
+                "regardless of confidence.",
+                req.id,
             )
 
         # Persist the task
@@ -621,10 +636,12 @@ class Orchestrator:
                 )
                 st.status = TaskStatus.FAILED
                 st.error  = (
-                    f"地端模型執行超時（>{effective_sub_timeout}s），自動升級到 Claude"
+                    f"地端模型執行超時（>{effective_sub_timeout}s）"
+                    + (" — 本地端模式，不升級 Claude" if _is_local_only() else "，自動升級到 Claude")
                 )
                 await self.tracker.update_subtask(st)
-                # 超時直接升級，不再重試
+                if _is_local_only():
+                    return st  # respect privacy guardrail
                 st = await self.escalation.resolve(st, context)
                 return st
 
@@ -644,9 +661,13 @@ class Orchestrator:
                         )
                         st.status = TaskStatus.FAILED
                         st.error = (
-                            "驗證發現容器不健康 / 未正常啟動，自動升級 Claude 診斷"
+                            "驗證發現容器不健康 / 未正常啟動"
+                            + ("（本地端模式，不升級 Claude）" if _is_local_only()
+                               else "，自動升級 Claude 診斷")
                         )
                         await self.tracker.update_subtask(st)
+                        if _is_local_only():
+                            return st
                         st = await self.escalation.resolve(st, context)
                         return st
                     await self.tracker.update_subtask(st)
@@ -657,7 +678,20 @@ class Orchestrator:
                 st.id, attempt + 1, max_local_retries, confidence,
             )
 
-        # 所有重試都失敗 → 才升級到 Claude
+        # 所有重試都失敗 → 才升級到 Claude（本地端模式除外）
+        if _is_local_only():
+            logger.info(
+                "Subtask %s local-only — skipping Claude escalation after "
+                "%d failed attempts.",
+                st.id, max_local_retries,
+            )
+            st.status = TaskStatus.FAILED
+            st.error = (
+                (st.error or "")
+                + "\n\n[本地端模式] 地端重試用盡，依 session 設定不升級 Claude。"
+            ).strip()
+            await self.tracker.update_subtask(st)
+            return st
         logger.info(
             "Subtask %s escalating to Claude after %d failed attempts.",
             st.id, max_local_retries,
