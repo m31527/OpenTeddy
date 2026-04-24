@@ -1,5 +1,7 @@
 <div align="center">
 
+<sub>English | <a href="README.zh-TW.md">繁體中文</a></sub>
+
 <img src="static/OpenTeddy-logo.svg" alt="OpenTeddy" width="240" />
 
 # OpenTeddy
@@ -217,6 +219,47 @@ This keeps cost low for everyday work while still guaranteeing you get a real an
 | `SUBTASK_TIMEOUT` | `120` | Seconds before a subtask is treated as hung |
 | `SKILL_PROMOTION_THRESHOLD` | `5` | Successes needed to promote a skill |
 
+## Platform Support
+
+| Platform | Status | Notes |
+|----------|--------|-------|
+| **macOS** (Intel / Apple Silicon) | ✅ Fully supported | Primary development target. |
+| **Linux** | ✅ Fully supported | Any distro with Python 3.11+ and Ollama. |
+| **Windows (native)** | ⚠️ Partial — use WSL2 if possible | See caveats below. |
+| **Windows (WSL2)** | ✅ Fully supported | Behaves like Linux. Recommended on Windows. |
+
+### Windows caveats
+
+The codebase itself is cross-platform Python (uses `pathlib`, `os.path.join`,
+`asyncio`), and `package_tool.py` already handles the Windows venv layout
+(`Scripts\pip.exe`). The things that actually trip Windows users are:
+
+- **The executor LLM generates POSIX shell commands.** When Qwen decides to
+  run `ls`, `rm -rf`, `grep`, `chmod`, or pipes like `cmd1 | tee file`, those
+  are executed through the system shell — which is **cmd.exe / PowerShell**
+  on native Windows, so they fail. Running OpenTeddy under **WSL2** makes
+  this a non-issue.
+- **`lsof` / `ps` are not available** on native Windows. The deploy-tool
+  helpers that inspect port occupancy (`port_probe`, `port_free` in
+  [`tools/deploy_tool.py`](tools/deploy_tool.py)) degrade: `port_probe`
+  returns a bound/free flag but no PID/process name; `port_free` returns an
+  error and cannot kill by port.
+- **Ollama on Windows** is officially supported (install from ollama.com) —
+  pulling and running Gemma/Qwen works the same as on Mac/Linux.
+
+**Recommendation:** on Windows, install Ollama natively on the host, then
+run OpenTeddy itself inside **WSL2 Ubuntu**. That gives you GPU-accelerated
+local inference + a POSIX userspace for the shell-heavy parts of the agent.
+
+### Docker network caveat (Linux hosts)
+
+`docker-compose.yml` uses `extra_hosts: ["host-gateway:host-gateway"]` so
+the container can reach Ollama running on the host. This requires Docker
+Engine **20.10+** on Linux, and Ollama must be bound to `0.0.0.0`, not
+just `127.0.0.1` — otherwise the container's bridged traffic can't reach
+it. Set `OLLAMA_HOST=0.0.0.0:11434` before `ollama serve`. On Docker
+Desktop (Mac / Windows) this "just works".
+
 ## Docker Deployment
 
 ```bash
@@ -232,6 +275,36 @@ Notes:
 - The container reaches host Ollama via the `host-gateway` alias set in `docker-compose.yml`.
 - Skills and the usage database persist in the `openteddy_data` Docker volume.
 - Rebuild image: `docker compose up -d --build`.
+
+### ⚠️ Docker cannot touch your host filesystem
+
+The default `docker-compose.yml` only mounts an isolated named volume
+(`openteddy_data` → `/app/data`). It does **not** bind-mount your home
+directory, Desktop, Downloads, or any other host folder. That means:
+
+- Tasks like *"read `~/Documents/report.pdf`"*, *"tidy up my Downloads folder"*,
+  or *"run this script on my Desktop"* **will not work** in the Docker setup —
+  the container simply cannot see those files.
+- The agent's shell/file/python tools operate entirely **inside** the
+  container. Any files it reads or writes live in `/app/data` and disappear
+  if the volume is removed.
+
+**If you need the agent to operate on files on your machine, run OpenTeddy
+directly with `uvicorn` (see [Quick Start](#quick-start)) instead of Docker.**
+The native process has full access to your filesystem (subject to your user's
+permissions), which is what most "local assistant" use cases actually want.
+
+Alternatively, if you really want to stay on Docker, you can add a bind mount
+to `docker-compose.yml` — e.g.:
+
+```yaml
+    volumes:
+      - openteddy_data:/app/data
+      - ${HOME}/openteddy-workspace:/workspace   # ← exposed host folder
+```
+
+…and then point the agent at `/workspace` inside the container. Only the
+folders you explicitly mount are visible; everything else stays isolated.
 
 ## Support the project
 
