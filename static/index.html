@@ -290,6 +290,11 @@
       padding: 0.4rem 0;
     }
     .sidebar.collapsed .sidebar-status #wsLabel { display: none; }
+    .sidebar.collapsed .lang-btn {
+      padding: 0.3rem;
+      justify-content: center;
+    }
+    .sidebar.collapsed .lang-btn #langBtnLabel { display: none; }
 
     /* ── Main content ────────────────────────────────────────────────────── */
     .main-content {
@@ -510,6 +515,49 @@
       margin-bottom: 0.35rem;
       font-weight: 500;
     }
+    .label-with-info {
+      display: inline-flex !important;
+      align-items: center;
+      gap: 6px;
+    }
+    .info-dot {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 14px; height: 14px;
+      border-radius: 50%;
+      background: var(--bg-secondary);
+      color: var(--text-secondary);
+      font-size: 9px;
+      font-style: italic;
+      font-weight: 600;
+      font-family: Georgia, "Times New Roman", serif;
+      text-decoration: none;
+      cursor: help;
+      transition: background 0.12s, color 0.12s;
+    }
+    .info-dot:hover { background: var(--text-primary); color: white; }
+    .escalation-toggle {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      padding: 10px 12px;
+      margin-bottom: 0.85rem;
+      background: var(--bg-secondary);
+      border-radius: 10px;
+      cursor: pointer;
+      user-select: none;
+    }
+    .escalation-toggle input[type="checkbox"] {
+      margin-top: 2px;
+      width: 14px; height: 14px;
+      accent-color: var(--text-primary);
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+    .escalation-toggle-text { display: flex; flex-direction: column; gap: 2px; }
+    .escalation-toggle-title { font-size: 0.82rem; font-weight: 600; color: var(--text-primary); }
+    .escalation-toggle-hint  { font-size: 0.72rem; color: var(--text-secondary); line-height: 1.5; }
 
     /* ── Buttons ─────────────────────────────────────────────────────────── */
     button {
@@ -1594,6 +1642,16 @@
       color: var(--text-primary);
       word-break: break-word;
     }
+    /* Subtle "took 1m 23s" stamp shown beneath the agent's final answer
+       so the user can see how long the round-trip took at a glance. */
+    .task-elapsed-footer {
+      margin-top: 0.5rem;
+      font-size: 0.72rem;
+      color: var(--text-muted);
+      font-variant-numeric: tabular-nums;
+      letter-spacing: 0.02em;
+      opacity: 0.85;
+    }
     .md-body h2, .md-body h3, .md-body h4 {
       margin: 0.8rem 0 0.35rem;
       font-weight: 600;
@@ -2491,7 +2549,37 @@
                   <select id="sel_executor_model"><option value="" data-i18n="ollama_offline">⚠️ Ollama offline</option></select>
                 </div>
               </div>
+              <!-- Master kill-switch for Claude escalation. When unchecked,
+                   low-confidence / timeout / failure-signal triggers do not
+                   call Claude — agent surfaces the local error instead. -->
+              <label class="escalation-toggle">
+                <input type="checkbox" id="chk_escalation_enabled" checked />
+                <span class="escalation-toggle-text">
+                  <span class="escalation-toggle-title" data-i18n="escalation_enabled_label">Allow Claude escalation</span>
+                  <span class="escalation-toggle-hint" data-i18n="escalation_enabled_hint">When off, the agent stays fully local and never calls Claude.</span>
+                </span>
+              </label>
+              <!-- Stream LLM output — perceived-latency win on small models. -->
+              <label class="escalation-toggle">
+                <input type="checkbox" id="chk_streaming_enabled" checked />
+                <span class="escalation-toggle-text">
+                  <span class="escalation-toggle-title" data-i18n="streaming_enabled_label">Stream model output</span>
+                  <span class="escalation-toggle-hint" data-i18n="streaming_enabled_hint">Show tokens as the model generates them. Big perceived-speed win on small thinking models.</span>
+                </span>
+              </label>
               <div class="row" style="margin-bottom:0.85rem">
+                <div class="field" style="flex:2">
+                  <label class="label-with-info">
+                    <span data-i18n="claude_api_key_label">Claude API Key</span>
+                    <a class="info-dot" href="https://console.anthropic.com/settings/keys"
+                       target="_blank" rel="noopener noreferrer"
+                       data-i18n-title="claude_api_key_info"
+                       title="Get your API key from console.anthropic.com → Settings → API Keys">i</a>
+                  </label>
+                  <input type="password" id="inp_anthropic_api_key"
+                    data-i18n-placeholder="claude_api_key_placeholder"
+                    placeholder="sk-ant-api03-…" autocomplete="off" />
+                </div>
                 <div class="field">
                   <label data-i18n="claude_model_label">Claude Model (Escalation)</label>
                   <input type="text" id="inp_claude_model" data-i18n-placeholder="claude_model_placeholder" placeholder="claude-opus-4-6" />
@@ -2739,6 +2827,7 @@
 
       <div class="fs-actions">
         <button type="button" class="btn-ghost" onclick="closeWorkspacePicker()" data-i18n="btn_cancel">Cancel</button>
+        <button type="button" class="btn-ghost" onclick="fsNewFolder()" data-i18n="btn_new_folder">+ New folder</button>
         <button type="button" class="btn-ghost" onclick="fsClearOverride()" data-i18n="btn_clear_override">Clear override</button>
         <button type="button" class="btn-primary" id="fsSelectBtn" onclick="fsSelectCurrent()" data-i18n="btn_select_folder">Select this folder</button>
       </div>
@@ -2898,6 +2987,8 @@
           if (data.event === 'claude_fix_done')   handleClaudeFixDone(data);
           if (data.type  === 'pull_progress')     handlePullProgress(data);
           if (data.type  === 'approval_required') handleApprovalRequired(data);
+          if (data.type  === 'chat.stream.delta') handleStreamDelta(data);
+          if (data.type  === 'chat.stream.end')   handleStreamEnd(data);
         } catch (e) { /* ignore */ }
       };
     }
@@ -3113,6 +3204,92 @@
     }
 
     function fsNavigateTo(path) { fsBrowse(path); }
+
+    // Open an inline name-prompt over the picker, then call the
+    // /fs/mkdir endpoint. The new folder is created INSIDE the
+    // currently-browsed directory, then the listing refreshes so it
+    // shows up at the top of the entry list.
+    async function fsNewFolder() {
+      if (!_fsCurrentPath) return;
+      const name = await showFsPrompt({
+        title:    t('fs_new_folder_title'),
+        body:     t('fs_new_folder_body', { path: _fsCurrentPath }),
+        okLabel:  t('btn_create'),
+        cancelLabel: t('btn_cancel'),
+        placeholder: 'my-project',
+      });
+      if (!name) return;
+      try {
+        const res = await fetch(`${API}/fs/mkdir`, {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({ parent: _fsCurrentPath, name }),
+        });
+        if (!res.ok) {
+          const err = await res.text();
+          toast(t('fs_mkdir_failed', { msg: err }), true);
+          return;
+        }
+        const data = await res.json();
+        toast(t('fs_folder_created'));
+        // Drop the user straight into the new folder so they can either
+        // continue creating sub-dirs or hit "Select this folder".
+        await fsBrowse(data.path);
+      } catch (e) {
+        toast(t('fs_mkdir_failed', { msg: e.message }), true);
+      }
+    }
+
+    // Promise-based prompt, themed like showConfirm but with a text input.
+    // Reuses the same modal markup so we don't double the CSS surface.
+    function showFsPrompt({ title, body, okLabel, cancelLabel, placeholder = '' } = {}) {
+      return new Promise(resolve => {
+        const modal = document.getElementById('confirmModal');
+        const titleEl = document.getElementById('confirmModalTitle');
+        const bodyEl  = document.getElementById('confirmModalBody');
+        const okBtn   = document.getElementById('confirmModalOk');
+        const cancelBtn = document.getElementById('confirmModalCancel');
+
+        titleEl.textContent = title || '';
+        bodyEl.innerHTML = '';
+        const p = document.createElement('div');
+        p.style.marginBottom = '0.7rem';
+        p.style.color = 'var(--text-secondary)';
+        p.textContent = body || '';
+        bodyEl.appendChild(p);
+        const input = document.createElement('input');
+        input.type  = 'text';
+        input.placeholder = placeholder;
+        input.style.cssText = 'width:100%;padding:0.5rem 0.7rem;border:1px solid var(--border);border-radius:8px;font-size:0.9rem;font-family:inherit;background:var(--bg-primary);color:var(--text-primary);';
+        bodyEl.appendChild(input);
+
+        okBtn.textContent     = okLabel     || t('btn_ok');
+        cancelBtn.textContent = cancelLabel || t('btn_cancel');
+        okBtn.classList.remove('danger');
+        modal.style.display = 'flex';
+
+        const cleanup = (val) => {
+          modal.style.display = 'none';
+          okBtn.onclick = null;
+          cancelBtn.onclick = null;
+          modal.onclick = null;
+          input.onkeydown = null;
+          document.removeEventListener('keydown', onKey, true);
+          resolve(val);
+        };
+        const onKey = (e) => {
+          if (e.key === 'Escape') { e.preventDefault(); cleanup(null); }
+        };
+        okBtn.onclick = () => cleanup(input.value.trim() || null);
+        cancelBtn.onclick = () => cleanup(null);
+        modal.onclick = (e) => { if (e.target === modal) cleanup(null); };
+        input.onkeydown = (e) => {
+          if (e.key === 'Enter') { e.preventDefault(); cleanup(input.value.trim() || null); }
+        };
+        document.addEventListener('keydown', onKey, true);
+        setTimeout(() => input.focus(), 30);
+      });
+    }
 
     function fsGoToInputPath() {
       const p = (document.getElementById('fsPathInput').value || '').trim();
@@ -3539,8 +3716,66 @@
       } catch (e) { toast(e.message, true); }
     }
 
+    // Running-task timers attached to history-rendered messages, keyed by
+    // task id. Lets a task that's still running keep counting up + flip
+    // to its final summary even after the user switches sessions and back
+    // (the original `thinkingEl` from runTask() is gone by then).
+    const _historyTimers = {};
+    function clearHistoryTimers() {
+      for (const tid of Object.keys(_historyTimers)) {
+        const ent = _historyTimers[tid];
+        if (ent.tick)   clearInterval(ent.tick);
+        if (ent.poll)   clearInterval(ent.poll);
+        delete _historyTimers[tid];
+      }
+    }
+    function bindRunningHistoryTimer(el, taskId, createdAt) {
+      const startMs = new Date(createdAt).getTime() || Date.now();
+      // Stop any previous binding for this task id (avoids double-tick
+      // when loadChatHistory runs twice in quick succession).
+      const prev = _historyTimers[taskId];
+      if (prev) {
+        if (prev.tick) clearInterval(prev.tick);
+        if (prev.poll) clearInterval(prev.poll);
+      }
+      const tick = () => {
+        const elapsed = Date.now() - startMs;
+        el.textContent = '⏳ Working on it… · ' + fmtElapsed(elapsed);
+      };
+      tick();
+      const tickId = setInterval(tick, 1000);
+
+      // Poll backend every 2 s; once the task leaves running/pending,
+      // swap the live placeholder for the final summary + elapsed footer.
+      const pollId = setInterval(async () => {
+        try {
+          const r = await fetch(`${API}/tasks/${taskId}`);
+          if (!r.ok) return;
+          const data = await r.json();
+          if (data.status && data.status !== 'running' && data.status !== 'pending') {
+            clearInterval(tickId);
+            clearInterval(pollId);
+            delete _historyTimers[taskId];
+            const elapsedMs = Date.now() - startMs;
+            let html = data.summary
+              ? `<div class="md-body">${renderMarkdown(data.summary)}</div>`
+              : `<span style="color:var(--text-muted)">(${escHtml(data.status)})</span>`;
+            html += `<div class="task-elapsed-footer">⏱ ${escHtml(fmtElapsed(elapsedMs))}</div>`;
+            el.innerHTML = html;
+            renderPendingCharts(el);
+          }
+        } catch (_) {}
+      }, 2000);
+
+      _historyTimers[taskId] = { tick: tickId, poll: pollId };
+    }
+
     async function loadChatHistory(limit = 20) {
       try {
+        // Tear down any timers from the previous session render — those
+        // DOM elements are about to be wiped by chat.innerHTML = ''.
+        clearHistoryTimers();
+
         const qs = new URLSearchParams({ limit: String(limit) });
         if (_currentSessionId) qs.set('session_id', _currentSessionId);
         const res = await fetch(`${API}/tasks?${qs.toString()}`);
@@ -3558,18 +3793,31 @@
         }
 
         const ordered = tasks.slice().reverse();
-        for (const t of ordered) {
-          if (t.goal) {
+        for (const tk of ordered) {
+          if (tk.goal) {
             const u = document.createElement('div');
             u.className = 'msg-user';
-            u.textContent = t.goal;
+            u.textContent = tk.goal;
             chat.appendChild(u);
           }
           const a = document.createElement('div');
           a.className = 'msg-agent';
-          const body = t.summary
-            ? `<div class="md-body">${renderMarkdown(t.summary)}</div>`
-            : `<span style="color:var(--text-muted)">(${escHtml(t.status || 'no summary')})</span>`;
+          const isRunning = tk.status === 'running' || tk.status === 'pending';
+          if (isRunning) {
+            // Live ticker bound to created_at — survives session switches.
+            a.dataset.taskId = tk.id;
+            chat.appendChild(a);
+            bindRunningHistoryTimer(a, tk.id, tk.created_at);
+            continue;   // skip the static-render branch below
+          }
+          const elapsedFooter = (tk.created_at && tk.completed_at)
+            ? `<div class="task-elapsed-footer">⏱ ${escHtml(fmtElapsed(
+                new Date(tk.completed_at).getTime() - new Date(tk.created_at).getTime()
+              ))}</div>`
+            : '';
+          const body = tk.summary
+            ? `<div class="md-body">${renderMarkdown(tk.summary)}</div>${elapsedFooter}`
+            : `<span style="color:var(--text-muted)">(${escHtml(tk.status || 'no summary')})</span>${elapsedFooter}`;
           a.innerHTML = body;
           chat.appendChild(a);
           // Re-render any ```chart blocks that were in the saved summary.
@@ -4085,6 +4333,92 @@
       }
     }
 
+    // ── Task timer ───────────────────────────────────────────────────────
+    // Live elapsed-time stamp shown inside the "Working on it…" bubble
+    // while the orchestrator/executor loop runs, then fixed in a small
+    // footer beneath the final summary so the user knows exactly how
+    // long the round trip took.
+    function fmtElapsed(ms) {
+      const totalSec = Math.max(0, Math.round(ms / 1000));
+      const m = Math.floor(totalSec / 60);
+      const s = totalSec - m * 60;
+      if (m === 0) return s + 's';
+      return m + 'm ' + (s < 10 ? '0' : '') + s + 's';
+    }
+    function startTaskTimer(el, baseText) {
+      if (!el) return;
+      el._teddyTimerStart = performance.now();
+      el._teddyTimerBase  = baseText;
+      const tick = () => {
+        // Once the streaming handler has taken over the bubble we must
+        // NOT overwrite textContent each second — that would wipe the
+        // tokens being painted in. The timer keeps running silently so
+        // stopTaskTimer() can still report the elapsed total.
+        if (el._streamingActive) return;
+        const elapsed = performance.now() - el._teddyTimerStart;
+        el.textContent = baseText + ' · ' + fmtElapsed(elapsed);
+      };
+      tick();
+      el._teddyTimerId = setInterval(tick, 1000);
+    }
+    function stopTaskTimer(el) {
+      if (!el || !el._teddyTimerId) return null;
+      clearInterval(el._teddyTimerId);
+      el._teddyTimerId = null;
+      return performance.now() - el._teddyTimerStart;
+    }
+
+    // ── Streaming chat output ───────────────────────────────────────────
+    // Backend pushes `chat.stream.delta` events via WebSocket whenever
+    // Ollama emits a token chunk. We accumulate the chunks into the
+    // current task's "thinking" bubble and re-render markdown in place,
+    // so the user sees the answer forming word-by-word instead of a
+    // 2-minute spinner. `chat.stream.end` flips back to "completed"
+    // styling and lets loadTaskStatus take over the final summary.
+    const _streamState = { taskId: null, el: null, accumulated: '' };
+    function attachStreamingTarget(taskId, el) {
+      _streamState.taskId = taskId;
+      _streamState.el     = el;
+      _streamState.accumulated = '';
+    }
+    function detachStreamingTarget() {
+      _streamState.taskId = null;
+      _streamState.el     = null;
+      _streamState.accumulated = '';
+    }
+    function handleStreamDelta(data) {
+      if (!data || !data.text) return;
+      // Only render chunks for the currently-running task. Stale events
+      // from previously-aborted tasks would otherwise leak into the UI.
+      if (_streamState.taskId && data.task_id !== _streamState.taskId) return;
+      const el = _streamState.el;
+      if (!el) return;
+      _streamState.accumulated += data.text;
+      // First chunk — kill the timer's text-mutating tick and swap the
+      // placeholder for a proper rendering surface.
+      if (!el._streamingActive) {
+        el._streamingActive = true;
+        el.classList.add('streaming');
+        el.innerHTML = '<div class="md-body teddy-stream-body"></div>';
+      }
+      const body = el.querySelector('.teddy-stream-body');
+      if (body) body.innerHTML = renderMarkdown(_streamState.accumulated);
+      // Keep the chat scrolled to the latest token unless the user is
+      // reading scroll-back (i.e. they scrolled up).
+      const chat = document.getElementById('chatMessages');
+      if (chat) {
+        const nearBottom = chat.scrollHeight - chat.scrollTop - chat.clientHeight < 80;
+        if (nearBottom) chat.scrollTop = chat.scrollHeight;
+      }
+    }
+    function handleStreamEnd(data) {
+      if (_streamState.taskId && data.task_id !== _streamState.taskId) return;
+      const el = _streamState.el;
+      if (el) el.classList.remove('streaming');
+      // Note: we DON'T detach yet — loadTaskStatus is about to swap in
+      // the final summary + elapsed footer. detach happens there.
+    }
+
     async function runTask() {
       const goalEl   = document.getElementById('goal');
       const goal     = goalEl.value.trim();
@@ -4126,6 +4460,13 @@
       clearAttachments();   // chips consumed with this message
 
       const thinkingEl = addAgentMessage('⏳ Working on it…');
+      // Live elapsed counter — overwrites the bubble text every second.
+      startTaskTimer(thinkingEl, '⏳ Working on it…');
+      // Register the bubble as the target for chat.stream.delta events
+      // — the WebSocket handler will paint tokens into it as they
+      // arrive (taskId-scoped so stale streams from cancelled tasks
+      // don't leak in).
+      attachStreamingTarget(taskId, thinkingEl);
 
       let aborted = false;
       try {
@@ -4158,10 +4499,14 @@
       } catch (e) {
         if (e.name === 'AbortError') {
           aborted = true;
+          stopTaskTimer(thinkingEl);
+          detachStreamingTarget();
           if (thinkingEl && thinkingEl.parentNode) thinkingEl.remove();
           cancelStragglers('已中斷');
           addSystemMessage('⏹️ 已中斷推論 — 部分子任務可能仍在背景結束中。');
         } else {
+          stopTaskTimer(thinkingEl);
+          detachStreamingTarget();
           if (thinkingEl) thinkingEl.textContent = '❌ Error: ' + e.message;
           toast('Error: ' + e.message, true);
         }
@@ -4201,11 +4546,19 @@
           cancelStragglers('已取消（任務提前結束，可能已升級到 Claude）');
         }
 
+        // Capture how long the round trip took before we drop the
+        // placeholder, so we can stamp it into the final response.
+        const elapsedMs = stopTaskTimer(thinkingEl);
+        // Tear down the streaming wiring — final summary takes over.
+        detachStreamingTarget();
         if (thinkingEl && thinkingEl.parentNode) thinkingEl.remove();
 
         let resultHTML = '<div class="md-body">' +
           (summary ? renderMarkdown(summary) : escHtml('Task ' + data.status + '.')) +
           '</div>';
+        if (elapsedMs != null) {
+          resultHTML += `<div class="task-elapsed-footer">⏱ ${escHtml(fmtElapsed(elapsedMs))}</div>`;
+        }
         // Download chips for any files the agent produced — render
         // FIRST so they sit right under the summary (before the steps),
         // since that's what the user typically wants to click on.
@@ -4832,7 +5185,18 @@
         const data = await res.json();
         if (!data.success) { toast('Settings load error: ' + data.error, true); return; }
         const s = data.data;
-        _setInput('inp_claude_model',   s.claude_model?.value   ?? '');
+        _setInput('inp_claude_model',      s.claude_model?.value      ?? '');
+        _setInput('inp_anthropic_api_key', s.anthropic_api_key?.value ?? '');
+        const escEl = document.getElementById('chk_escalation_enabled');
+        if (escEl) {
+          const v = String(s.escalation_enabled?.value ?? 'true').toLowerCase();
+          escEl.checked = !['0', 'false', 'no', 'off'].includes(v);
+        }
+        const streamEl = document.getElementById('chk_streaming_enabled');
+        if (streamEl) {
+          const v = String(s.streaming_enabled?.value ?? 'true').toLowerCase();
+          streamEl.checked = !['0', 'false', 'no', 'off'].includes(v);
+        }
         _setInput('inp_gemma_base_url', s.gemma_base_url?.value ?? '');
         _setInput('inp_qwen_base_url',  s.qwen_base_url?.value  ?? '');
         _setInput('inp_agent_workspace_dir', s.agent_workspace_dir?.value ?? './agent-workspace');
@@ -5013,6 +5377,9 @@
         orchestrator_model:        document.getElementById('sel_orchestrator_model').value,
         executor_model:            document.getElementById('sel_executor_model').value,
         claude_model:              document.getElementById('inp_claude_model').value.trim(),
+        anthropic_api_key:         document.getElementById('inp_anthropic_api_key').value.trim(),
+        escalation_enabled:        document.getElementById('chk_escalation_enabled').checked ? 'true' : 'false',
+        streaming_enabled:         document.getElementById('chk_streaming_enabled').checked ? 'true' : 'false',
         gemma_base_url:            document.getElementById('inp_gemma_base_url').value.trim(),
         qwen_base_url:             document.getElementById('inp_qwen_base_url').value.trim(),
         escalation_threshold:      document.getElementById('rng_escalation_threshold').value,

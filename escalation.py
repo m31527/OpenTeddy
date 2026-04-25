@@ -43,7 +43,48 @@ class EscalationAgent:
 
     def __init__(self, tracker: Tracker) -> None:
         self.tracker = tracker
-        self._claude = anthropic.AsyncAnthropic(api_key=config.anthropic_api_key)
+        self._claude_key: str | None = None
+        self._claude: anthropic.AsyncAnthropic | None = None
+
+    @property
+    def _client(self) -> anthropic.AsyncAnthropic:
+        # Lazily (re)build the Anthropic client whenever the configured
+        # key changes — the Settings UI hot-reloads config.anthropic_api_key
+        # via reload_from_store, and we want subsequent escalations to
+        # pick that up without restarting the server.
+        # IMPORTANT: pass None (not "") when no key is configured. The
+        # SDK treats "" as "set but invalid" and throws "Could not
+        # resolve authentication method"; None lets it fall back to the
+        # ANTHROPIC_API_KEY env var (or fail with a clearer error).
+        key = config.anthropic_api_key or None
+        if self._claude is None or self._claude_key != key:
+            self._claude = anthropic.AsyncAnthropic(api_key=key)
+            self._claude_key = key
+        return self._claude
+
+    @staticmethod
+    def _missing_key_message() -> str:
+        return (
+            "Claude API key is not configured. Open Settings → Model Settings "
+            "→ Claude API Key and paste a key from console.anthropic.com, "
+            "or enable Local-Only Mode for this session to skip escalation."
+        )
+
+    @staticmethod
+    def _disabled_message() -> str:
+        return (
+            "Claude escalation is disabled. Toggle Settings → Model Settings → "
+            "Allow Claude escalation back ON to let Claude resolve hard "
+            "subtasks, or accept the local-only result."
+        )
+
+    def _escalation_blocked(self) -> str | None:
+        """Return a friendly message if escalation should not run, else None."""
+        if not config.escalation_enabled:
+            return self._disabled_message()
+        if not (config.anthropic_api_key or "").strip():
+            return self._missing_key_message()
+        return None
 
     async def resolve(self, subtask: SubTask, context: Dict) -> SubTask:
         """
@@ -80,8 +121,19 @@ class EscalationAgent:
             "Please provide the correct, complete answer."
         )
 
+        # Pre-flight: bail with a friendly message if escalation is off
+        # globally OR no API key is configured. Either way we fail fast
+        # rather than letting the SDK error bubble up.
+        block_msg = self._escalation_blocked()
+        if block_msg:
+            subtask.error = block_msg
+            subtask.status = TaskStatus.FAILED
+            subtask.completed_at = datetime.utcnow()
+            await self.tracker.update_subtask(subtask)
+            return subtask
+
         try:
-            response = await self._claude.messages.create(
+            response = await self._client.messages.create(
                 model=config.claude_model,
                 max_tokens=2048,
                 system=system_prompt,
@@ -227,9 +279,18 @@ class EscalationAgent:
             task_id, len(subtasks),
         )
 
+        block_msg = self._escalation_blocked()
+        if block_msg:
+            return {
+                "success":    False,
+                "summary":    block_msg,
+                "tools_used": [],
+                "turns":      0,
+            }
+
         for turn in range(max_turns):
             try:
-                response = await self._claude.messages.create(
+                response = await self._client.messages.create(
                     model=config.claude_model,
                     max_tokens=4096,
                     system=system,
@@ -400,8 +461,15 @@ class EscalationAgent:
             "Write a concise, well-structured final summary that directly answers "
             "the original goal."
         )
+        # Summary synthesis is best-effort — without a key (or with
+        # escalation disabled) we just glue the sub-results together
+        # rather than crashing the whole task.
+        block_msg = self._escalation_blocked()
+        if block_msg:
+            return f"Summary:\n{numbered}\n\n({block_msg})"
+
         try:
-            response = await self._claude.messages.create(
+            response = await self._client.messages.create(
                 model=config.claude_model,
                 max_tokens=1024,
                 messages=[{"role": "user", "content": prompt}],

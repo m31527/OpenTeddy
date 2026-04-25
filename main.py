@@ -323,11 +323,63 @@ async def fs_browse(path: Optional[str] = None, show_hidden: bool = False) -> di
     ]
 
     return {
-        "path":    target,
-        "parent":  parent,
-        "entries": entries,
-        "roots":   roots,
+        "path":      target,
+        "parent":    parent,
+        "entries":   entries,
+        "roots":     roots,
+        "writable":  os.access(target, os.W_OK),
     }
+
+
+@app.post("/fs/mkdir")
+async def fs_mkdir(body: dict) -> dict:
+    """Create a new directory inside the picker's allowed roots.
+
+    Mirrors the allowlist/sandbox of /fs/browse so the picker can offer
+    "+ New folder" without exposing arbitrary mkdir to the browser.
+    Body: {"parent": str, "name": str}
+    Returns: {"ok": bool, "path": str (absolute path of new dir)}
+    """
+    parent = (body.get("parent") or "").strip()
+    name   = (body.get("name") or "").strip()
+    if not parent or not name:
+        raise HTTPException(status_code=400, detail="parent and name are required")
+    # Block path-traversal in the new folder name.
+    if "/" in name or name in {".", ".."} or name.startswith("."):
+        raise HTTPException(
+            status_code=400,
+            detail="folder name cannot contain '/' or start with '.'",
+        )
+
+    home = os.path.abspath(os.path.expanduser("~"))
+    project_root = os.path.dirname(os.path.abspath(__file__))
+    allowed_roots = [
+        home,
+        project_root,
+        "/tmp",
+        "/var/tmp",
+        os.path.abspath(config.agent_workspace_dir),
+    ]
+    seen: set[str] = set()
+    allowed_roots = [r for r in allowed_roots if not (r in seen or seen.add(r))]
+
+    parent_abs = os.path.abspath(os.path.expanduser(parent))
+    if not any(parent_abs == r or parent_abs.startswith(r + os.sep) for r in allowed_roots):
+        raise HTTPException(status_code=403, detail=f"parent outside allowed roots: {parent_abs}")
+    if not os.path.isdir(parent_abs):
+        raise HTTPException(status_code=404, detail=f"parent not found: {parent_abs}")
+
+    target = os.path.join(parent_abs, name)
+    if os.path.exists(target):
+        raise HTTPException(status_code=409, detail=f"already exists: {target}")
+    try:
+        os.makedirs(target, exist_ok=False)
+    except PermissionError:
+        raise HTTPException(status_code=403, detail=f"permission denied: {target}")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    return {"ok": True, "path": target}
 
 
 @app.get("/files")

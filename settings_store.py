@@ -37,6 +37,29 @@ SETTINGS_META: dict[str, dict[str, Any]] = {
         "description": "Anthropic Claude model for escalation and skill generation",
         "type":        "text",
     },
+    "anthropic_api_key": {
+        "label":       "Claude API Key",
+        "description": "Anthropic API key. Stored in the settings DB; "
+                        "overrides the ANTHROPIC_API_KEY env var when set. "
+                        "Get one at console.anthropic.com → Settings → API Keys.",
+        "type":        "secret",
+    },
+    "escalation_enabled": {
+        "label":       "Allow Claude escalation",
+        "description": "When OFF, low-confidence / timeout / failure-signal "
+                        "triggers do NOT call Claude — the agent marks the "
+                        "subtask FAILED and surfaces the local error. Use "
+                        "this to enforce a strictly-local run.",
+        "type":        "bool",
+    },
+    "streaming_enabled": {
+        "label":       "Stream model output",
+        "description": "Stream LLM tokens to the chat as they generate. "
+                        "Big perceived-latency win — the answer appears word "
+                        "by word instead of all at once after the model "
+                        "finishes. Disable for one-shot responses (legacy).",
+        "type":        "bool",
+    },
     "gemma_base_url": {
         "label":       "Orchestrator Ollama URL",
         "description": "Base URL of the Ollama instance serving the orchestrator",
@@ -190,6 +213,9 @@ def _defaults_from_config() -> dict[str, str]:
         "orchestrator_model":       config.gemma_model,
         "executor_model":           config.qwen_model,
         "claude_model":             config.claude_model,
+        "anthropic_api_key":        config.anthropic_api_key,
+        "escalation_enabled":       "true" if config.escalation_enabled else "false",
+        "streaming_enabled":        "true" if config.streaming_enabled else "false",
         "gemma_base_url":           config.gemma_base_url,
         "qwen_base_url":            config.qwen_base_url,
         "escalation_threshold":     str(config.escalation_confidence_threshold),
@@ -374,6 +400,20 @@ class SettingsStore:
             config.qwen_model = settings["executor_model"]
         if "claude_model" in settings:
             config.claude_model = settings["claude_model"]
+        if settings.get("anthropic_api_key"):
+            # Empty string ⇒ keep the env-var fallback. Only overwrite
+            # when the user actually saved a key in the UI.
+            config.anthropic_api_key = settings["anthropic_api_key"]
+        if "escalation_enabled" in settings:
+            config.escalation_enabled = (
+                str(settings["escalation_enabled"]).strip().lower()
+                not in {"0", "false", "no", "off", ""}
+            )
+        if "streaming_enabled" in settings:
+            config.streaming_enabled = (
+                str(settings["streaming_enabled"]).strip().lower()
+                not in {"0", "false", "no", "off", ""}
+            )
         if "gemma_base_url" in settings:
             config.gemma_base_url = settings["gemma_base_url"]
         if "qwen_base_url" in settings:

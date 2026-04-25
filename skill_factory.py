@@ -56,8 +56,21 @@ class SkillFactory:
 
     def __init__(self, tracker: Tracker) -> None:
         self.tracker = tracker
-        self._claude = anthropic.AsyncAnthropic(api_key=config.anthropic_api_key)
+        self._claude_key: str | None = None
+        self._claude: anthropic.AsyncAnthropic | None = None
         self._loaded: Dict[str, Any] = {}   # name → callable
+
+    @property
+    def _client(self) -> anthropic.AsyncAnthropic:
+        # Same pattern as EscalationAgent: rebuild the Anthropic client
+        # whenever config.anthropic_api_key changes via the settings UI.
+        # Pass None (not "") when no key is configured — see escalation.py
+        # for why ("" makes the SDK throw before a fallback is attempted).
+        key = config.anthropic_api_key or None
+        if self._claude is None or self._claude_key != key:
+            self._claude = anthropic.AsyncAnthropic(api_key=key)
+            self._claude_key = key
+        return self._claude
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -141,13 +154,18 @@ class SkillFactory:
     async def _generate_code(
         self, name: str, description: str, input_keys: list
     ) -> str:
+        if not (config.anthropic_api_key or "").strip():
+            raise RuntimeError(
+                "Claude API key is not configured. Set one in Settings → "
+                "Model Settings → Claude API Key, then retry skill generation."
+            )
         system = _GENERATION_SYSTEM.format(max_tokens=config.max_skill_tokens)
         user = _GENERATION_USER.format(
             name=name,
             description=description,
             input_keys=", ".join(input_keys) if input_keys else "any",
         )
-        message = await self._claude.messages.create(
+        message = await self._client.messages.create(
             model=config.claude_model,
             max_tokens=config.max_skill_tokens,
             system=system,

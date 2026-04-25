@@ -113,6 +113,23 @@ class Config:
     claude_model: str = field(
         default_factory=lambda: os.getenv("CLAUDE_MODEL", "claude-opus-4-6")
     )
+    # Master kill-switch for Claude escalation. When False, low-confidence
+    # / timeout / failure-signal triggers do NOT call Claude — the agent
+    # marks the subtask FAILED and surfaces the local error to the user.
+    # Per-session "Local-only" mode still wins when set, but this flips
+    # the global default. Default True so existing behaviour is preserved.
+    escalation_enabled: bool = field(
+        default_factory=lambda: os.getenv("ESCALATION_ENABLED", "true").strip().lower()
+        not in {"0", "false", "no", "off"}
+    )
+    # Stream LLM tokens to the chat as they generate. Massive perceived
+    # latency win on small thinking models — the user sees the answer
+    # forming instead of staring at a spinner. When OFF, the server
+    # waits for the full response and returns it in one shot (legacy).
+    streaming_enabled: bool = field(
+        default_factory=lambda: os.getenv("STREAMING_ENABLED", "true").strip().lower()
+        not in {"0", "false", "no", "off"}
+    )
 
     # ── Database ─────────────────────────────────────────────────────────────
     db_path: str = field(

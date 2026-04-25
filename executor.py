@@ -471,11 +471,12 @@ class Executor:
                 return f"{tname}::{targs!r}"
 
         for round_idx in range(_MAX_TOOL_ROUNDS):
+            stream_on = bool(getattr(config, "streaming_enabled", True))
             payload: Dict[str, Any] = {
                 "model": config.qwen_model,
                 "messages": messages,
                 "system": system_prompt,
-                "stream": False,
+                "stream": stream_on,
                 "options": {
                     "temperature": float(getattr(config, "qwen_temperature", 0.2)),
                     "num_predict": config.qwen_max_tokens,
@@ -485,12 +486,72 @@ class Executor:
                 payload["tools"] = tools
 
             try:
-                resp = await self._http.post(
-                    f"{config.qwen_base_url}/api/chat",
-                    json=payload,
-                )
-                resp.raise_for_status()
-                data = resp.json()
+                if stream_on:
+                    # Stream NDJSON chunks from Ollama, push each text
+                    # delta onto the WebSocket so the chat bubble fills
+                    # in word-by-word. We accumulate the full content +
+                    # tool_calls so the rest of the loop can consume the
+                    # response identically to the non-streaming path.
+                    acc_content   = ""
+                    acc_thinking  = ""
+                    acc_tool_calls: List[Dict[str, Any]] = []
+                    last_chunk: Dict[str, Any] = {}
+                    async with self._http.stream(
+                        "POST",
+                        f"{config.qwen_base_url}/api/chat",
+                        json=payload,
+                    ) as resp:
+                        resp.raise_for_status()
+                        async for line in resp.aiter_lines():
+                            if not line.strip():
+                                continue
+                            try:
+                                chunk = json.loads(line)
+                            except Exception:  # noqa: BLE001
+                                continue
+                            msg = chunk.get("message") or {}
+                            d_content  = msg.get("content")  or ""
+                            d_thinking = msg.get("thinking") or ""
+                            if d_content:
+                                acc_content += d_content
+                                await self._push_event({
+                                    "type":       "chat.stream.delta",
+                                    "task_id":    task_id,
+                                    "subtask_id": subtask_id,
+                                    "text":       d_content,
+                                })
+                            if d_thinking:
+                                acc_thinking += d_thinking
+                            tcs = msg.get("tool_calls") or []
+                            if tcs:
+                                acc_tool_calls.extend(tcs)
+                            if chunk.get("done"):
+                                last_chunk = chunk
+                    # Re-shape into the same structure non-streaming returned.
+                    data = {
+                        "message": {
+                            "content":    acc_content,
+                            "thinking":   acc_thinking,
+                            "tool_calls": acc_tool_calls,
+                        },
+                        "prompt_eval_count": last_chunk.get("prompt_eval_count", 0),
+                        "eval_count":        last_chunk.get("eval_count", 0),
+                        "done_reason":       last_chunk.get("done_reason"),
+                    }
+                    # Mark the stream as complete so the UI can stop the
+                    # word-by-word painter and lock in the final markdown.
+                    await self._push_event({
+                        "type":       "chat.stream.end",
+                        "task_id":    task_id,
+                        "subtask_id": subtask_id,
+                    })
+                else:
+                    resp = await self._http.post(
+                        f"{config.qwen_base_url}/api/chat",
+                        json=payload,
+                    )
+                    resp.raise_for_status()
+                    data = resp.json()
             except Exception as exc:  # noqa: BLE001
                 logger.error("Qwen chat call failed (round %d): %s", round_idx, exc)
                 return f"Executor error: {exc}", 0.0, None, None
@@ -516,7 +577,13 @@ class Executor:
 
             # ── No tool calls → final answer ──────────────────────────────────
             if not tool_calls:
-                raw_text = message.get("content", "")
+                # `thinking` is the reasoning channel exposed by recent
+                # qwen3.5 / gemma4 / DeepSeek-style "thinking" models.
+                # When the model spends all its tokens reasoning before
+                # emitting `content`, content is empty but thinking has
+                # the answer. Fall back to thinking so we don't return
+                # "" and trip the empty-response → low-confidence loop.
+                raw_text = message.get("content") or message.get("thinking") or ""
                 return self._finalize_response(raw_text, objective_failure_seen)
 
             # ── Process tool calls ────────────────────────────────────────────
@@ -809,7 +876,8 @@ class Executor:
                 )
             except Exception:  # noqa: BLE001
                 pass
-            raw_text = _final_data.get("message", {}).get("content", "")
+            _final_msg = _final_data.get("message", {})
+            raw_text = _final_msg.get("content") or _final_msg.get("thinking") or ""
         except Exception as exc:  # noqa: BLE001
             return f"Executor error (forced final): {exc}", 0.0, None, None
 
