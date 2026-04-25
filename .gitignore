@@ -40,3 +40,9 @@ Thumbs.db
 .coverage
 htmlcov/
 .pytest_cache/
+
+# Landing page (separate repo)
+landing-page/
+
+# Desktop client (separate repo, not part of this repo)
+desktop/
