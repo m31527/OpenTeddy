@@ -15,6 +15,7 @@
   <!-- Chart.js for Analytic-mode charts rendered from ```chart JSON
        blocks in agent responses. UMD build ships the global `Chart`. -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <script src="/static/i18n.js"></script>
   <style>
     :root {
       --bg-primary:    #faf9f7;
@@ -2016,6 +2017,70 @@
         padding-right: 1rem;
       }
     }
+
+    /* ── Language Switcher ───────────────────────────────────────────────── */
+    .lang-btn {
+      background: transparent;
+      border: none;
+      color: var(--sidebar-muted);
+      cursor: pointer;
+      font-size: 0.8rem;
+      padding: 0.3rem 0.4rem;
+      border-radius: 6px;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.3rem;
+      font-family: inherit;
+      transition: background 0.1s, color 0.1s;
+      white-space: nowrap;
+    }
+    .lang-btn:hover { background: var(--sidebar-hover); color: var(--sidebar-text); }
+    .lang-btn .lang-btn-flag { font-size: 0.9rem; }
+
+    .lang-modal-backdrop {
+      position: fixed; inset: 0; z-index: 2000;
+      background: rgba(0,0,0,0.45);
+      display: flex; align-items: center; justify-content: center;
+    }
+    .lang-modal-box {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      width: min(520px, 94vw);
+      max-height: 80vh;
+      display: flex; flex-direction: column;
+      overflow: hidden;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.18);
+    }
+    .lang-modal-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 0.9rem 1.1rem 0.7rem;
+      font-weight: 600; font-size: 0.95rem;
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    .lang-modal-close {
+      background: transparent; border: none; color: var(--text-secondary);
+      cursor: pointer; font-size: 1rem; padding: 0.2rem 0.4rem; border-radius: 6px;
+    }
+    .lang-modal-close:hover { background: var(--bg-secondary); }
+    .lang-grid {
+      display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+      gap: 0.35rem; padding: 0.85rem; overflow-y: auto;
+    }
+    .lang-item {
+      display: flex; align-items: center; gap: 0.55rem;
+      background: var(--bg-secondary); border: 1.5px solid transparent;
+      border-radius: 10px; padding: 0.55rem 0.7rem;
+      cursor: pointer; font-family: inherit; font-size: 0.82rem;
+      transition: border-color 0.12s, background 0.12s;
+      text-align: left;
+    }
+    .lang-item:hover { background: var(--bg-primary); border-color: var(--border); }
+    .lang-item.lang-active { border-color: var(--text-primary); background: var(--bg-primary); }
+    .lang-flag { font-size: 1.1rem; flex-shrink: 0; }
+    .lang-name { font-weight: 500; color: var(--text-primary); }
+    .lang-sub { font-size: 0.72rem; color: var(--text-secondary); margin-left: auto; }
   </style>
 </head>
 <body>
@@ -2036,11 +2101,11 @@
         </div>
         <button class="new-chat-btn" onclick="createNewSession()" title="New chat">
           <span class="plus-icon">+</span>
-          <span class="new-chat-label">New chat</span>
+          <span class="new-chat-label" data-i18n="new_chat">New chat</span>
         </button>
       </div>
 
-      <div class="sidebar-section-label">Chats</div>
+      <div class="sidebar-section-label" data-i18n="section_chats">Chats</div>
       <div class="session-list-wrap">
         <div class="session-list" id="sessionList">
           <!-- populated by loadSessions() -->
@@ -2049,16 +2114,20 @@
 
       <div class="sidebar-footer">
         <nav class="sidebar-nav">
-          <button class="sidebar-nav-btn" data-tab="skills"   onclick="switchTab('skills')"   title="Skills"><span class="nav-icon">📚</span><span class="nav-label">Skills</span></button>
-          <button class="sidebar-nav-btn" data-tab="tools"    onclick="switchTab('tools')"    title="Tools"><span class="nav-icon">🔧</span><span class="nav-label">Tools</span></button>
-          <button class="sidebar-nav-btn" data-tab="memory"   onclick="switchTab('memory')"   title="Memory"><span class="nav-icon">🧠</span><span class="nav-label">Memory</span></button>
-          <button class="sidebar-nav-btn" data-tab="usage"    onclick="switchTab('usage')"    title="Usage"><span class="nav-icon">📊</span><span class="nav-label">Usage</span></button>
-          <button class="sidebar-nav-btn" data-tab="settings" onclick="switchTab('settings')" title="Settings"><span class="nav-icon">⚙️</span><span class="nav-label">Settings</span></button>
+          <button class="sidebar-nav-btn" data-tab="skills"   onclick="switchTab('skills')"   data-i18n-title="nav_skills"   title="Skills"><span class="nav-icon">📚</span><span class="nav-label" data-i18n="nav_skills">Skills</span></button>
+          <button class="sidebar-nav-btn" data-tab="tools"    onclick="switchTab('tools')"    data-i18n-title="nav_tools"    title="Tools"><span class="nav-icon">🔧</span><span class="nav-label" data-i18n="nav_tools">Tools</span></button>
+          <button class="sidebar-nav-btn" data-tab="memory"   onclick="switchTab('memory')"   data-i18n-title="nav_memory"   title="Memory"><span class="nav-icon">🧠</span><span class="nav-label" data-i18n="nav_memory">Memory</span></button>
+          <button class="sidebar-nav-btn" data-tab="usage"    onclick="switchTab('usage')"    data-i18n-title="nav_usage"    title="Usage"><span class="nav-icon">📊</span><span class="nav-label" data-i18n="nav_usage">Usage</span></button>
+          <button class="sidebar-nav-btn" data-tab="settings" onclick="switchTab('settings')" data-i18n-title="nav_settings" title="Settings"><span class="nav-icon">⚙️</span><span class="nav-label" data-i18n="nav_settings">Settings</span></button>
         </nav>
         <div class="sidebar-status">
-          <span id="wsBadge" class="ws-badge" title="WebSocket connection"></span>
-          <span id="wsLabel">Connecting…</span>
+          <span id="wsBadge" class="ws-badge" data-i18n-title="ws_badge_title" title="WebSocket connection"></span>
+          <span id="wsLabel" data-i18n="ws_connecting">Connecting…</span>
         </div>
+        <button class="lang-btn" onclick="__i18n.openLangSwitcher()" id="langBtn" data-i18n-title="lang_switcher_title" title="Language">
+          <span class="lang-btn-flag" id="langBtnFlag">🌐</span>
+          <span id="langBtnLabel"></span>
+        </button>
       </div>
     </aside>
 
@@ -2086,35 +2155,34 @@
             </button>
           </div>
           <button type="button" id="memoryBtn" class="mem-btn" onclick="clearSessionMemory()"
-            title="這個 session 累積的長期記憶數量（舊專案記憶可能干擾新任務 → 點一下清空）">
+            data-i18n-title="memory_title" title="Long-term memory in this session (click to clear)">
             <span>🧠</span><span id="memoryCount">—</span>
           </button>
           <button type="button" id="privacyBtn" class="mem-btn" onclick="togglePrivacy()"
-            title="點擊切換本地端模式 — 開啟後絕對不會把任務資料送到 Anthropic Claude API（auto escalation + Let Claude fix 都停用）。適合處理機敏資料。">
-            <span id="privacyIcon">🔓</span><span id="privacyLabel">Cloud</span>
+            data-i18n-title="privacy_title" title="Toggle local-only mode">
+            <span id="privacyIcon">🔓</span><span id="privacyLabel" data-i18n="privacy_cloud">Cloud</span>
           </button>
         </div>
         <div class="chat-layout">
           <div class="chat-messages" id="chatMessages">
-            <div class="msg-agent">
-              Hello! I'm OpenTeddy 🐩 Describe what you'd like me to do and I'll get started.
+            <div class="msg-agent" id="greetingMsg" data-i18n="greeting">
+              Hello! I'm OpenTeddy 🐩 This is a new session — describe what you'd like me to do.
             </div>
             <div id="ollamaNoModelsHint" class="ollama-hint" style="display:none">
               <div class="ollama-hint-head">
                 <span class="ollama-hint-emoji">💡</span>
-                <strong>沒偵測到 Ollama 模型</strong>
+                <strong id="ollamaHintTitle" data-i18n="ollama_hint_title">No Ollama models detected</strong>
                 <button type="button" class="ollama-hint-close"
                   onclick="dismissOllamaHint()" title="Dismiss">×</button>
               </div>
               <div class="ollama-hint-body">
-                <div>OpenTeddy 需要本地模型才能跑任務，建議先 pull 一個：</div>
+                <div id="ollamaHintBody" data-i18n="ollama_hint_body">OpenTeddy needs a local model to run tasks. Pull one first:</div>
                 <ul>
-                  <li><strong>DGX Spark（大顯存）</strong>：<code>qwen3:32b</code> 或 <code>gemma3:27b</code></li>
-                  <li><strong>Mac 16–24 GB RAM</strong>：<code>gemma3:4b</code>（輕量、速度快）</li>
+                  <li><strong>DGX Spark</strong>：<code>qwen3:32b</code> / <code>gemma3:27b</code></li>
+                  <li><strong>Mac 16–24 GB RAM</strong>：<code>gemma3:4b</code></li>
                 </ul>
-                <div class="ollama-hint-actions">
-                  在 terminal 執行 <code>ollama pull gemma3:4b</code>，
-                  或到 <a href="#" onclick="event.preventDefault();switchTab('settings')">Settings → Model Settings</a> 的「Pull New Model」欄位下載。
+                <div class="ollama-hint-actions" id="ollamaHintInstruction" data-i18n="ollama_hint_instruction">
+                  Run ollama pull gemma3:4b in terminal, or use Settings → Model Settings → Pull New Model.
                 </div>
               </div>
             </div>
@@ -2126,13 +2194,13 @@
                  folder-picker modal. Sits just above attachment chips
                  so it's visible whenever the user is about to send a
                  task. -->
-            <div class="workspace-bar" id="workspaceBar" title="這個 session 的工作目錄。點『Change…』改用其他資料夾（例如已存在的專案）。">
+            <div class="workspace-bar" id="workspaceBar" data-i18n-title="workspace_title" title="Working directory for this session.">
               <span class="workspace-bar-icon" id="workspaceBarIcon">📂</span>
-              <span class="workspace-bar-label">Working in:</span>
+              <span class="workspace-bar-label" data-i18n="working_in">Working in:</span>
               <span class="workspace-bar-path" id="workspaceBarPath">—</span>
               <span class="workspace-bar-meta" id="workspaceBarMeta"></span>
               <button type="button" class="workspace-bar-btn" id="workspaceBarBtn"
-                onclick="openWorkspacePicker()">Change…</button>
+                onclick="openWorkspacePicker()" data-i18n="change_workspace">Change…</button>
             </div>
 
             <!-- Attachment chips — populated as the user adds files via
@@ -2142,22 +2210,23 @@
 
             <div class="chat-input-row">
               <div class="priority-field">
-                <label>Priority</label>
+                <label data-i18n="priority_label">Priority</label>
                 <input type="number" id="priority" value="5" min="1" max="10" />
               </div>
-              <!-- Hidden file input, triggered by the + button.
-                   accept list covers typical Analytic data files. -->
               <input type="file" id="fileInput" multiple
                 accept=".csv,.tsv,.json,.xlsx,.xls,.txt,.md,.log,.yaml,.yml,.parquet"
                 onchange="onFilesPicked(event)" style="display:none">
               <button class="upload-btn" id="uploadBtn" type="button"
                 onclick="document.getElementById('fileInput').click()"
+                data-i18n-title="upload_title"
                 title="Attach files to this task (analytic mode: csv / xlsx / json etc.)">+</button>
               <div class="chat-input-wrap">
-                <textarea id="goal" rows="1" placeholder="Describe your task… (click ↑ to send)"
+                <textarea id="goal" rows="1"
+                  data-i18n-placeholder="goal_placeholder"
+                  placeholder="Describe your task… (click ↑ to send)"
                   onkeydown="handleGoalKey(event)"
                   oninput="this.style.height='auto';this.style.height=Math.min(this.scrollHeight,150)+'px'"></textarea>
-                <button class="send-btn" id="runBtn" onclick="onSendOrStop()" title="Send">↑</button>
+                <button class="send-btn" id="runBtn" onclick="onSendOrStop()" data-i18n-title="send_title" title="Send">↑</button>
               </div>
             </div>
           </div>
@@ -2174,29 +2243,29 @@
 
       <!-- ── SKILLS TAB ──────────────────────────────────────────────────── -->
       <div id="tab-skills" class="tab-panel">
-        <div class="panel-header"><h1>Skills</h1></div>
+        <div class="panel-header"><h1 data-i18n="panel_skills">Skills</h1></div>
         <div class="container">
           <div class="card">
-            <h2>Skills Library</h2>
+            <h2 data-i18n="skills_library">Skills Library</h2>
             <div style="margin-bottom:1rem">
-              <button class="btn-ghost" onclick="loadSkills()">Refresh</button>
+              <button class="btn-ghost" onclick="loadSkills()" data-i18n="btn_refresh">Refresh</button>
             </div>
             <div class="skills-grid" id="skillsGrid">
-              <div style="color:var(--text-muted);font-size:0.875rem">No skills loaded yet.</div>
+              <div style="color:var(--text-muted);font-size:0.875rem" data-i18n="no_skills">No skills loaded yet.</div>
             </div>
           </div>
           <div class="card">
-            <h2>Generate Skill Manually</h2>
+            <h2 data-i18n="generate_skill">Generate Skill Manually</h2>
             <div class="row">
               <div class="field">
-                <label>Skill name (snake_case)</label>
-                <input type="text" id="skillName" placeholder="e.g. web_search" />
+                <label data-i18n="skill_name_label">Skill name (snake_case)</label>
+                <input type="text" id="skillName" data-i18n-placeholder="skill_name_placeholder" placeholder="e.g. web_search" />
               </div>
               <div class="field" style="flex:2">
-                <label>Description</label>
-                <input type="text" id="skillDesc" placeholder="Searches the web and returns a summary" />
+                <label data-i18n="skill_desc_label">Description</label>
+                <input type="text" id="skillDesc" data-i18n-placeholder="skill_desc_placeholder" placeholder="Searches the web and returns a summary" />
               </div>
-              <button class="btn-primary" onclick="generateSkill()">Generate</button>
+              <button class="btn-primary" onclick="generateSkill()" data-i18n="btn_generate">Generate</button>
             </div>
           </div>
         </div>
@@ -2204,15 +2273,15 @@
 
       <!-- ── TOOLS TAB ───────────────────────────────────────────────────── -->
       <div id="tab-tools" class="tab-panel">
-        <div class="panel-header"><h1>Tools</h1></div>
+        <div class="panel-header"><h1 data-i18n="panel_tools">Tools</h1></div>
         <div class="container">
           <div class="card">
-            <h2>Registered Tools</h2>
+            <h2 data-i18n="tools_registered">Registered Tools</h2>
             <div style="margin-bottom:1rem">
-              <button class="btn-ghost" onclick="loadTools()">Refresh</button>
+              <button class="btn-ghost" onclick="loadTools()" data-i18n="btn_refresh">Refresh</button>
             </div>
             <div class="tools-grid" id="toolsGrid">
-              <div style="color:var(--text-muted);font-size:0.875rem">Loading tools…</div>
+              <div style="color:var(--text-muted);font-size:0.875rem" data-i18n="tools_loading">Loading tools…</div>
             </div>
           </div>
         </div>
@@ -2220,17 +2289,17 @@
 
       <!-- ── MEMORY TAB ──────────────────────────────────────────────────── -->
       <div id="tab-memory" class="tab-panel">
-        <div class="panel-header"><h1>Memory</h1></div>
+        <div class="panel-header"><h1 data-i18n="panel_memory">Memory</h1></div>
         <div class="container">
           <div class="card">
-            <h2>Long-term Memory</h2>
+            <h2 data-i18n="memory_heading">Long-term Memory</h2>
             <div style="display:flex;gap:0.75rem;margin-bottom:1rem;align-items:center;flex-wrap:wrap">
-              <button class="btn-ghost" onclick="loadMemory()">Refresh</button>
-              <button class="btn-danger btn-sm" onclick="confirmClearMemory()">Clear All</button>
+              <button class="btn-ghost" onclick="loadMemory()" data-i18n="btn_refresh">Refresh</button>
+              <button class="btn-danger btn-sm" onclick="confirmClearMemory()" data-i18n="btn_clear_all">Clear All</button>
               <span id="memoryStatus" style="color:var(--text-muted);font-size:0.8rem;margin-left:auto"></span>
             </div>
             <ul class="memory-list" id="memoryList">
-              <li style="color:var(--text-muted);font-size:0.875rem;padding:1rem 0">
+              <li style="color:var(--text-muted);font-size:0.875rem;padding:1rem 0" data-i18n="no_memories">
                 No memories yet — run a task to populate memory.
               </li>
             </ul>
@@ -2245,43 +2314,41 @@
 
       <!-- ── USAGE TAB ───────────────────────────────────────────────────── -->
       <div id="tab-usage" class="tab-panel">
-        <div class="panel-header"><h1>Usage</h1></div>
+        <div class="panel-header"><h1 data-i18n="panel_usage">Usage</h1></div>
         <div class="container">
           <div class="card">
-            <h2>Usage Overview</h2>
+            <h2 data-i18n="usage_overview">Usage Overview</h2>
             <div class="stats-grid" id="statsGrid">
-              <div class="stat-card"><div class="stat-label">Total Calls</div><div class="stat-value" id="statTotalCalls">—</div></div>
-              <div class="stat-card"><div class="stat-label">Commercial (Anthropic)</div><div class="stat-value yellow" id="statCommCalls">—</div></div>
-              <div class="stat-card"><div class="stat-label">Total Cost</div><div class="stat-value green" id="statTotalCost">—</div></div>
-              <div class="stat-card"><div class="stat-label">Commercial Cost</div><div class="stat-value yellow" id="statCommCost">—</div></div>
-              <div class="stat-card"><div class="stat-label">Tokens In</div><div class="stat-value" id="statTokensIn">—</div></div>
-              <div class="stat-card"><div class="stat-label">Tokens Out</div><div class="stat-value" id="statTokensOut">—</div></div>
-              <div class="stat-card"><div class="stat-label">Escalations</div><div class="stat-value purple" id="statEscalations">—</div></div>
+              <div class="stat-card"><div class="stat-label" data-i18n="stat_total_calls">Total Calls</div><div class="stat-value" id="statTotalCalls">—</div></div>
+              <div class="stat-card"><div class="stat-label" data-i18n="stat_commercial">Commercial (Anthropic)</div><div class="stat-value yellow" id="statCommCalls">—</div></div>
+              <div class="stat-card"><div class="stat-label" data-i18n="stat_total_cost">Total Cost</div><div class="stat-value green" id="statTotalCost">—</div></div>
+              <div class="stat-card"><div class="stat-label" data-i18n="stat_commercial_cost">Commercial Cost</div><div class="stat-value yellow" id="statCommCost">—</div></div>
+              <div class="stat-card"><div class="stat-label" data-i18n="stat_tokens_in">Tokens In</div><div class="stat-value" id="statTokensIn">—</div></div>
+              <div class="stat-card"><div class="stat-label" data-i18n="stat_tokens_out">Tokens Out</div><div class="stat-value" id="statTokensOut">—</div></div>
+              <div class="stat-card"><div class="stat-label" data-i18n="stat_escalations">Escalations</div><div class="stat-value purple" id="statEscalations">—</div></div>
             </div>
             <div class="chart-wrapper">
-              <h3>Daily Cost (last 30 days) — USD</h3>
+              <h3 data-i18n="daily_cost_title">Daily Cost (last 30 days) — USD</h3>
               <canvas id="usageChart"></canvas>
               <div id="chartEmpty" style="color:var(--text-muted);font-size:0.84rem;text-align:center;padding:1rem;display:none">
                 No cost data yet.
               </div>
             </div>
-            <button class="btn-ghost btn-sm" onclick="loadUsageSummary()">Refresh Stats</button>
+            <button class="btn-ghost btn-sm" onclick="loadUsageSummary()" data-i18n="btn_refresh_stats">Refresh Stats</button>
           </div>
 
           <div class="card">
-            <h2>Local Model Savings</h2>
+            <h2 data-i18n="savings_heading">Local Model Savings</h2>
             <div class="savings-card">
               <div>
-                <div class="savings-label">Estimated savings vs GPT-4 API</div>
+                <div class="savings-label" data-i18n="savings_label">Estimated savings vs GPT-4 API</div>
                 <div class="savings-amount" id="statSavings">—</div>
-                <div class="savings-sub" id="statSavingsSub">
-                  Running locally instead of paying per token.
-                </div>
+                <div class="savings-sub" id="statSavingsSub"></div>
               </div>
               <div class="savings-breakdown">
-                <div>Local calls: <b id="statLocalCalls">—</b></div>
-                <div>Tokens in: <b id="statLocalTokensIn">—</b></div>
-                <div>Tokens out: <b id="statLocalTokensOut">—</b></div>
+                <div><span data-i18n="local_calls_label">Local calls:</span> <b id="statLocalCalls">—</b></div>
+                <div><span data-i18n="local_tokens_in_label">Tokens in:</span> <b id="statLocalTokensIn">—</b></div>
+                <div><span data-i18n="local_tokens_out_label">Tokens out:</span> <b id="statLocalTokensOut">—</b></div>
                 <div style="color:var(--text-muted);font-size:0.7rem;margin-top:0.2rem">
                   GPT-4 rate: $30 / $60 per 1M tok
                 </div>
@@ -2290,44 +2357,44 @@
           </div>
 
           <div class="card">
-            <h2>Usage Records</h2>
+            <h2 data-i18n="usage_records">Usage Records</h2>
             <div class="usage-filters">
               <div class="field">
-                <label>Provider</label>
+                <label data-i18n="filter_provider">Provider</label>
                 <select id="filterProvider">
-                  <option value="">All Providers</option>
+                  <option value="" data-i18n="filter_all_providers">All Providers</option>
                   <option value="anthropic">Anthropic</option>
                   <option value="ollama">Ollama</option>
                 </select>
               </div>
               <div class="field">
-                <label>Date From</label>
+                <label data-i18n="filter_date_from">Date From</label>
                 <input type="date" id="filterDateFrom" />
               </div>
               <div class="field">
-                <label>Date To</label>
+                <label data-i18n="filter_date_to">Date To</label>
                 <input type="date" id="filterDateTo" />
               </div>
-              <button class="btn-primary" onclick="loadUsageRecords(1)" style="align-self:flex-end">Filter</button>
-              <button class="btn-ghost" onclick="clearUsageFilters()" style="align-self:flex-end">Reset</button>
+              <button class="btn-primary" onclick="loadUsageRecords(1)" style="align-self:flex-end" data-i18n="btn_filter">Filter</button>
+              <button class="btn-ghost" onclick="clearUsageFilters()" style="align-self:flex-end" data-i18n="btn_reset">Reset</button>
             </div>
             <div class="usage-table-wrap">
               <table>
                 <thead>
                   <tr>
-                    <th>Time</th><th>Model</th><th>Provider</th>
-                    <th>Tokens In</th><th>Tokens Out</th><th>Cost (USD)</th><th>Task</th>
+                    <th data-i18n="col_time">Time</th><th data-i18n="col_model">Model</th><th data-i18n="col_provider">Provider</th>
+                    <th data-i18n="col_tokens_in">Tokens In</th><th data-i18n="col_tokens_out">Tokens Out</th><th data-i18n="col_cost">Cost (USD)</th><th data-i18n="col_task">Task</th>
                   </tr>
                 </thead>
                 <tbody id="usageTableBody">
-                  <tr><td colspan="7" style="color:var(--text-muted);text-align:center;padding:1.5rem">No records yet.</td></tr>
+                  <tr><td colspan="7" style="color:var(--text-muted);text-align:center;padding:1.5rem" data-i18n="no_records">No records yet.</td></tr>
                 </tbody>
               </table>
             </div>
             <div class="pagination" id="usagePagination">
-              <button id="usagePrevBtn" class="btn-ghost btn-sm" onclick="usagePage(-1)">← Prev</button>
+              <button id="usagePrevBtn" class="btn-ghost btn-sm" onclick="usagePage(-1)" data-i18n="btn_prev">← Prev</button>
               <span class="page-info" id="usagePageInfo"></span>
-              <button id="usageNextBtn" class="btn-ghost btn-sm" onclick="usagePage(1)">Next →</button>
+              <button id="usageNextBtn" class="btn-ghost btn-sm" onclick="usagePage(1)" data-i18n="btn_next">Next →</button>
             </div>
           </div>
         </div>
@@ -2335,55 +2402,55 @@
 
       <!-- ── SETTINGS TAB ─────────────────────────────────────────────────── -->
       <div id="tab-settings" class="tab-panel">
-        <div class="panel-header"><h1>Settings</h1></div>
+        <div class="panel-header"><h1 data-i18n="panel_settings">Settings</h1></div>
         <div class="container">
           <div class="card">
 
             <div class="settings-section">
-              <h3 onclick="toggleSettingsSection(this)">Model Settings</h3>
+              <h3 onclick="toggleSettingsSection(this)" data-i18n="model_settings">Model Settings</h3>
               <div class="settings-section-body">
               <div class="ollama-status">
                 <span id="ollamaDot" class="ollama-dot"></span>
-                <span id="ollamaLabel" class="ollama-label">Checking…</span>
+                <span id="ollamaLabel" class="ollama-label" data-i18n="ollama_status_checking">Checking…</span>
                 <span id="ollamaUrl" class="ollama-url"></span>
               </div>
-              <div style="font-size:0.76rem;color:var(--text-muted);margin-bottom:0.5rem;font-weight:500">Installed Models</div>
+              <div style="font-size:0.76rem;color:var(--text-muted);margin-bottom:0.5rem;font-weight:500" data-i18n="installed_models">Installed Models</div>
               <div class="model-list" id="modelList">
-                <div style="color:var(--text-muted);font-size:0.82rem">Loading…</div>
+                <div style="color:var(--text-muted);font-size:0.82rem" data-i18n="ollama_loading">Loading…</div>
               </div>
               <div class="row" style="margin-bottom:0.85rem">
                 <div class="field">
-                  <label>Orchestrator Model (Gemma)</label>
-                  <select id="sel_orchestrator_model"><option value="">⚠️ Ollama offline</option></select>
+                  <label data-i18n="orchestrator_label">Orchestrator Model (Gemma)</label>
+                  <select id="sel_orchestrator_model"><option value="" data-i18n="ollama_offline">⚠️ Ollama offline</option></select>
                 </div>
                 <div class="field">
-                  <label>Executor Model (Qwen)</label>
-                  <select id="sel_executor_model"><option value="">⚠️ Ollama offline</option></select>
+                  <label data-i18n="executor_label">Executor Model (Qwen)</label>
+                  <select id="sel_executor_model"><option value="" data-i18n="ollama_offline">⚠️ Ollama offline</option></select>
                 </div>
               </div>
               <div class="row" style="margin-bottom:0.85rem">
                 <div class="field">
-                  <label>Claude Model (Escalation)</label>
-                  <input type="text" id="inp_claude_model" placeholder="claude-opus-4-6" />
+                  <label data-i18n="claude_model_label">Claude Model (Escalation)</label>
+                  <input type="text" id="inp_claude_model" data-i18n-placeholder="claude_model_placeholder" placeholder="claude-opus-4-6" />
                 </div>
               </div>
               <div class="row" style="margin-bottom:1.25rem">
                 <div class="field">
-                  <label>Orchestrator Ollama URL</label>
-                  <input type="text" id="inp_gemma_base_url" placeholder="http://localhost:11434" />
+                  <label data-i18n="gemma_url_label">Orchestrator Ollama URL</label>
+                  <input type="text" id="inp_gemma_base_url" data-i18n-placeholder="gemma_url_placeholder" placeholder="http://localhost:11434" />
                 </div>
                 <div class="field">
-                  <label>Executor Ollama URL</label>
-                  <input type="text" id="inp_qwen_base_url" placeholder="http://localhost:11434" />
+                  <label data-i18n="qwen_url_label">Executor Ollama URL</label>
+                  <input type="text" id="inp_qwen_base_url" data-i18n-placeholder="qwen_url_placeholder" placeholder="http://localhost:11434" />
                 </div>
               </div>
-              <div style="font-size:0.76rem;color:var(--text-muted);margin-bottom:0.5rem;font-weight:500">Pull New Model</div>
+              <div style="font-size:0.76rem;color:var(--text-muted);margin-bottom:0.5rem;font-weight:500" data-i18n="pull_model_heading">Pull New Model</div>
               <div class="pull-row">
                 <div class="field">
-                  <label>Model name (e.g. llama3:8b)</label>
-                  <input type="text" id="pullModelName" placeholder="gemma3:12b" />
+                  <label data-i18n="pull_model_label">Model name (e.g. llama3:8b)</label>
+                  <input type="text" id="pullModelName" data-i18n-placeholder="pull_model_placeholder" placeholder="gemma3:12b" />
                 </div>
-                <button class="btn-primary" onclick="pullModel()" id="pullBtn">⬇ Pull</button>
+                <button class="btn-primary" onclick="pullModel()" id="pullBtn" data-i18n="btn_pull">⬇ Pull</button>
               </div>
               <div class="progress-wrap" id="pullProgress">
                 <div class="progress-label">
@@ -2398,35 +2465,30 @@
             </div>
 
             <div class="settings-section collapsed">
-              <h3 onclick="toggleSettingsSection(this)">Agent Workspace</h3>
+              <h3 onclick="toggleSettingsSection(this)" data-i18n="agent_workspace">Agent Workspace</h3>
               <div class="settings-section-body">
               <div class="row" style="margin-bottom:0.25rem">
                 <div class="field" style="flex:2">
-                  <label>Workspace Directory (Code / Analytic 模式的預設 cwd)</label>
-                  <input type="text" id="inp_agent_workspace_dir" placeholder="./agent-workspace" />
+                  <label data-i18n="workspace_dir_label">Workspace Directory (default cwd for Code / Analytic mode)</label>
+                  <input type="text" id="inp_agent_workspace_dir" data-i18n-placeholder="workspace_dir_placeholder" placeholder="./agent-workspace" />
                 </div>
-              </div>
-              <div style="font-size:0.72rem;color:var(--text-muted);line-height:1.5">
-                所有 shell 指令如果沒有指定 working_dir，都會預設在這個目錄底下執行
-                （<code>git clone</code>、<code>pip install</code>、檔案寫入等）。
-                相對路徑會從專案根目錄算起。目錄不存在時會自動建立。
               </div>
               </div>
             </div>
 
             <div class="settings-section collapsed">
-              <h3 onclick="toggleSettingsSection(this)">Parameter Settings</h3>
+              <h3 onclick="toggleSettingsSection(this)" data-i18n="param_settings">Parameter Settings</h3>
               <div class="settings-section-body">
               <div class="param-row">
                 <div class="param-field">
-                  <label>Escalation Confidence Threshold
+                  <label><span data-i18n="escalation_threshold">Escalation Confidence Threshold</span>
                     <span class="param-value" id="val_escalation_threshold">0.60</span>
                   </label>
                   <input type="range" id="rng_escalation_threshold" min="0" max="1" step="0.05" value="0.6"
                     oninput="document.getElementById('val_escalation_threshold').textContent=parseFloat(this.value).toFixed(2)" />
                 </div>
                 <div class="param-field">
-                  <label>Escalation Failure Limit
+                  <label><span data-i18n="escalation_failure_limit">Escalation Failure Limit</span>
                     <span class="param-value" id="val_escalation_failure_limit">3</span>
                   </label>
                   <input type="range" id="rng_escalation_failure_limit" min="1" max="10" step="1" value="3"
@@ -2435,14 +2497,14 @@
               </div>
               <div class="param-row">
                 <div class="param-field">
-                  <label>Gemma Max Tokens
+                  <label><span data-i18n="gemma_max_tokens">Gemma Max Tokens</span>
                     <span class="param-value" id="val_gemma_max_tokens">4096</span>
                   </label>
                   <input type="range" id="rng_gemma_max_tokens" min="512" max="8192" step="256" value="4096"
                     oninput="document.getElementById('val_gemma_max_tokens').textContent=this.value" />
                 </div>
                 <div class="param-field">
-                  <label>Qwen Max Tokens
+                  <label><span data-i18n="qwen_max_tokens">Qwen Max Tokens</span>
                     <span class="param-value" id="val_qwen_max_tokens">4096</span>
                   </label>
                   <input type="range" id="rng_qwen_max_tokens" min="512" max="8192" step="256" value="4096"
@@ -2451,48 +2513,46 @@
               </div>
               <div class="param-row">
                 <div class="param-field">
-                  <label>Skill Match Threshold
+                  <label><span data-i18n="skill_match_threshold">Skill Match Threshold</span>
                     <span class="param-value" id="val_skill_match_threshold">0.40</span>
                   </label>
                   <input type="range" id="rng_skill_match_threshold" min="0" max="1" step="0.05" value="0.4"
                     oninput="document.getElementById('val_skill_match_threshold').textContent=parseFloat(this.value).toFixed(2)" />
                 </div>
                 <div class="param-field">
-                  <label>Skill Promotion Threshold
+                  <label><span data-i18n="skill_promotion_threshold">Skill Promotion Threshold</span>
                     <span class="param-value" id="val_skill_promotion_threshold">5</span>
                   </label>
                   <input type="range" id="rng_skill_promotion_threshold" min="1" max="50" step="1" value="5"
                     oninput="document.getElementById('val_skill_promotion_threshold').textContent=this.value" />
                 </div>
               </div>
-
               <div class="param-row">
                 <div class="param-field">
-                  <label>Subtask Timeout (seconds) — wall-clock hard stop
+                  <label><span data-i18n="subtask_timeout">Subtask Timeout (seconds) — wall-clock hard stop</span>
                     <span class="param-value" id="val_subtask_timeout">900</span>
                   </label>
                   <input type="range" id="rng_subtask_timeout" min="60" max="3600" step="60" value="900"
                     oninput="document.getElementById('val_subtask_timeout').textContent=this.value" />
                 </div>
                 <div class="param-field">
-                  <label>Shell Silence Timeout (s) — kills commands with zero output for this long
+                  <label><span data-i18n="shell_silence_timeout">Shell Silence Timeout (s) — kills commands with zero output for this long</span>
                     <span class="param-value" id="val_shell_silence_timeout">90</span>
                   </label>
                   <input type="range" id="rng_shell_silence_timeout" min="0" max="600" step="10" value="90"
                     oninput="document.getElementById('val_shell_silence_timeout').textContent=this.value" />
                 </div>
               </div>
-
               <div class="param-row">
                 <div class="param-field">
-                  <label>Gemma Temperature
+                  <label><span data-i18n="gemma_temperature">Gemma Temperature</span>
                     <span class="param-value" id="val_gemma_temperature">0.10</span>
                   </label>
                   <input type="range" id="rng_gemma_temperature" min="0" max="1" step="0.05" value="0.1"
                     oninput="document.getElementById('val_gemma_temperature').textContent=parseFloat(this.value).toFixed(2)" />
                 </div>
                 <div class="param-field">
-                  <label>Qwen Temperature
+                  <label><span data-i18n="qwen_temperature">Qwen Temperature</span>
                     <span class="param-value" id="val_qwen_temperature">0.20</span>
                   </label>
                   <input type="range" id="rng_qwen_temperature" min="0" max="1" step="0.05" value="0.2"
@@ -2503,65 +2563,65 @@
             </div>
 
             <div class="settings-section collapsed">
-              <h3 onclick="toggleSettingsSection(this)">Notification Credentials</h3>
+              <h3 onclick="toggleSettingsSection(this)" data-i18n="notification_heading">Notification Credentials</h3>
               <div class="settings-section-body">
-              <div style="font-size:0.78rem;color:var(--text-secondary);margin-bottom:0.9rem;line-height:1.5">
-                讓 agent 可以呼叫 <code>telegram_send</code> / <code>email_send</code> 推播。
-                設定一次所有 session 共用。工具會在模型呼叫時讀取這裡的值；
-                留白時工具會回「未設定」錯誤，所以不影響其他功能。
+              <div style="font-size:0.78rem;color:var(--text-secondary);margin-bottom:0.9rem;line-height:1.5" data-i18n="notification_desc">
+                Enables the agent to push via telegram_send / email_send.
               </div>
 
-              <div style="font-size:0.76rem;color:var(--text-muted);margin-bottom:0.4rem;font-weight:500">Telegram</div>
+              <div style="font-size:0.76rem;color:var(--text-muted);margin-bottom:0.4rem;font-weight:500" data-i18n="telegram_heading">Telegram</div>
               <div class="row" style="margin-bottom:0.85rem">
                 <div class="field" style="flex:2">
-                  <label>Bot Token</label>
+                  <label data-i18n="telegram_token_label">Bot Token</label>
                   <input type="password" id="inp_telegram_bot_token"
+                    data-i18n-placeholder="telegram_token_placeholder"
                     placeholder="123456:ABC-DEF... (from @BotFather)" autocomplete="off" />
                 </div>
                 <div class="field">
-                  <label>Default Chat ID (optional)</label>
-                  <input type="text" id="inp_telegram_default_chat_id" placeholder="-1001234567890" />
+                  <label data-i18n="telegram_chat_id_label">Default Chat ID (optional)</label>
+                  <input type="text" id="inp_telegram_default_chat_id" data-i18n-placeholder="telegram_chat_id_placeholder" placeholder="-1001234567890" />
                 </div>
               </div>
 
-              <div style="font-size:0.76rem;color:var(--text-muted);margin:0.9rem 0 0.4rem;font-weight:500">SMTP / Email</div>
+              <div style="font-size:0.76rem;color:var(--text-muted);margin:0.9rem 0 0.4rem;font-weight:500" data-i18n="smtp_heading">SMTP / Email</div>
               <div class="row" style="margin-bottom:0.85rem">
                 <div class="field" style="flex:2">
-                  <label>SMTP Host</label>
-                  <input type="text" id="inp_smtp_host" placeholder="smtp.gmail.com" />
+                  <label data-i18n="smtp_host_label">SMTP Host</label>
+                  <input type="text" id="inp_smtp_host" data-i18n-placeholder="smtp_host_placeholder" placeholder="smtp.gmail.com" />
                 </div>
                 <div class="field" style="max-width:110px">
-                  <label>Port</label>
-                  <input type="number" id="inp_smtp_port" placeholder="587" min="1" max="65535" />
+                  <label data-i18n="smtp_port_label">Port</label>
+                  <input type="number" id="inp_smtp_port" data-i18n-placeholder="smtp_port_placeholder" placeholder="587" min="1" max="65535" />
                 </div>
               </div>
               <div class="row" style="margin-bottom:0.85rem">
                 <div class="field">
-                  <label>SMTP User</label>
-                  <input type="text" id="inp_smtp_user" placeholder="you@gmail.com" />
+                  <label data-i18n="smtp_user_label">SMTP User</label>
+                  <input type="text" id="inp_smtp_user" data-i18n-placeholder="smtp_user_placeholder" placeholder="you@gmail.com" />
                 </div>
                 <div class="field">
-                  <label>Password / App Password</label>
-                  <input type="password" id="inp_smtp_password" placeholder="••••••••" autocomplete="off" />
+                  <label data-i18n="smtp_password_label">Password / App Password</label>
+                  <input type="password" id="inp_smtp_password" data-i18n-placeholder="smtp_password_placeholder" placeholder="••••••••" autocomplete="off" />
                 </div>
                 <div class="field">
-                  <label>From Address (optional)</label>
-                  <input type="text" id="inp_smtp_from" placeholder="defaults to SMTP User" />
+                  <label data-i18n="smtp_from_label">From Address (optional)</label>
+                  <input type="text" id="inp_smtp_from" data-i18n-placeholder="smtp_from_placeholder" placeholder="defaults to SMTP User" />
                 </div>
               </div>
 
-              <div style="font-size:0.76rem;color:var(--text-muted);margin:0.9rem 0 0.4rem;font-weight:500">Webhook Endpoint</div>
+              <div style="font-size:0.76rem;color:var(--text-muted);margin:0.9rem 0 0.4rem;font-weight:500" data-i18n="webhook_heading">Webhook Endpoint</div>
               <div class="row" style="margin-bottom:0.3rem">
                 <div class="field" style="flex:2">
-                  <label>Webhook Secret (recommended)</label>
+                  <label data-i18n="webhook_secret_label">Webhook Secret (recommended)</label>
                   <input type="password" id="inp_webhook_secret"
+                    data-i18n-placeholder="webhook_secret_placeholder"
                     placeholder="Leave blank = open endpoint (NOT recommended)" autocomplete="off" />
                 </div>
                 <button type="button" class="btn-ghost" onclick="generateWebhookSecret()"
-                  style="align-self:flex-end">🔐 Generate random</button>
+                  style="align-self:flex-end" data-i18n="btn_generate_webhook">🔐 Generate random</button>
               </div>
-              <div id="webhookHint" style="font-size:0.72rem;color:var(--text-muted);line-height:1.5;margin-top:6px">
-                外部系統可 POST 到 <code>/webhooks/&lt;session_id&gt;</code> 觸發該 session。
+              <div id="webhookHint" style="font-size:0.72rem;color:var(--text-muted);line-height:1.5;margin-top:6px" data-i18n-html="webhook_note">
+                External systems can POST to /webhooks/&lt;session_id&gt; to trigger that session.
                 範例：
                 <pre style="background:var(--bg-secondary);padding:8px 10px;border-radius:6px;font-size:0.72rem;white-space:pre-wrap;margin-top:4px">curl -X POST http://localhost:8000/webhooks/YOUR_SESSION_ID \
   -H "Content-Type: application/json" \
@@ -2572,7 +2632,7 @@
             </div>
 
             <div class="settings-save-row">
-              <button class="btn-primary" onclick="saveSettings()" id="saveSettingsBtn">Save Settings</button>
+              <button class="btn-primary" onclick="saveSettings()" id="saveSettingsBtn" data-i18n="btn_save_settings">Save Settings</button>
               <span class="settings-msg" id="settingsMsg"></span>
             </div>
           </div>
@@ -2589,8 +2649,8 @@
        $HOME / OpenTeddy / /tmp / agent-workspace on the backend. -->
   <div id="fsPickerOverlay" onclick="maybeCloseFsPicker(event)">
     <div id="fsPickerModal" role="dialog" aria-labelledby="fsPickerTitle">
-      <button class="modal-close" onclick="closeWorkspacePicker()">✕ Close</button>
-      <h3 id="fsPickerTitle">📁 Choose workspace folder</h3>
+      <button class="modal-close" onclick="closeWorkspacePicker()" data-i18n="btn_close">✕ Close</button>
+      <h3 id="fsPickerTitle" data-i18n="fs_picker_title">📁 Choose workspace folder</h3>
 
       <div class="fs-breadcrumb" id="fsBreadcrumb"></div>
 
@@ -2602,22 +2662,22 @@
       </div>
 
       <div class="fs-path-row">
-        <label for="fsPathInput">Path</label>
+        <label for="fsPathInput" data-i18n="fs_path_label">Path</label>
         <input type="text" id="fsPathInput"
+          data-i18n-placeholder="fs_path_placeholder"
           placeholder="/absolute/path/to/folder"
           onkeydown="if(event.key==='Enter'){event.preventDefault();fsGoToInputPath();}" />
-        <button type="button" class="btn-ghost" onclick="fsGoToInputPath()">Go</button>
+        <button type="button" class="btn-ghost" onclick="fsGoToInputPath()" data-i18n="fs_go_btn">Go</button>
       </div>
 
-      <p class="fs-hint">
-        留空後按 <b>Clear override</b> 可移除這個 session 的專屬目錄，回到全域預設。
-        選資料夾後按 <b>Select this folder</b> 套用。
+      <p class="fs-hint" data-i18n="fs_hint">
+        Leave empty and click Clear override to remove this session's custom directory.
       </p>
 
       <div class="fs-actions">
-        <button type="button" class="btn-ghost" onclick="closeWorkspacePicker()">Cancel</button>
-        <button type="button" class="btn-ghost" onclick="fsClearOverride()">Clear override</button>
-        <button type="button" class="btn-primary" id="fsSelectBtn" onclick="fsSelectCurrent()">Select this folder</button>
+        <button type="button" class="btn-ghost" onclick="closeWorkspacePicker()" data-i18n="btn_cancel">Cancel</button>
+        <button type="button" class="btn-ghost" onclick="fsClearOverride()" data-i18n="btn_clear_override">Clear override</button>
+        <button type="button" class="btn-primary" id="fsSelectBtn" onclick="fsSelectCurrent()" data-i18n="btn_select_folder">Select this folder</button>
       </div>
     </div>
   </div>
@@ -2626,6 +2686,26 @@
 
   <script>
     const API = '';
+
+    // i18n shorthand — __i18n is defined by /static/i18n.js loaded before this script
+    const t = (key, params) => window.__i18n ? window.__i18n.t(key, params) : key;
+
+    function updateLangBtn() {
+      if (!window.__i18n) return;
+      const code = __i18n.getLocale();
+      const meta = __i18n.LOCALE_META.find(m => m.code === code);
+      const flag = document.getElementById('langBtnFlag');
+      const lbl  = document.getElementById('langBtnLabel');
+      if (flag && meta) flag.textContent = meta.flag;
+      if (lbl  && meta) lbl.textContent  = meta.label;
+    }
+
+    document.addEventListener('teddy:locale-changed', () => {
+      updateLangBtn();
+      // Re-render dynamic content that was built with t() before locale changed
+      const greeting = document.getElementById('greetingMsg');
+      if (greeting) greeting.textContent = t('greeting');
+    });
 
     // UUID v4 helper — pre-generate task_id so /tasks/{id}/cancel works
     // while /run is still in flight (Stop button).
@@ -2685,11 +2765,11 @@
       _ws = new WebSocket(`${proto}://${location.host}/ws`);
       _ws.onopen  = () => {
         document.getElementById('wsBadge').classList.add('connected');
-        const l = document.getElementById('wsLabel'); if (l) l.textContent = 'Connected';
+        const l = document.getElementById('wsLabel'); if (l) l.textContent = t('ws_connected');
       };
       _ws.onclose = () => {
         document.getElementById('wsBadge').classList.remove('connected');
-        const l = document.getElementById('wsLabel'); if (l) l.textContent = 'Disconnected — retrying…';
+        const l = document.getElementById('wsLabel'); if (l) l.textContent = t('ws_disconnected');
         setTimeout(initWS, 3000);
       };
       _ws.onerror = () => _ws.close();
@@ -3074,10 +3154,8 @@
       const lo = isLocalOnly();
       btn.classList.toggle('local-only', lo);
       if (icon)  icon.textContent  = lo ? '🔒' : '🔓';
-      if (label) label.textContent = lo ? 'Local only' : 'Cloud';
-      btn.title = lo
-        ? '🔒 本地端模式 — 這個 session 絕對不會把任務資料送到 Anthropic Claude API。點擊關閉。'
-        : '🔓 可用 Claude — 地端失敗時會自動升級、「Let Claude fix」按鈕可用。點擊改為本地端模式。';
+      if (label) label.textContent = lo ? t('privacy_local') : t('privacy_cloud');
+      btn.title = t('privacy_title');
       // Hide all "Let Claude fix" buttons when local-only, so a stale
       // button from a previous task can't be clicked to bypass.
       document.querySelectorAll('.btn-claude-fix').forEach(b => {
@@ -3094,17 +3172,7 @@
         // local_only=false so flipping it ON is the significant action
         // that deserves a dialog; flipping OFF is just restoring the
         // permissive default so we let that through without friction.
-        const ok = confirm(
-          '🔒 啟用「本地端模式」？\n\n' +
-          '這個 session 將：\n' +
-          '  ✓ 完全停用 Claude 自動升級（低信心、timeout、驗證失敗 → 直接標失敗）\n' +
-          '  ✓ 隱藏「🛠️ Let Claude fix」按鈕\n' +
-          '  ✓ 不會把 task goal / 子任務結果 / tool output / 錯誤訊息送到 Anthropic\n\n' +
-          '仍然本機進行：\n' +
-          '  • 上傳的檔案、Gemma 規劃、Qwen 執行、Memory、SQLite 全部在本機\n\n' +
-          '建議用於：客戶資料、PII、機密文件分析。\n' +
-          '隨時可以關回來。'
-        );
+        const ok = confirm(t('confirm_local_mode_title') + '\n\n' + t('confirm_local_mode_body'));
         if (!ok) return;
       }
       // Optimistic update
@@ -3117,13 +3185,11 @@
           body: JSON.stringify({ local_only: next }),
         });
         if (!res.ok) throw new Error(res.statusText);
-        toast(next
-          ? '🔒 已切到本地端模式 — Claude 升級已停用'
-          : '🔓 已切到 Cloud 模式 — Claude 升級可用');
+        toast(next ? t('local_mode_enabled') : t('local_mode_disabled'));
       } catch (e) {
         _sessionLocalOnly[_currentSessionId] = curr;
         updatePrivacyIndicator();
-        toast('切換失敗：' + e.message, true);
+        toast(e.message, true);
       }
     }
 
@@ -3148,23 +3214,15 @@
 
     async function clearSessionMemory() {
       if (!_currentSessionId) return;
-      if (!confirm(
-        '清空這個 session 的長期記憶？\n\n' +
-        '這只會清 ChromaDB 裡屬於這個 session 的向量記憶 —— ' +
-        '聊天紀錄（SQLite tasks 表）不會動。\n\n' +
-        '適合情境：你換做新專案但還在同一個 session，' +
-        '不想讓舊專案的記憶干擾 Gemma 規劃。'
-      )) return;
+      if (!confirm(t('confirm_clear_memory_title') + '\n\n' + t('confirm_clear_memory_body'))) return;
       try {
-        const res = await fetch(`${API}/sessions/${_currentSessionId}/memory`, {
-          method: 'DELETE',
-        });
+        const res = await fetch(`${API}/sessions/${_currentSessionId}/memory`, { method: 'DELETE' });
         if (!res.ok) throw new Error(res.statusText);
         const data = await res.json();
-        toast(`🧹 清除了 ${data.deleted_count} 筆記憶 — Gemma 下次規劃會從零開始`);
+        toast(t('memory_cleared', { count: data.deleted_count }));
         await refreshMemoryCount();
       } catch (e) {
-        toast('清除失敗：' + e.message, true);
+        toast(e.message, true);
       }
     }
 
@@ -3173,10 +3231,11 @@
     // Convenience label lookup used by both changeMode and the in-chat
     // divider so the emoji/label stay consistent across surfaces.
     const MODE_LABELS = {
-      chat:     '💬 Chat',
-      code:     '💻 Code',
-      analytic: '📊 Analytic',
+      chat:     () => '💬 ' + t('mode_chat'),
+      code:     () => '💻 ' + t('mode_code'),
+      analytic: () => '📊 ' + t('mode_analytic'),
     };
+    function modeLabel(m) { return (MODE_LABELS[m] ? MODE_LABELS[m]() : m); }
 
     async function changeMode(mode) {
       if (!MODES.includes(mode)) return;
@@ -3214,13 +3273,13 @@
           const div = document.createElement('div');
           div.className = 'mode-change-divider';
           div.innerHTML =
-            `<span>${MODE_LABELS[prev] || prev}</span>` +
+            `<span>${modeLabel(prev)}</span>` +
             `<span class="mode-change-arrow">→</span>` +
-            `<span class="mode-change-new">${MODE_LABELS[mode] || mode}</span>`;
+            `<span class="mode-change-new">${modeLabel(mode)}</span>`;
           chat.appendChild(div);
           chat.scrollTop = chat.scrollHeight;
         }
-        toast(`Mode: ${MODE_LABELS[mode] || mode}`);
+        toast(`${modeLabel(mode)}`);
       } catch (e) {
         _sessionModes[_currentSessionId] = prev;
         updateModeSwitchUI();
@@ -3339,7 +3398,7 @@
     }
 
     async function deleteSession(id) {
-      if (!confirm('Delete this session and all its task history?')) return;
+      if (!confirm(t('confirm_delete_session'))) return;
       try {
         const res = await fetch(`${API}/sessions/${id}`, { method: 'DELETE' });
         if (!res.ok) throw new Error(res.statusText);
@@ -3349,8 +3408,8 @@
         }
         await loadSessions();
         await loadChatHistory();
-        toast('Session deleted.');
-      } catch (e) { toast('Delete failed: ' + e.message, true); }
+        toast(t('session_deleted'));
+      } catch (e) { toast(e.message, true); }
     }
 
     async function loadChatHistory(limit = 20) {
@@ -3366,7 +3425,7 @@
         if (!Array.isArray(tasks) || tasks.length === 0) {
           const g = document.createElement('div');
           g.className = 'msg-agent';
-          g.textContent = "Hello! I'm OpenTeddy 🐩 This is a new session — describe what you'd like me to do.";
+          g.textContent = t('greeting');
           chat.appendChild(g);
           return;
         }
@@ -3491,7 +3550,7 @@
       const t30 = setTimeout(() => {
         if (!_activeCalls[key]) return;
         if (stuckEl) {
-          stuckEl.textContent = '⏱️ 執行較慢 (30s+)…';
+          stuckEl.textContent = t('stuck_slow');
           stuckEl.style.display = 'block';
         }
       }, 30_000);
@@ -3499,7 +3558,7 @@
       const t90 = setTimeout(() => {
         if (!_activeCalls[key]) return;
         if (stuckEl) {
-          stuckEl.textContent = '⚠️ 執行超時 (90s+)，若繼續卡住將自動升級到 Claude…';
+          stuckEl.textContent = t('stuck_timeout');
           stuckEl.style.background = 'var(--error)';
           stuckEl.style.color = '#fff';
         }
@@ -3829,7 +3888,7 @@
 
       if (btn) {
         btn.disabled = true;
-        btn.innerHTML = '<span class="loader" style="width:11px;height:11px;border-width:2px;margin-right:4px;border-top-color:#fff;border-color:rgba(255,255,255,0.3)"></span> Claude is working…';
+        btn.innerHTML = '<span class="loader" style="width:11px;height:11px;border-width:2px;margin-right:4px;border-top-color:#fff;border-color:rgba(255,255,255,0.3)"></span> ' + t('claude_working');
       }
       // Route the normal tool-call UI for this taskId while Claude runs.
       _currentTaskId = taskId;
@@ -3859,7 +3918,7 @@
       } catch (e) {
         if (btn) {
           btn.disabled = false;
-          btn.innerHTML = '🛠️ Let Claude fix this';
+          btn.innerHTML = t('let_claude_fix');
         }
         toast('Claude fix failed to start: ' + e.message, true);
       }
@@ -3883,7 +3942,7 @@
       // doesn't accidentally double-fire (and re-burn tokens).
       document.querySelectorAll('.btn-claude-fix').forEach(b => {
         b.disabled = true;
-        b.innerHTML = '✓ Claude fix applied';
+        b.innerHTML = t('claude_fix_applied');
       });
       _currentTaskId = null;
     }
@@ -3902,7 +3961,7 @@
     async function runTask() {
       const goalEl   = document.getElementById('goal');
       const goal     = goalEl.value.trim();
-      if (!goal) { toast('Please describe your task.'); return; }
+      if (!goal) { toast(t('please_describe_task')); return; }
       const priority = parseInt(document.getElementById('priority').value) || 5;
 
       // If the user attached files via the + button, build a manifest
@@ -4079,7 +4138,7 @@
           resultHTML += `
             <div class="claude-fix-wrap"${hidden}>
               <button class="btn-claude-fix" onclick="letClaudeFix('${escHtml(data.task_id)}', this)">
-                🛠️ Let Claude fix this
+                ${t('let_claude_fix')}
               </button>
               <span class="claude-fix-hint">
                 Hands the full task context + tools to Claude. Uses commercial tokens.
@@ -4207,21 +4266,21 @@
       // Windows/Linux ⌘ reads as "Cmd" but the symbol is universally
       // recognisable as "the modifier key".
       card.innerHTML = `
-        <div class="approval-header">Allow OpenTeddy to run <span class="approval-tool-name">${escHtml(toolName)}</span>?</div>
+        <div class="approval-header">${t('approval_header', { tool: escHtml(toolName) })}</div>
         <div class="approval-command">${escHtml(argsStr)}</div>
-        <div class="approval-subtext">This command requires approval · Task <code>${escHtml(taskId.slice(0, 8))}</code></div>
+        <div class="approval-subtext">${t('approval_subtext', { taskId: escHtml(taskId.slice(0, 8)) })}</div>
         <div class="approval-card-actions">
           <button class="btn-approval btn-deny"
             onclick="resolveChatApproval('${escHtml(approvalId)}', 'deny', this)">
-            Deny <kbd>esc</kbd>
+            ${t('approval_deny')} <kbd>esc</kbd>
           </button>
           <button class="btn-approval btn-allow-once"
             onclick="resolveChatApproval('${escHtml(approvalId)}', 'once', this)">
-            Allow once <kbd>⌘⇧↵</kbd>
+            ${t('approval_allow_once')} <kbd>⌘⇧↵</kbd>
           </button>
           <button class="btn-approval btn-allow-always"
             onclick="resolveChatApproval('${escHtml(approvalId)}', 'always', this)">
-            Always allow <kbd>⌘↵</kbd>
+            ${t('approval_allow_always')} <kbd>⌘↵</kbd>
           </button>
         </div>`;
       appendToChat(card);
@@ -4256,18 +4315,18 @@
           const actionsDiv = card.querySelector('.approval-card-actions');
           if (actionsDiv) {
             const msg = {
-              deny:   '❌ Denied — agent will try an alternative',
-              once:   '✅ Allowed once — task continuing',
-              always: `✅ Always allowed for ${escHtml(card.dataset.toolName)} this session`,
+              deny:   t('approval_denied'),
+              once:   t('approval_allowed_once'),
+              always: t('approval_allowed_always', { tool: escHtml(card.dataset.toolName) }),
             }[action];
             actionsDiv.innerHTML = `<span style="color:${approved ? 'var(--success)' : 'var(--error)'};font-size:0.82rem;font-weight:500">${msg}</span>`;
           }
         }
         if (_activeApprovalCard === card) _activeApprovalCard = null;
         const toastMsg = {
-          deny:   '❌ Denied',
-          once:   '✅ Allowed once',
-          always: `✅ Always allow: ${card?.dataset.toolName || ''}`,
+          deny:   t('toast_denied'),
+          once:   t('toast_allowed_once'),
+          always: t('toast_allowed_always', { tool: card?.dataset.toolName || '' }),
         }[action];
         toast(toastMsg);
       } catch (e) {
@@ -4292,7 +4351,7 @@
         status.textContent = `${data.total} records`;
 
         if (!data.items || !data.items.length) {
-          list.innerHTML = '<li style="color:var(--text-muted);font-size:0.875rem;padding:1rem 0">No memories yet — run a task to populate memory.</li>';
+          list.innerHTML = `<li style="color:var(--text-muted);font-size:0.875rem;padding:1rem 0">${t('no_memories')}</li>`;
           document.getElementById('memoryPagination').style.display = 'none';
           return;
         }
@@ -4343,18 +4402,18 @@
         if (!res.ok) { const err = await res.json(); toast(err.detail || 'Delete failed', true); return; }
         const el = document.getElementById('mem-' + id);
         if (el) { el.style.opacity = '0.3'; setTimeout(() => loadMemory(_memCurrentPage), 400); }
-        toast('Memory deleted.');
-      } catch (e) { toast('Error: ' + e.message, true); }
+        toast(t('memory_deleted'));
+      } catch (e) { toast(e.message, true); }
     }
 
     async function confirmClearMemory() {
-      if (!confirm('Clear ALL memories? This cannot be undone.')) return;
+      if (!confirm(t('confirm_delete_all_memory'))) return;
       try {
         const res  = await fetch(`${API}/memory`, { method: 'DELETE' });
         const data = await res.json();
-        toast(`Cleared ${data.deleted_count} memories.`);
+        toast(t('memory_cleared', { count: data.deleted_count }));
         loadMemory(1);
-      } catch (e) { toast('Error: ' + e.message, true); }
+      } catch (e) { toast(e.message, true); }
     }
 
     // ── Usage ────────────────────────────────────────────────────────────────
@@ -4416,7 +4475,7 @@
         _usageTotalPages = data.total_pages || 1;
         const tbody = document.getElementById('usageTableBody');
         if (!data.items || !data.items.length) {
-          tbody.innerHTML = '<tr><td colspan="7" style="color:var(--text-muted);text-align:center;padding:1.5rem">No records found.</td></tr>';
+          tbody.innerHTML = `<tr><td colspan="7" style="color:var(--text-muted);text-align:center;padding:1.5rem">${t('no_records_found')}</td></tr>`;
         } else {
           tbody.innerHTML = data.items.map(r => {
             const pClass  = 'provider-' + (r.model_provider || 'ollama');
@@ -4692,11 +4751,11 @@
         const url  = document.getElementById('ollamaUrl');
         if (data.data?.online) {
           dot.className   = 'ollama-dot online';
-          lbl.textContent = 'Online';
+          lbl.textContent = t('ollama_status_online');
           lbl.style.color = 'var(--success)';
         } else {
           dot.className   = 'ollama-dot offline';
-          lbl.textContent = 'Offline';
+          lbl.textContent = t('ollama_status_offline');
           lbl.style.color = 'var(--error)';
         }
         if (url) url.textContent = data.data?.url ?? '';
@@ -4749,7 +4808,7 @@
     }
 
     async function deleteModel(name) {
-      if (!confirm(`Delete model "${name}"?`)) return;
+      if (!confirm(t('confirm_delete_model', { name }))) return;
       try {
         const res  = await fetch(`${API}/settings/ollama/models/${encodeURIComponent(name)}`, { method: 'DELETE' });
         const data = await res.json();
@@ -4760,7 +4819,7 @@
 
     async function pullModel() {
       const name = document.getElementById('pullModelName').value.trim();
-      if (!name) { toast('Please enter a model name', true); return; }
+      if (!name) { toast(t('pull_enter_name'), true); return; }
       const btn      = document.getElementById('pullBtn');
       const wrap     = document.getElementById('pullProgress');
       const bar      = document.getElementById('pullBar');
@@ -4874,7 +4933,7 @@
         });
         const data = await res.json();
         if (data.success) {
-          msg.textContent = '✅ Settings applied — effective on next task';
+          msg.textContent = t('settings_saved');
           msg.className   = 'settings-msg show';
         } else {
           msg.textContent = '❌ ' + (data.error ?? 'Save failed');
@@ -4939,6 +4998,7 @@
 
     // ── Init ─────────────────────────────────────────────────────────────────
     window.onload = async () => {
+      updateLangBtn();             // show current locale flag in sidebar
       initWS();
       installApprovalShortcuts();
       installFsPickerShortcuts();
