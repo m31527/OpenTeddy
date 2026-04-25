@@ -2207,14 +2207,14 @@
             <span class="chat-header-title" id="chatHeaderTitle">New session</span>
           </div>
           <div class="mode-switch" id="modeSwitch" role="tablist" aria-label="Session mode">
-            <button type="button" class="mode-btn" data-mode="chat" onclick="changeMode('chat')" title="純文字推理（摘要、翻譯、問答）">
-              <span class="mode-emoji">💬</span><span>Chat</span>
+            <button type="button" class="mode-btn" data-mode="chat" onclick="changeMode('chat')" data-i18n-title="mode_chat_title" title="Pure text reasoning">
+              <span class="mode-emoji">💬</span><span data-i18n="mode_chat">Chat</span>
             </button>
-            <button type="button" class="mode-btn active" data-mode="code" onclick="changeMode('code')" title="寫代碼自主執行（部署、安裝、診斷、修改檔案）">
-              <span class="mode-emoji">💻</span><span>Code</span>
+            <button type="button" class="mode-btn active" data-mode="code" onclick="changeMode('code')" data-i18n-title="mode_code_title" title="Autonomous code execution">
+              <span class="mode-emoji">💻</span><span data-i18n="mode_code">Code</span>
             </button>
-            <button type="button" class="mode-btn" data-mode="analytic" onclick="changeMode('analytic')" title="分析 csv / xlsx / json 並用 Chart.js 繪圖">
-              <span class="mode-emoji">📊</span><span>Analytic</span>
+            <button type="button" class="mode-btn" data-mode="analytic" onclick="changeMode('analytic')" data-i18n-title="mode_analytic_title" title="Analyse csv/xlsx/json with Chart.js">
+              <span class="mode-emoji">📊</span><span data-i18n="mode_analytic">Analytic</span>
             </button>
           </div>
           <button type="button" id="memoryBtn" class="mem-btn" onclick="clearSessionMemory()"
@@ -2818,6 +2818,8 @@
       // Re-render dynamic content that was built with t() before locale changed
       const greeting = document.getElementById('greetingMsg');
       if (greeting) greeting.textContent = t('greeting');
+      // Refresh sidebar so the session-mode badges (Chat/Code/An.) re-render
+      if (typeof loadSessions === 'function') loadSessions();
     });
 
     // UUID v4 helper — pre-generate task_id so /tasks/{id}/cancel works
@@ -2974,7 +2976,7 @@
           item.dataset.id = s.id;
           const titleHtml = escHtml(s.title || 'Untitled');
           const mode      = s.mode || MODE_DEFAULT;
-          const modeLabel = { chat: 'Chat', code: 'Code', analytic: 'An.' }[mode] || 'Code';
+          const modeLabel = { chat: t('mode_chat'), code: t('mode_code'), analytic: t('mode_analytic_short') }[mode] || t('mode_code');
           item.innerHTML = `
             <span class="session-mode-badge mode-${escHtml(mode)}" title="Mode: ${escHtml(mode)}">${modeLabel}</span>
             <span class="session-item-title" title="${titleHtml}">${titleHtml}</span>
@@ -3381,7 +3383,7 @@
         const item = document.querySelector(`.session-item[data-id="${_currentSessionId}"] .session-mode-badge`);
         if (item) {
           item.className = `session-mode-badge mode-${mode}`;
-          item.textContent = { chat: 'Chat', code: 'Code', analytic: 'An.' }[mode];
+          item.textContent = { chat: t('mode_chat'), code: t('mode_code'), analytic: t('mode_analytic_short') }[mode];
         }
         // Toast is ephemeral — also drop a PERMANENT divider into the
         // chat so the mode change stays visible as you scroll back
