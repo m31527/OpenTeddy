@@ -2081,6 +2081,69 @@
     .lang-flag { font-size: 1.1rem; flex-shrink: 0; }
     .lang-name { font-weight: 500; color: var(--text-primary); }
     .lang-sub { font-size: 0.72rem; color: var(--text-secondary); margin-left: auto; }
+
+    /* ── Confirm Dialog ──────────────────────────────────────────────────── */
+    .confirm-modal-backdrop {
+      position: fixed; inset: 0; z-index: 2100;
+      background: rgba(0,0,0,0.45);
+      display: flex; align-items: center; justify-content: center;
+      padding: 1rem;
+    }
+    .confirm-modal-box {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      width: min(480px, 100%);
+      max-height: 85vh;
+      display: flex; flex-direction: column;
+      overflow: hidden;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.18);
+    }
+    .confirm-modal-title {
+      padding: 1rem 1.25rem 0.5rem;
+      font-size: 1rem; font-weight: 600;
+      color: var(--text-primary);
+    }
+    .confirm-modal-body {
+      padding: 0 1.25rem 1.1rem;
+      font-size: 0.875rem; line-height: 1.55;
+      color: var(--text-secondary);
+      white-space: pre-wrap;
+      overflow-y: auto;
+      flex: 1;
+    }
+    .confirm-modal-actions {
+      display: flex; justify-content: flex-end; gap: 0.5rem;
+      padding: 0.85rem 1.1rem;
+      border-top: 1px solid var(--border);
+      background: var(--bg-secondary);
+      flex-shrink: 0;
+    }
+    .confirm-modal-actions button {
+      font-family: inherit;
+      font-size: 0.86rem;
+      padding: 0.5rem 1rem;
+      border-radius: 8px;
+      cursor: pointer;
+      border: 1px solid var(--border);
+      transition: background 0.12s, border-color 0.12s;
+    }
+    .confirm-modal-cancel {
+      background: var(--surface);
+      color: var(--text-primary);
+    }
+    .confirm-modal-cancel:hover { background: var(--bg-primary); }
+    .confirm-modal-ok {
+      background: var(--text-primary);
+      color: white;
+      border-color: var(--text-primary);
+      font-weight: 500;
+    }
+    .confirm-modal-ok:hover { opacity: 0.88; }
+    .confirm-modal-ok.danger {
+      background: var(--error);
+      border-color: var(--error);
+    }
   </style>
 </head>
 <body>
@@ -2684,11 +2747,61 @@
 
   <div id="toast"></div>
 
+  <!-- ── Reusable confirmation dialog (replaces native confirm) ────────── -->
+  <div id="confirmModal" class="confirm-modal-backdrop" style="display:none" role="dialog" aria-modal="true">
+    <div class="confirm-modal-box">
+      <div class="confirm-modal-title" id="confirmModalTitle"></div>
+      <div class="confirm-modal-body" id="confirmModalBody"></div>
+      <div class="confirm-modal-actions">
+        <button class="confirm-modal-cancel" id="confirmModalCancel" type="button"></button>
+        <button class="confirm-modal-ok" id="confirmModalOk" type="button"></button>
+      </div>
+    </div>
+  </div>
+
   <script>
     const API = '';
 
     // i18n shorthand — __i18n is defined by /static/i18n.js loaded before this script
     const t = (key, params) => window.__i18n ? window.__i18n.t(key, params) : key;
+
+    // Promise-based confirmation dialog (replaces native confirm).
+    // Returns Promise<boolean>: true = OK, false = Cancel/backdrop/Esc.
+    function showConfirm({ title, body, okLabel, cancelLabel, danger = false } = {}) {
+      return new Promise(resolve => {
+        const modal = document.getElementById('confirmModal');
+        const titleEl = document.getElementById('confirmModalTitle');
+        const bodyEl = document.getElementById('confirmModalBody');
+        const okBtn = document.getElementById('confirmModalOk');
+        const cancelBtn = document.getElementById('confirmModalCancel');
+
+        titleEl.textContent = title || '';
+        bodyEl.textContent  = body  || '';
+        okBtn.textContent     = okLabel     || t('btn_ok');
+        cancelBtn.textContent = cancelLabel || t('btn_cancel');
+        okBtn.classList.toggle('danger', !!danger);
+        modal.style.display = 'flex';
+
+        const onKey = (e) => {
+          if (e.key === 'Escape') { e.preventDefault(); cleanup(false); }
+          else if (e.key === 'Enter') { e.preventDefault(); cleanup(true); }
+        };
+        const onBackdrop = (e) => { if (e.target === modal) cleanup(false); };
+        const cleanup = (result) => {
+          modal.style.display = 'none';
+          okBtn.onclick = null;
+          cancelBtn.onclick = null;
+          modal.onclick = null;
+          document.removeEventListener('keydown', onKey, true);
+          resolve(result);
+        };
+        okBtn.onclick = () => cleanup(true);
+        cancelBtn.onclick = () => cleanup(false);
+        modal.onclick = onBackdrop;
+        document.addEventListener('keydown', onKey, true);
+        setTimeout(() => okBtn.focus(), 0);
+      });
+    }
 
     function updateLangBtn() {
       if (!window.__i18n) return;
@@ -3172,7 +3285,12 @@
         // local_only=false so flipping it ON is the significant action
         // that deserves a dialog; flipping OFF is just restoring the
         // permissive default so we let that through without friction.
-        const ok = confirm(t('confirm_local_mode_title') + '\n\n' + t('confirm_local_mode_body'));
+        const ok = await showConfirm({
+          title:    t('confirm_local_mode_title'),
+          body:     t('confirm_local_mode_body'),
+          okLabel:  t('confirm_local_mode_ok'),
+          cancelLabel: t('btn_cancel'),
+        });
         if (!ok) return;
       }
       // Optimistic update
@@ -3214,7 +3332,14 @@
 
     async function clearSessionMemory() {
       if (!_currentSessionId) return;
-      if (!confirm(t('confirm_clear_memory_title') + '\n\n' + t('confirm_clear_memory_body'))) return;
+      const ok = await showConfirm({
+        title:    t('confirm_clear_memory_title'),
+        body:     t('confirm_clear_memory_body'),
+        okLabel:  t('confirm_clear_memory_ok'),
+        cancelLabel: t('btn_cancel'),
+        danger:   true,
+      });
+      if (!ok) return;
       try {
         const res = await fetch(`${API}/sessions/${_currentSessionId}/memory`, { method: 'DELETE' });
         if (!res.ok) throw new Error(res.statusText);
