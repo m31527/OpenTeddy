@@ -301,6 +301,24 @@ class Config:
         if _s("qwen_base_url"):
             self.qwen_base_url = settings["qwen_base_url"]
 
+        # Claude API key — only overwrite when the user actually saved one
+        # in the UI. Empty string keeps the env-var fallback.
+        if settings.get("anthropic_api_key"):
+            self.anthropic_api_key = settings["anthropic_api_key"]
+
+        # Boolean toggles. We treat anything other than the explicit
+        # "off" tokens as truthy so an accidentally-stored "True" / "yes"
+        # from a different code path still works.
+        _OFF = {"0", "false", "no", "off", ""}
+        if "escalation_enabled" in settings:
+            self.escalation_enabled = (
+                str(settings["escalation_enabled"]).strip().lower() not in _OFF
+            )
+        if "streaming_enabled" in settings:
+            self.streaming_enabled = (
+                str(settings["streaming_enabled"]).strip().lower() not in _OFF
+            )
+
         v = _f("escalation_threshold")
         if v is not None:
             self.escalation_confidence_threshold = v

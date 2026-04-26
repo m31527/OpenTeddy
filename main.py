@@ -11,6 +11,8 @@ import json
 import logging
 import os
 import uuid
+
+import httpx
 from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import AsyncGenerator, Optional
@@ -257,13 +259,262 @@ async def favicon() -> FileResponse:
     raise HTTPException(status_code=404, detail="favicon not found")
 
 
+OPENTEDDY_VERSION = "0.3.0"
+GITHUB_REPO = os.getenv("OPENTEDDY_GITHUB_REPO", "m31527/OpenTeddy")
+
+
 @app.get("/health")
 async def health() -> dict:
     return {
         "status":  "ok",
-        "version": "0.3.0",
+        "version": OPENTEDDY_VERSION,
         "memory":  memory_manager.is_available,
     }
+
+
+def _git_info() -> dict:
+    """Snapshot the local repo's HEAD — commit hash, branch, dirty flag.
+    Best-effort; missing git or non-repo dirs return empty values so
+    /version still works."""
+    import subprocess
+    repo = os.path.dirname(os.path.abspath(__file__))
+    def _run(*args: str) -> str:
+        try:
+            return subprocess.check_output(
+                args, cwd=repo, stderr=subprocess.DEVNULL, timeout=2,
+            ).decode().strip()
+        except Exception:  # noqa: BLE001
+            return ""
+    commit = _run("git", "rev-parse", "--short", "HEAD")
+    branch = _run("git", "rev-parse", "--abbrev-ref", "HEAD")
+    dirty  = bool(_run("git", "status", "--porcelain"))
+    return {"commit": commit, "branch": branch, "dirty": dirty}
+
+
+@app.get("/version")
+async def version_info() -> dict:
+    """Current version + git state — used by the UI's update pill to
+    decide if a refresh notification is worth showing."""
+    return {"version": OPENTEDDY_VERSION, **_git_info()}
+
+
+def _semver_tuple(v: str) -> tuple[int, ...]:
+    """`'v0.4.1' → (0, 4, 1)`. Non-numeric pieces (e.g. `-rc1`) are
+    stripped so we sort just on the major.minor.patch triple."""
+    s = v.strip().lstrip("v").split("-")[0].split("+")[0]
+    parts: list[int] = []
+    for p in s.split("."):
+        try:
+            parts.append(int(p))
+        except ValueError:
+            parts.append(0)
+    return tuple(parts) if parts else (0,)
+
+
+@app.get("/update/check")
+async def update_check() -> dict:
+    """Poll GitHub Releases for a newer OpenTeddy version.
+
+    Returns a structured payload the UI uses to render the "🆕 v0.4.0
+    available" pill + release-notes modal. Failure (offline, rate-limit,
+    no releases yet) returns ``update_available: false`` rather than
+    erroring — we never want the absence of an update endpoint to break
+    the app shell.
+    """
+    url = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            r = await client.get(url, headers={"Accept": "application/vnd.github+json"})
+        if r.status_code == 404:
+            # Repo has no releases yet (common during early dev) — quiet skip.
+            return {
+                "current": OPENTEDDY_VERSION,
+                "latest":  None,
+                "update_available": False,
+                "reason":  "no releases yet",
+            }
+        r.raise_for_status()
+        data = r.json()
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("update_check failed: %s", exc)
+        return {
+            "current": OPENTEDDY_VERSION,
+            "latest":  None,
+            "update_available": False,
+            "reason":  f"network error: {exc}",
+        }
+
+    latest_tag = data.get("tag_name") or ""
+    latest = latest_tag.lstrip("v")
+    is_newer = _semver_tuple(latest) > _semver_tuple(OPENTEDDY_VERSION)
+    return {
+        "current":          OPENTEDDY_VERSION,
+        "latest":           latest,
+        "update_available": is_newer,
+        "release_notes":    data.get("body") or "",
+        "release_url":      data.get("html_url") or "",
+        "published_at":     data.get("published_at") or "",
+        "tag":              latest_tag,
+    }
+
+
+# Tracks whether an apply is in flight so we don't kick off a second one
+# while the first is still pulling/installing.
+_update_lock = asyncio.Lock()
+
+
+@app.post("/update/apply")
+async def update_apply() -> dict:
+    """Run `git pull` + `pip install -r requirements.txt`, streaming
+    every stdout line out via the `update.progress` WS event so the UI
+    can render a live install log. uvicorn's --reload picks up the new
+    .py files automatically once git pull lands; the UI just needs to
+    refresh once the WS announces ``done``.
+    """
+    if _update_lock.locked():
+        return {"success": False, "error": "an update is already in progress"}
+
+    async def _emit(step: str, line: str = "", pct: float | None = None) -> None:
+        payload = {"type": "update.progress", "step": step, "line": line}
+        if pct is not None:
+            payload["pct"] = pct
+        await ws_manager.broadcast(payload)
+
+    async def _stream_cmd(step: str, args: list[str], cwd: str) -> int:
+        """Run a subprocess and pump every output line through WS so the
+        UI shows what's happening in real time."""
+        proc = await asyncio.create_subprocess_exec(
+            *args,
+            cwd=cwd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,   # merge so order is preserved
+            env={**os.environ, "PYTHONUNBUFFERED": "1", "PIP_DISABLE_PIP_VERSION_CHECK": "1"},
+        )
+        assert proc.stdout is not None
+        while True:
+            raw = await proc.stdout.readline()
+            if not raw:
+                break
+            line = raw.decode("utf-8", errors="replace").rstrip("\n")
+            await _emit(step, line)
+        return await proc.wait()
+
+    async def _runner() -> None:
+        repo = os.path.dirname(os.path.abspath(__file__))
+        async with _update_lock:
+            try:
+                # 1. Refuse if there are uncommitted local changes —
+                # otherwise `git pull` could fail or clobber work.
+                import subprocess
+                dirty = subprocess.check_output(
+                    ["git", "status", "--porcelain"],
+                    cwd=repo, stderr=subprocess.DEVNULL,
+                ).decode().strip()
+                if dirty:
+                    await _emit("error",
+                        "Local repo has uncommitted changes — commit or stash before updating.")
+                    return
+
+                # 2. git pull
+                await _emit("pulling", "$ git pull --ff-only")
+                rc = await _stream_cmd("pulling", ["git", "pull", "--ff-only"], cwd=repo)
+                if rc != 0:
+                    await _emit("error", f"git pull failed (exit {rc})")
+                    return
+
+                # 3. pip install -r requirements.txt — use the venv pip
+                # if we're running inside one; fall back to sys.executable.
+                import sys as _sys
+                pip_args = [_sys.executable, "-m", "pip", "install",
+                            "-r", "requirements.txt", "--upgrade"]
+                await _emit("installing", "$ " + " ".join(pip_args))
+                rc = await _stream_cmd("installing", pip_args, cwd=repo)
+                if rc != 0:
+                    await _emit("error", f"pip install failed (exit {rc})")
+                    return
+
+                # 4. uvicorn --reload picks up .py changes on its own;
+                # we just touch main.py to force a reload even if the
+                # pull only changed non-Python files.
+                await _emit("restarting", "Triggering uvicorn reload…")
+                try:
+                    os.utime(__file__, None)   # touch
+                except Exception:  # noqa: BLE001
+                    pass
+
+                await _emit("done", "✅ Update complete.")
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("update_apply runner crashed")
+                await _emit("error", f"unexpected: {exc}")
+
+    asyncio.create_task(_runner())
+    return {"success": True, "started": True}
+
+
+_PROMPT_OPTIMISER_SYSTEM = """\
+You are a prompt-optimiser for OpenTeddy, a local-first AI agent. The user \
+typed a rough task description into a chat box. Your job is to rewrite it as \
+a sharper, more actionable instruction the agent (orchestrator + executor) \
+can plan against and complete reliably.
+
+Rules:
+1. Keep the user's INTENT exactly. Do not invent new goals.
+2. Add useful structure: explicit deliverable, acceptance criteria, \
+   relevant context the agent should consider, format of the answer.
+3. Keep it concise — under 120 words. No preamble, no "Here is the optimised…".
+4. Match the user's language (Chinese in → Chinese out, English in → English out).
+5. If the original is already crisp, return it almost unchanged. Don't pad.
+6. Output ONLY the rewritten prompt. No markdown headings, no quotes around it.
+"""
+
+
+@app.post("/optimize_prompt")
+async def optimize_prompt(body: dict) -> dict:
+    """Rewrite the user's draft task description into a sharper instruction.
+
+    Uses Claude (the same key that powers escalation) so the local agent
+    gets a higher-quality plan upstream. Pre-checks the API key and
+    surfaces a clear error when missing — the UI uses that to nudge the
+    user into Settings instead of silently failing.
+    """
+    raw = (body.get("prompt") or "").strip()
+    mode = (body.get("mode") or "code").strip()
+    if not raw:
+        return {"success": False, "data": None, "error": "prompt is required"}
+    if not (config.anthropic_api_key or "").strip():
+        return {
+            "success": False,
+            "data":    None,
+            "error":   "Claude API key is not configured. Set it in Settings → Model Settings → Claude API Key.",
+        }
+
+    try:
+        import anthropic
+        client = anthropic.AsyncAnthropic(api_key=config.anthropic_api_key)
+        msg = await client.messages.create(
+            model=config.claude_model,
+            max_tokens=512,
+            system=_PROMPT_OPTIMISER_SYSTEM,
+            messages=[{
+                "role": "user",
+                "content": f"[Mode: {mode}]\n\n{raw}",
+            }],
+        )
+        optimized = (msg.content[0].text or "").strip() if msg.content else ""
+        if not optimized:
+            return {"success": False, "data": None, "error": "Claude returned empty text"}
+        return {
+            "success": True,
+            "data": {
+                "optimized": optimized,
+                "tokens_in":  getattr(msg.usage, "input_tokens", 0),
+                "tokens_out": getattr(msg.usage, "output_tokens", 0),
+            },
+            "error": None,
+        }
+    except Exception as exc:  # noqa: BLE001
+        logger.error("optimize_prompt failed: %s", exc)
+        return {"success": False, "data": None, "error": str(exc)}
 
 
 @app.get("/admin/diagnostics")

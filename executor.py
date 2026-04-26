@@ -776,7 +776,18 @@ class Executor:
                 # MySQL/Docker errors). If any match, we'll clamp confidence
                 # at the end so Claude escalation kicks in even if Qwen
                 # self-reports high confidence.
-                if not objective_failure_seen:
+                # IMPORTANT: skip pure file-read tools — their output is
+                # *data*, not log lines, so a CSV row containing the words
+                # "command not found" or "no such file" inside a customer
+                # comment would otherwise spuriously trigger failure mode
+                # (see the orders_export.csv repurchase-rate task that
+                # kept escalating because Shopify exports include free-text
+                # notes that sometimes match the regex).
+                _DATA_ONLY_TOOLS = {
+                    "read_file", "file_read", "csv_head", "json_read",
+                    "fetch_url",
+                }
+                if not objective_failure_seen and tool_name not in _DATA_ONLY_TOOLS:
                     tool_result_text = json.dumps(
                         tool_result, ensure_ascii=False
                     )

@@ -28,3 +28,9 @@ aiomysql>=0.2.0            # MySQL async driver (optional)
 google-cloud-storage>=2.0.0
 google-cloud-bigquery>=3.0.0
 google-cloud-pubsub>=2.0.0
+
+# Analytic tools (csv_describe / python_exec) — pre-loaded into the
+# subprocess Python that runs user code so "analyse this CSV" works
+# out of the box without an extra approval step.
+pandas>=2.0.0
+numpy>=1.24.0

@@ -296,6 +296,118 @@
     }
     .sidebar.collapsed .lang-btn #langBtnLabel { display: none; }
 
+    /* ── Update pill (sidebar footer) + modal ─────────────────────────── */
+    .update-pill {
+      display: inline-flex; align-items: center; gap: 6px;
+      margin-top: 4px;
+      padding: 4px 10px;
+      background: rgba(196,109,79,0.15);
+      border: 1px solid rgba(196,109,79,0.35);
+      border-radius: 999px;
+      color: #ffe1d6;
+      cursor: pointer;
+      font-family: inherit;
+      font-size: 0.74rem;
+      font-weight: 500;
+      letter-spacing: 0.01em;
+      transition: background 0.12s, border-color 0.12s;
+    }
+    .update-pill:hover { background: rgba(196,109,79,0.28); border-color: rgba(196,109,79,0.55); }
+    .update-pill[hidden] { display: none; }
+    .update-pill-icon { font-size: 0.85rem; line-height: 1; }
+    .sidebar.collapsed .update-pill .update-pill-text { display: none; }
+    .sidebar.collapsed .update-pill { padding: 4px 6px; }
+
+    .update-modal-backdrop {
+      position: fixed; inset: 0; z-index: 2200;
+      background: rgba(0,0,0,0.45);
+      display: none;
+      align-items: center; justify-content: center;
+      padding: 1rem;
+    }
+    .update-modal-backdrop.open { display: flex; }
+    .update-modal {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      width: min(620px, 100%);
+      max-height: 88vh;
+      display: flex; flex-direction: column;
+      overflow: hidden;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.18);
+    }
+    .update-modal-head {
+      padding: 1rem 1.25rem 0.7rem;
+      border-bottom: 1px solid var(--border);
+      display: flex; align-items: baseline; gap: 0.7rem;
+      flex-shrink: 0;
+    }
+    .update-modal-head h3 {
+      font-size: 1rem; font-weight: 600;
+      margin: 0; color: var(--text-primary);
+    }
+    .update-modal-head .version-tag {
+      font-size: 0.78rem; color: var(--text-secondary);
+      font-family: "SF Mono", Menlo, monospace;
+    }
+    .update-modal-body {
+      padding: 1rem 1.25rem;
+      overflow-y: auto;
+      font-size: 0.875rem;
+      color: var(--text-primary);
+      line-height: 1.55;
+      flex: 1;
+    }
+    .update-modal-foot {
+      display: flex; justify-content: flex-end; gap: 0.5rem;
+      padding: 0.85rem 1.1rem;
+      border-top: 1px solid var(--border);
+      background: var(--bg-secondary);
+      flex-shrink: 0;
+    }
+    .update-modal-foot button {
+      font-family: inherit; font-size: 0.86rem;
+      padding: 0.5rem 1rem;
+      border-radius: 8px;
+      cursor: pointer;
+      border: 1px solid var(--border);
+      transition: background 0.12s;
+    }
+    .update-modal-foot .secondary { background: var(--surface); color: var(--text-primary); }
+    .update-modal-foot .secondary:hover { background: var(--bg-primary); }
+    .update-modal-foot .primary {
+      background: var(--accent); color: white; border-color: var(--accent);
+      font-weight: 500;
+    }
+    .update-modal-foot .primary:hover { background: var(--accent-hover); }
+
+    /* Step indicator + log stream during apply */
+    .update-steps {
+      display: grid; grid-template-columns: auto 1fr; gap: 6px 12px;
+      margin-bottom: 0.85rem;
+      font-size: 0.85rem;
+    }
+    .update-step-icon { width: 18px; text-align: center; color: var(--text-muted); }
+    .update-step-name { color: var(--text-secondary); }
+    .update-step.active  .update-step-icon { color: var(--accent); }
+    .update-step.active  .update-step-name { color: var(--text-primary); font-weight: 500; }
+    .update-step.done    .update-step-icon { color: var(--success); }
+    .update-step.done    .update-step-name { color: var(--text-secondary); }
+    .update-step.error   .update-step-icon { color: var(--error); }
+    .update-step.error   .update-step-name { color: var(--error); }
+    .update-log {
+      background: #0f0f0f; color: #d4d4d4;
+      font-family: "SF Mono", Menlo, monospace;
+      font-size: 0.74rem; line-height: 1.45;
+      padding: 0.7rem 0.85rem;
+      border-radius: 8px;
+      max-height: 260px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+    .update-log:empty { display: none; }
+
     /* ── Main content ────────────────────────────────────────────────────── */
     .main-content {
       flex: 1;
@@ -1897,6 +2009,47 @@
     }
     .send-btn:hover { background: #333; }
     .send-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    /* ✨ Optimise-prompt button — sits between textarea and send. */
+    .optimize-btn {
+      background: transparent;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 6px 9px;
+      color: var(--accent);
+      font-size: 1rem;
+      cursor: pointer;
+      flex-shrink: 0;
+      line-height: 1;
+      transition: background 0.12s, border-color 0.12s;
+      margin-right: 4px;
+    }
+    .optimize-btn:hover { background: rgba(196,109,79,0.08); border-color: var(--accent); }
+    .optimize-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .optimize-btn.is-running { animation: optimise-spin 1.4s linear infinite; }
+    @keyframes optimise-spin {
+      0%   { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+    /* Subtle "polishing your prompt…" overlay on the textarea */
+    .chat-input-wrap.optimizing {
+      position: relative;
+    }
+    .chat-input-wrap.optimizing::after {
+      content: attr(data-optimize-msg);
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(255,255,255,0.85);
+      -webkit-backdrop-filter: blur(2px);
+              backdrop-filter: blur(2px);
+      color: var(--accent);
+      font-weight: 500;
+      font-size: 0.86rem;
+      border-radius: 16px;
+      pointer-events: none;
+    }
     .send-btn.is-stop {
       background: var(--error);
       animation: stop-pulse 1.4s ease-in-out infinite;
@@ -2249,6 +2402,14 @@
           <span class="lang-btn-flag" id="langBtnFlag">🌐</span>
           <span id="langBtnLabel"></span>
         </button>
+        <!-- Update pill — populated by checkForUpdate() if /update/check
+             reports a newer GitHub release. Hidden by default so the
+             sidebar isn't cluttered when the install is up to date. -->
+        <button class="update-pill" id="updatePill" onclick="openUpdateModal()" hidden
+                data-i18n-title="update_pill_title" title="A new version of OpenTeddy is available">
+          <span class="update-pill-icon">🆕</span>
+          <span class="update-pill-text" id="updatePillText"></span>
+        </button>
       </div>
     </aside>
 
@@ -2347,6 +2508,9 @@
                   placeholder="Describe your task… (click ↑ to send)"
                   onkeydown="handleGoalKey(event)"
                   oninput="this.style.height='auto';this.style.height=Math.min(this.scrollHeight,150)+'px'"></textarea>
+                <button class="optimize-btn" id="optimizeBtn" type="button" onclick="optimizePrompt()"
+                  data-i18n-title="optimize_prompt_title"
+                  title="Polish your prompt with Claude so the agent gets a sharper instruction.">✨</button>
                 <button class="send-btn" id="runBtn" onclick="onSendOrStop()" data-i18n-title="send_title" title="Send">↑</button>
               </div>
             </div>
@@ -2837,6 +3001,39 @@
 
   <div id="toast"></div>
 
+  <!-- ── Update modal (release notes + live install progress) ─────────── -->
+  <div class="update-modal-backdrop" id="updateModal" role="dialog" aria-modal="true">
+    <div class="update-modal">
+      <div class="update-modal-head">
+        <h3 id="updateModalTitle" data-i18n="update_modal_title">Update available</h3>
+        <span class="version-tag" id="updateModalVersion"></span>
+      </div>
+      <div class="update-modal-body" id="updateModalBody">
+        <!-- Two views — "release notes" before user clicks Upgrade,
+             "progress + live log" after. Toggled by openUpdateModal /
+             onUpdateApplyClick. -->
+        <div id="updateNotesView">
+          <div class="md-body" id="updateNotesContent"></div>
+        </div>
+        <div id="updateProgressView" hidden>
+          <div class="update-steps" id="updateSteps">
+            <span class="update-step-icon" id="step-pulling-icon">◯</span>
+            <span class="update-step-name" data-i18n="update_step_pulling">Pulling latest source…</span>
+            <span class="update-step-icon" id="step-installing-icon">◯</span>
+            <span class="update-step-name" data-i18n="update_step_installing">Installing dependencies…</span>
+            <span class="update-step-icon" id="step-restarting-icon">◯</span>
+            <span class="update-step-name" data-i18n="update_step_restarting">Reloading backend…</span>
+          </div>
+          <div class="update-log" id="updateLog"></div>
+        </div>
+      </div>
+      <div class="update-modal-foot" id="updateModalFoot">
+        <button class="secondary" id="updateModalLater" onclick="closeUpdateModal()" data-i18n="update_later">Later</button>
+        <button class="primary"   id="updateModalApply" onclick="onUpdateApplyClick()" data-i18n="update_apply">Upgrade now →</button>
+      </div>
+    </div>
+  </div>
+
   <!-- ── Reusable confirmation dialog (replaces native confirm) ────────── -->
   <div id="confirmModal" class="confirm-modal-backdrop" style="display:none" role="dialog" aria-modal="true">
     <div class="confirm-modal-box">
@@ -2990,6 +3187,7 @@
           if (data.type  === 'approval_required') handleApprovalRequired(data);
           if (data.type  === 'chat.stream.delta') handleStreamDelta(data);
           if (data.type  === 'chat.stream.end')   handleStreamEnd(data);
+          if (data.type  === 'update.progress')   handleUpdateProgress(data);
         } catch (e) { /* ignore */ }
       };
     }
@@ -4212,6 +4410,76 @@
       else            runTask();
     }
 
+    // ── Optimise prompt ────────────────────────────────────────────────────
+    // Send the current goal to /optimize_prompt; Claude rewrites it into
+    // a sharper instruction the local agent will plan/execute better
+    // against. Pre-flight checks the API key — no key → friendly modal
+    // pointing to Settings, no spinner cost.
+    async function optimizePrompt() {
+      const goalEl = document.getElementById('goal');
+      const original = (goalEl.value || '').trim();
+      if (!original) {
+        toast(t('optimize_no_text') || 'Type something first.', true);
+        return;
+      }
+
+      // Pre-flight: is a Claude key configured?
+      let hasKey = false;
+      try {
+        const r = await fetch(`${API}/settings`);
+        const d = await r.json();
+        const v = (d.data?.anthropic_api_key?.value || '').trim();
+        hasKey = v.length > 0;
+      } catch (_) { hasKey = false; }
+
+      if (!hasKey) {
+        const goSettings = await showConfirm({
+          title:    t('optimize_need_key_title') || 'Claude API Key needed',
+          body:     t('optimize_need_key_body') ||
+            'Optimising prompts uses Claude. Open Settings → Model Settings → Claude API Key, paste a key, and try again.',
+          okLabel:  t('optimize_open_settings') || 'Open Settings',
+          cancelLabel: t('btn_cancel') || 'Cancel',
+        });
+        if (goSettings) switchTab('settings');
+        return;
+      }
+
+      const wrap = goalEl.closest('.chat-input-wrap');
+      const btn  = document.getElementById('optimizeBtn');
+      // Visual: textarea greys out, ✨ icon spins, overlay shows "optimising…"
+      wrap.classList.add('optimizing');
+      wrap.dataset.optimizeMsg = '✨ ' + (t('optimize_running') || 'Optimising prompt…');
+      btn.classList.add('is-running');
+      btn.disabled = true;
+      goalEl.disabled = true;
+
+      try {
+        const res = await fetch(`${API}/optimize_prompt`, {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({ prompt: original, mode: currentMode() }),
+        });
+        const data = await res.json();
+        if (!data.success) throw new Error(data.error || 'optimization failed');
+        const next = (data.data?.optimized || '').trim();
+        if (!next) throw new Error('empty result');
+        goalEl.value = next;
+        // Re-fire auto-resize so the textarea grows to fit.
+        goalEl.style.height = 'auto';
+        goalEl.style.height = Math.min(goalEl.scrollHeight, 150) + 'px';
+        toast(t('optimize_done') || '✨ Prompt optimised');
+      } catch (e) {
+        toast((t('optimize_failed') || 'Optimisation failed') + ': ' + e.message, true);
+      } finally {
+        wrap.classList.remove('optimizing');
+        delete wrap.dataset.optimizeMsg;
+        btn.classList.remove('is-running');
+        btn.disabled = false;
+        goalEl.disabled = false;
+        goalEl.focus();
+      }
+    }
+
     function setRunningState(running) {
       _isRunning = running;
       const btn = document.getElementById('runBtn');
@@ -5370,6 +5638,186 @@
       toast('🔐 Generated secret — copy it, then click Save Settings');
     }
 
+    // ── Backend update flow ─────────────────────────────────────────────
+    // On app load (and once per hour after) we hit /update/check, which
+    // polls GitHub Releases for a newer OpenTeddy version. If one is
+    // available, the sidebar pill lights up; clicking it opens a modal
+    // showing the markdown release notes + an "Upgrade now" button. The
+    // apply path runs git pull + pip install in the backend and pumps
+    // every output line through the same WebSocket the chat uses, which
+    // we render into a live log inside the modal.
+    const _updateState = {
+      latest: null,
+      notes:  '',
+      url:    '',
+      tag:    '',
+      logLines: [],
+    };
+    const UPDATE_CHECK_TTL_MS = 60 * 60 * 1000;   // 1h cache
+
+    async function checkForUpdate() {
+      // Honor a small localStorage cache so we don't ping GitHub on
+      // every reload — the pill only needs to wake up once an hour.
+      try {
+        const cached = JSON.parse(localStorage.getItem('teddy.update.cache') || 'null');
+        if (cached && (Date.now() - cached.at < UPDATE_CHECK_TTL_MS)) {
+          if (cached.update_available) showUpdatePill(cached);
+          return;
+        }
+      } catch (_) {}
+      try {
+        const res = await fetch(`${API}/update/check`);
+        if (!res.ok) return;
+        const data = await res.json();
+        localStorage.setItem('teddy.update.cache', JSON.stringify({ ...data, at: Date.now() }));
+        if (data.update_available) showUpdatePill(data);
+      } catch (_) {
+        // Offline / GitHub down — silent. We never want absence of the
+        // update endpoint to feel like a broken feature.
+      }
+    }
+
+    function showUpdatePill(data) {
+      _updateState.latest = data.latest;
+      _updateState.notes  = data.release_notes || '';
+      _updateState.url    = data.release_url || '';
+      _updateState.tag    = data.tag || ('v' + data.latest);
+      const pill = document.getElementById('updatePill');
+      const txt  = document.getElementById('updatePillText');
+      if (txt)  txt.textContent  = (t('update_pill_text') || 'New version') + ' ' + _updateState.tag;
+      if (pill) pill.hidden = false;
+    }
+
+    function openUpdateModal() {
+      if (!_updateState.latest) return;
+      document.getElementById('updateModal').classList.add('open');
+      document.getElementById('updateModalVersion').textContent = _updateState.tag;
+      // Reset to release-notes view in case the user came back after a
+      // previous (failed) apply attempt.
+      document.getElementById('updateNotesView').hidden    = false;
+      document.getElementById('updateProgressView').hidden = true;
+      document.getElementById('updateModalApply').disabled = false;
+      document.getElementById('updateModalApply').textContent = t('update_apply') || 'Upgrade now →';
+      document.getElementById('updateNotesContent').innerHTML =
+        renderMarkdown(_updateState.notes || '_No release notes._');
+      // Reset the steps + log
+      ['pulling','installing','restarting'].forEach(s => {
+        const icon = document.getElementById(`step-${s}-icon`);
+        if (icon) {
+          icon.textContent = '◯';
+          icon.parentElement?.classList.remove('active','done','error');
+          // Each step row spans two grid cells; toggle on the parent grid via the icon ID.
+          const next = icon.nextElementSibling;
+          if (next && next.classList.contains('update-step-name')) {
+            // wrap-free reset: remove any state classes from both cells
+            icon.classList.remove('done','active','error');
+            next.classList.remove('done','active','error');
+          }
+        }
+      });
+      document.getElementById('updateLog').textContent = '';
+      _updateState.logLines = [];
+    }
+
+    function closeUpdateModal() {
+      document.getElementById('updateModal').classList.remove('open');
+    }
+
+    async function onUpdateApplyClick() {
+      const applyBtn = document.getElementById('updateModalApply');
+      const laterBtn = document.getElementById('updateModalLater');
+      applyBtn.disabled = true;
+      laterBtn.disabled = true;
+      // Swap views: hide notes, show progress.
+      document.getElementById('updateNotesView').hidden    = true;
+      document.getElementById('updateProgressView').hidden = false;
+      _setStepState('pulling', 'active');
+      try {
+        const r = await fetch(`${API}/update/apply`, { method: 'POST' });
+        const d = await r.json();
+        if (!r.ok || !d.success) {
+          _setStepState('pulling', 'error');
+          appendUpdateLog('❌ ' + (d.error || ('HTTP ' + r.status)));
+          applyBtn.disabled = false;
+          laterBtn.disabled = false;
+        }
+        // If success → we keep both buttons disabled and let the WS
+        // events drive the UI to a "done" state.
+      } catch (e) {
+        _setStepState('pulling', 'error');
+        appendUpdateLog('❌ ' + e.message);
+        applyBtn.disabled = false;
+        laterBtn.disabled = false;
+      }
+    }
+
+    function appendUpdateLog(line) {
+      _updateState.logLines.push(line);
+      // Cap to last 400 lines so a 5000-line pip output doesn't lock the DOM.
+      if (_updateState.logLines.length > 400) {
+        _updateState.logLines.splice(0, _updateState.logLines.length - 400);
+      }
+      const el = document.getElementById('updateLog');
+      if (el) {
+        el.textContent = _updateState.logLines.join('\n');
+        el.scrollTop = el.scrollHeight;
+      }
+    }
+
+    function _setStepState(step, state /* active|done|error */) {
+      const map = { active: '⏳', done: '✓', error: '✕' };
+      const icon = document.getElementById(`step-${step}-icon`);
+      if (!icon) return;
+      icon.textContent = map[state] || '◯';
+      // Find the matching name span (next sibling in the grid) and apply
+      // the state class to both for the CSS selectors above.
+      const name = icon.nextElementSibling;
+      [icon, name].forEach(el => {
+        if (!el) return;
+        el.classList.remove('active','done','error');
+        el.classList.add(state);
+      });
+    }
+
+    function handleUpdateProgress(data) {
+      const step = data.step || '';
+      if (step === 'pulling') {
+        _setStepState('pulling', 'active');
+        if (data.line) appendUpdateLog(data.line);
+      } else if (step === 'installing') {
+        _setStepState('pulling', 'done');
+        _setStepState('installing', 'active');
+        if (data.line) appendUpdateLog(data.line);
+      } else if (step === 'restarting') {
+        _setStepState('installing', 'done');
+        _setStepState('restarting', 'active');
+        if (data.line) appendUpdateLog(data.line);
+      } else if (step === 'done') {
+        _setStepState('restarting', 'done');
+        appendUpdateLog(data.line || '✅ Update complete.');
+        // Swap the apply button into "Reload page" so the user pulls
+        // the freshly-served HTML / i18n.
+        const applyBtn = document.getElementById('updateModalApply');
+        const laterBtn = document.getElementById('updateModalLater');
+        applyBtn.textContent = t('update_reload') || 'Reload page';
+        applyBtn.onclick = () => location.reload();
+        applyBtn.disabled = false;
+        laterBtn.disabled = false;
+        // Clear the cache so the pill goes away after the reload.
+        localStorage.removeItem('teddy.update.cache');
+      } else if (step === 'error') {
+        // Mark the most-recently-active step as errored.
+        const active = ['pulling','installing','restarting'].find(s => {
+          const icon = document.getElementById(`step-${s}-icon`);
+          return icon && icon.classList.contains('active');
+        }) || 'pulling';
+        _setStepState(active, 'error');
+        appendUpdateLog('❌ ' + (data.line || 'unknown error'));
+        document.getElementById('updateModalApply').disabled = false;
+        document.getElementById('updateModalLater').disabled = false;
+      }
+    }
+
     // Pull a diagnostic snapshot (logs + recent tasks + redacted settings)
     // from /admin/diagnostics and trigger a browser download. Lets the
     // user attach the zip to a bug report without copy-pasting from the
@@ -5539,6 +5987,10 @@
       loadTools();
       checkOllamaModelsForHome();
       pollApprovals();
+      // Quietly poll GitHub for a newer OpenTeddy release (cached 1h).
+      // Surfaces a sidebar pill if one's available; click → release-notes
+      // modal → "Upgrade now" runs git pull + pip install with live log.
+      checkForUpdate();
       setInterval(pollApprovals, 3000);
       setInterval(() => {
         if (document.getElementById('tab-settings').classList.contains('active')) {
