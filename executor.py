@@ -18,6 +18,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 import httpx
 
 from config import config
+from model_profile import model_tier
 from models import AgentRole, SubTask, TaskStatus
 from skill_factory import SkillFactory
 from tool_registry import ToolRegistry, tool_registry as _default_registry
@@ -342,10 +343,52 @@ FINAL OUTPUT FORMAT (emit exactly one JSON object, no prose outside it):
 _SYSTEM_PROMPT = _SYSTEM_PROMPT_CODE
 
 
-def _system_prompt_for_mode(mode: str) -> str:
-    if mode == "chat": return _SYSTEM_PROMPT_CHAT
-    # analytic currently uses the Code prompt (beta); see orchestrator comment.
-    return _SYSTEM_PROMPT_CODE
+_STRICT_PREAMBLE = """\
+[STRICT MODE — small model, follow these rules EXACTLY:]
+1. To USE a tool: emit ONLY the tool call. No prose around it. No \
+"I will call X" preamble.
+2. To ANSWER directly: emit ONLY the answer text. No "Final answer:" \
+prefix. No bullet-points-of-what-you-thought.
+3. NEVER mix tool calls and prose answers in the same response.
+4. Keep responses short. Aim for the minimum tokens that solve the task.
+
+Examples:
+User: list /tmp
+You: (call shell_exec_readonly with command='ls -la /tmp')
+
+User: what is 2 + 2?
+You: 4
+
+User: summarise this file: /etc/hosts
+You: (call file_read with path='/etc/hosts')   # then on the next turn, after the result is given to you, emit the summary text
+
+[End of strict-mode header. Below is the standard agent guide:]
+"""
+
+_OPEN_SUFFIX = """
+
+[Capable model — extra freedom:]
+You may take multiple reasoning steps before responding when the task is
+genuinely complex. Keep the FINAL response concise; the user only sees the
+last message, not your intermediate thinking.
+"""
+
+
+def _system_prompt_for_mode(mode: str, model_name: str = "") -> str:
+    """Pick the base prompt for the given mode, then bend its strictness
+    to match the model's capability tier.
+
+    This is the core of "Adaptive Prompts" (#1) — small thinking models
+    (qwen3.5:2b etc.) get the strict preamble + few-shot examples; large
+    models get a brief openness suffix; mid-range stays as-is.
+    """
+    base = _SYSTEM_PROMPT_CHAT if mode == "chat" else _SYSTEM_PROMPT_CODE
+    tier = model_tier(model_name)
+    if tier == "strict":
+        return _STRICT_PREAMBLE + "\n" + base
+    if tier == "open":
+        return base + _OPEN_SUFFIX
+    return base
 
 
 class Executor:
@@ -436,7 +479,13 @@ class Executor:
         at all — in chat mode we send no `tools` field so the model is
         forced into a pure single-turn answer (no accidental shell calls).
         """
-        system_prompt = _system_prompt_for_mode(mode)
+        system_prompt = _system_prompt_for_mode(mode, config.qwen_model)
+        # One-line trace so it's obvious in the log which prompt tier the
+        # current model is running under (strict / balanced / open).
+        logger.info(
+            "Executor prompt tier=%s mode=%s model=%s",
+            model_tier(config.qwen_model), mode, config.qwen_model,
+        )
 
         messages: List[Dict[str, Any]] = [
             {

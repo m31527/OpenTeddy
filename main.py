@@ -17,7 +17,7 @@ from typing import AsyncGenerator, Optional
 
 from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from approval_store import approval_store
@@ -49,6 +49,35 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 logger = logging.getLogger("openteddy")
+
+# In-memory ring buffer of formatted log lines, drained by the diagnostics
+# endpoint. Holds the last ~5000 lines (≈1 MB) which is enough to cover
+# multi-task debugging without ballooning RAM.
+from collections import deque  # noqa: E402  (deliberate placement near logging setup)
+
+
+class _RingBufferHandler(logging.Handler):
+    """Logging handler that retains the last `max_lines` records in RAM."""
+
+    def __init__(self, max_lines: int = 5000) -> None:
+        super().__init__(level=logging.INFO)
+        self.buffer: deque[str] = deque(maxlen=max_lines)
+        self.setFormatter(logging.Formatter(
+            "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+        ))
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            self.buffer.append(self.format(record))
+        except Exception:  # noqa: BLE001
+            self.handleError(record)
+
+    def snapshot(self) -> str:
+        return "\n".join(self.buffer)
+
+
+_ring_log_handler = _RingBufferHandler()
+logging.getLogger().addHandler(_ring_log_handler)
 
 # ── Application state ─────────────────────────────────────────────────────────
 tracker:          Tracker
@@ -235,6 +264,125 @@ async def health() -> dict:
         "version": "0.3.0",
         "memory":  memory_manager.is_available,
     }
+
+
+@app.get("/admin/diagnostics")
+async def admin_diagnostics() -> Response:
+    """Bundle a diagnostic snapshot (logs + recent tasks + settings) into a
+    single ZIP for the user to download from Settings.
+
+    Contents:
+      • app.log         — last ~5 000 lines of in-memory logger output
+      • tasks.json      — last 200 tasks, each with their subtasks + timing
+      • usage.json      — last 500 usage_records rows
+      • settings.json   — current settings (secrets redacted)
+      • meta.json       — Python / OS / model / config summary
+    """
+    import io
+    import platform
+    import sys
+    import zipfile
+
+    SECRET_KEYS = {
+        "anthropic_api_key", "telegram_bot_token", "smtp_password", "webhook_secret",
+    }
+
+    def _redact(value: str) -> str:
+        if not value:
+            return ""
+        if len(value) <= 8:
+            return "•" * len(value)
+        return value[:4] + "•" * (len(value) - 8) + value[-4:]
+
+    # ── tasks.json ─────────────────────────────────────────────
+    try:
+        tasks_rows = await tracker.list_tasks(limit=200)
+    except Exception as exc:  # noqa: BLE001
+        tasks_rows = [{"_error": str(exc)}]
+
+    tasks_payload: list[dict] = []
+    for t in tasks_rows or []:
+        d = dict(t) if not isinstance(t, dict) else t
+        try:
+            sts = await tracker.get_subtasks(d.get("id", ""))
+            # SubTask Pydantic objects → dicts for JSON serialisation.
+            d["subtasks"] = [s.model_dump() if hasattr(s, "model_dump") else s for s in sts]
+        except Exception:  # noqa: BLE001
+            d["subtasks"] = []
+        tasks_payload.append(d)
+
+    # ── usage.json ─────────────────────────────────────────────
+    try:
+        usage_page = await tracker.get_usage_paginated(page=1, page_size=500)
+        usage_rows = usage_page.get("records", []) if isinstance(usage_page, dict) else usage_page
+    except Exception as exc:  # noqa: BLE001
+        usage_rows = [{"_error": str(exc)}]
+
+    # ── settings.json (redacted) ───────────────────────────────
+    try:
+        settings_raw = await settings_store.get_all()
+    except Exception as exc:  # noqa: BLE001
+        settings_raw = {"_error": str(exc)}
+    settings_redacted = {
+        k: (_redact(v) if k in SECRET_KEYS else v)
+        for k, v in settings_raw.items()
+    }
+
+    # ── meta.json ──────────────────────────────────────────────
+    git_commit = ""
+    try:
+        import subprocess
+        out = subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=os.path.dirname(os.path.abspath(__file__)),
+            stderr=subprocess.DEVNULL,
+            timeout=2,
+        )
+        git_commit = out.decode().strip()
+    except Exception:  # noqa: BLE001
+        git_commit = "(unavailable)"
+
+    meta = {
+        "generated_at":     datetime.utcnow().isoformat() + "Z",
+        "openteddy_version": "0.3.0",
+        "git_commit":       git_commit,
+        "python_version":   sys.version,
+        "platform":         platform.platform(),
+        "machine":          platform.machine(),
+        "config_summary": {
+            "gemma_model":          config.gemma_model,
+            "qwen_model":            config.qwen_model,
+            "claude_model":          config.claude_model,
+            "gemma_base_url":        config.gemma_base_url,
+            "qwen_base_url":         config.qwen_base_url,
+            "agent_workspace_dir":   config.agent_workspace_dir,
+            "escalation_confidence_threshold": config.escalation_confidence_threshold,
+            "escalation_failure_limit":        config.escalation_failure_limit,
+            "subtask_timeout":                 config.subtask_timeout,
+            "qwen_max_tokens":                 config.qwen_max_tokens,
+            "gemma_max_tokens":                config.gemma_max_tokens,
+            "escalation_enabled":    config.escalation_enabled,
+            "streaming_enabled":     getattr(config, "streaming_enabled", True),
+        },
+    }
+
+    # ── Pack into ZIP ──────────────────────────────────────────
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("app.log",       _ring_log_handler.snapshot())
+        zf.writestr("tasks.json",    json.dumps(tasks_payload, indent=2, default=str, ensure_ascii=False))
+        zf.writestr("usage.json",    json.dumps(usage_rows, indent=2, default=str, ensure_ascii=False))
+        zf.writestr("settings.json", json.dumps(settings_redacted, indent=2, default=str, ensure_ascii=False))
+        zf.writestr("meta.json",     json.dumps(meta, indent=2, default=str, ensure_ascii=False))
+
+    stamp = datetime.utcnow().strftime("%Y%m%d-%H%M%S")
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="openteddy-diagnostics-{stamp}.zip"',
+        },
+    )
 
 
 @app.get("/fs/browse")

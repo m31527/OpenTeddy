@@ -2784,6 +2784,7 @@
 
             <div class="settings-save-row">
               <button class="btn-primary" onclick="saveSettings()" id="saveSettingsBtn" data-i18n="btn_save_settings">Save Settings</button>
+              <button class="btn-ghost" onclick="downloadDiagnostics()" id="diagBtn" data-i18n="btn_download_diagnostics" title="" data-i18n-title="diagnostics_hint">⬇ Download diagnostic logs</button>
               <span class="settings-msg" id="settingsMsg"></span>
             </div>
           </div>
@@ -5367,6 +5368,39 @@
       inp.type = 'text';  // reveal so the user can copy it
       inp.value = b64;
       toast('🔐 Generated secret — copy it, then click Save Settings');
+    }
+
+    // Pull a diagnostic snapshot (logs + recent tasks + redacted settings)
+    // from /admin/diagnostics and trigger a browser download. Lets the
+    // user attach the zip to a bug report without copy-pasting from the
+    // terminal. The endpoint redacts secrets before serialisation.
+    async function downloadDiagnostics() {
+      const btn = document.getElementById('diagBtn');
+      btn.disabled = true;
+      const original = btn.textContent;
+      btn.textContent = '⏳ ' + (t('diagnostics_building') || 'Building…');
+      try {
+        const res = await fetch(`${API}/admin/diagnostics`);
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const blob = await res.blob();
+        const cd = res.headers.get('Content-Disposition') || '';
+        const m = /filename="([^"]+)"/.exec(cd);
+        const fname = (m && m[1]) || 'openteddy-diagnostics.zip';
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = fname;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+        toast(t('diagnostics_downloaded') || '✅ Diagnostics downloaded');
+      } catch (e) {
+        toast((t('diagnostics_failed') || 'Download failed') + ': ' + e.message, true);
+      } finally {
+        btn.textContent = original;
+        btn.disabled = false;
+      }
     }
 
     async function saveSettings() {

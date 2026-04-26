@@ -252,11 +252,30 @@ _PLAN_SYSTEM_ANALYTIC = """\
 _PLAN_SYSTEM_BASE = _PLAN_SYSTEM_CODE
 
 
-def _plan_prompt_for_mode(mode: str) -> str:
-    """Pick the plan-system prompt that matches the session's mode."""
-    if mode == "chat":     return _PLAN_SYSTEM_CHAT
-    if mode == "analytic": return _PLAN_SYSTEM_ANALYTIC
-    return _PLAN_SYSTEM_CODE   # default — safest for unknown modes
+_PLAN_STRICT_HEADER = """\
+[STRICT PLANNER MODE — small model. Rules:]
+1. Output is JSON ONLY. No prose before or after the JSON object.
+2. Output format MUST be:  {"subtasks": [{"description": "..."}]}
+3. Keep "description" under 30 words. Plain English. No nested JSON.
+4. For chat-style questions emit exactly ONE subtask.
+5. NEVER output partial JSON — if unsure, emit a single best-guess subtask.
+
+"""
+
+
+def _plan_prompt_for_mode(mode: str, model_name: str = "") -> str:
+    """Pick the plan-system prompt that matches the session's mode and
+    bend its strictness to the model's tier (Adaptive Prompts #1)."""
+    from model_profile import model_tier
+    base = _PLAN_SYSTEM_CHAT if mode == "chat" else (
+        _PLAN_SYSTEM_ANALYTIC if mode == "analytic" else _PLAN_SYSTEM_CODE
+    )
+    tier = model_tier(model_name)
+    if tier == "strict":
+        return _PLAN_STRICT_HEADER + base
+    # Mid-range and large models keep the existing prompt — the JSON
+    # contract is already restrictive enough; loosening it doesn't help.
+    return base
 
 
 def _is_local_only() -> bool:
@@ -464,7 +483,7 @@ class Orchestrator:
         # classify the task, we hand Gemma a prompt already specialised for
         # the user's declared intent.
         mode_value = req.mode.value if hasattr(req.mode, "value") else str(req.mode)
-        base_prompt = _plan_prompt_for_mode(mode_value)
+        base_prompt = _plan_prompt_for_mode(mode_value, config.gemma_model)
 
         # For Code / Analytic modes, tell Gemma what the agent workspace is
         # so the shell plan uses a known directory (git clones land there
