@@ -15,6 +15,11 @@
   <!-- Chart.js for Analytic-mode charts rendered from ```chart JSON
        blocks in agent responses. UMD build ships the global `Chart`. -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <!-- Datalabels plugin — paints values / percentages directly onto
+       slices and bars so the user reads numbers off the chart without
+       hovering. Registered globally below so the agent's chart specs
+       inherit datalabels by default unless they explicitly opt out. -->
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.2.0/dist/chartjs-plugin-datalabels.min.js"></script>
   <script src="/static/i18n.js"></script>
   <style>
     :root {
@@ -1754,6 +1759,50 @@
       color: var(--text-primary);
       word-break: break-word;
     }
+    /* GFM pipe-tables rendered into proper <table> markup. Wrap is the
+       overflow-scroll container so a 10-column dataframe doesn't blow
+       up the chat width on narrow Macs. */
+    .md-table-wrap {
+      margin: 0.6rem 0 0.4rem;
+      overflow-x: auto;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--surface);
+    }
+    .md-table {
+      border-collapse: separate;
+      border-spacing: 0;
+      width: 100%;
+      font-size: 0.84rem;
+      line-height: 1.45;
+      color: var(--text-primary);
+      font-variant-numeric: tabular-nums;   /* aligned digits in number cols */
+    }
+    .md-table thead th {
+      background: var(--bg-secondary);
+      color: var(--text-secondary);
+      font-weight: 600;
+      text-align: left;
+      padding: 8px 12px;
+      border-bottom: 1px solid var(--border);
+      white-space: nowrap;
+      letter-spacing: 0.01em;
+    }
+    .md-table tbody td {
+      padding: 7px 12px;
+      border-bottom: 1px solid rgba(0,0,0,0.05);
+      vertical-align: top;
+    }
+    .md-table tbody tr:last-child td { border-bottom: none; }
+    .md-table tbody tr:nth-child(even) td { background: rgba(0,0,0,0.015); }
+    .md-table tbody tr:hover td { background: rgba(196,109,79,0.06); }
+    /* "合計 / Total" rows: bolder when the first cell is wrapped in <strong> */
+    .md-table tbody tr td:first-child strong { color: var(--text-primary); }
+    .md-table tbody tr:has(td:first-child strong) td {
+      background: var(--bg-secondary);
+      font-weight: 600;
+    }
+
     /* Subtle "took 1m 23s" stamp shown beneath the agent's final answer
        so the user can see how long the round-trip took at a glance. */
     .task-elapsed-footer {
@@ -4051,6 +4100,94 @@
     // Chart.js. Errors become a red notice inside the container so
     // the user sees "this chart's JSON is broken" instead of a blank
     // box — vital for debugging the agent's output.
+    // Register the datalabels plugin once, globally — every Chart()
+    // instance from this point on inherits it. Individual specs can
+    // still opt out via options.plugins.datalabels.display = false.
+    if (typeof Chart !== 'undefined' && typeof ChartDataLabels !== 'undefined') {
+      Chart.register(ChartDataLabels);
+    }
+
+    // Pretty-print a numeric value: 1234567 → "1.23M", 12345 → "12.3K",
+    // small numbers stay as locale-formatted (so 0.84 stays 0.84).
+    function _chartFmtValue(v) {
+      const n = Number(v);
+      if (!isFinite(n)) return String(v);
+      const abs = Math.abs(n);
+      if (abs >= 1_000_000) return (n / 1_000_000).toFixed(abs >= 10_000_000 ? 0 : 1) + 'M';
+      if (abs >= 10_000)    return (n / 1_000).toFixed(0) + 'K';
+      if (Number.isInteger(n)) return n.toLocaleString();
+      return n.toFixed(2);
+    }
+
+    // Decide what label to paint based on chart type. Pie / doughnut /
+    // polarArea show "value (X.X%)"; bar / line show the value with K/M
+    // shortening so a 7-figure column doesn't overflow the bar.
+    function _datalabelsDefaultsFor(type) {
+      const ring = type === 'pie' || type === 'doughnut' || type === 'polarArea';
+      if (ring) {
+        return {
+          color: '#fff',
+          font: { weight: '600', size: 12 },
+          textShadowColor: 'rgba(0,0,0,0.55)',
+          textShadowBlur: 4,
+          // Hide tiny slices so labels don't pile up on each other.
+          display: ctx => {
+            const v = Number(ctx.dataset.data[ctx.dataIndex] || 0);
+            const total = ctx.dataset.data.reduce((a, b) => a + Number(b || 0), 0) || 1;
+            return v / total >= 0.04;   // ≥ 4% of total
+          },
+          formatter: (value, ctx) => {
+            const total = ctx.dataset.data.reduce((a, b) => a + Number(b || 0), 0) || 1;
+            const pct = (Number(value) / total) * 100;
+            return _chartFmtValue(value) + '\n(' + pct.toFixed(1) + '%)';
+          },
+        };
+      }
+      // bar / line / scatter / radar — sit values just above the
+      // bar/point so they're readable on light + dark themes.
+      const textPrimary =
+        getComputedStyle(document.documentElement)
+          .getPropertyValue('--text-primary').trim() || '#1a1a1a';
+      return {
+        anchor: 'end',
+        align: 'top',
+        offset: 4,
+        clamp: true,
+        color: textPrimary,
+        font: { weight: '600', size: 11 },
+        formatter: (value, ctx) => {
+          if (value == null || value === '') return '';
+          // Stacked or 0 → suppress, otherwise format.
+          const n = Number(value);
+          if (!isFinite(n) || n === 0) return '';
+          return _chartFmtValue(n);
+        },
+      };
+    }
+
+    // Deep-merge datalabels defaults INTO whatever the agent's spec
+    // already provided, without clobbering explicit user choices.
+    function _mergeDatalabels(spec) {
+      const type = (spec.type || 'bar').toLowerCase();
+      spec.options = spec.options || {};
+      spec.options.plugins = spec.options.plugins || {};
+      const userOpts = spec.options.plugins.datalabels;
+      if (userOpts === false || (userOpts && userOpts.display === false)) return; // explicit opt-out
+      const defaults = _datalabelsDefaultsFor(type);
+      spec.options.plugins.datalabels = Object.assign({}, defaults, userOpts || {});
+      // Horizontal bars (indexAxis: 'y') read better with anchor:'end'
+      // align:'right' so labels sit just past the bar tip.
+      if (type === 'bar' && spec.options.indexAxis === 'y') {
+        spec.options.plugins.datalabels.anchor = 'end';
+        spec.options.plugins.datalabels.align  = 'right';
+        spec.options.plugins.datalabels.offset = 6;
+      }
+      // Pad chart area so end-anchored labels aren't clipped.
+      spec.options.layout = spec.options.layout || {};
+      const padDefault = (type === 'bar' && spec.options.indexAxis !== 'y') ? 18 : 6;
+      spec.options.layout.padding = spec.options.layout.padding ?? padDefault;
+    }
+
     function renderPendingCharts(root) {
       if (typeof Chart === 'undefined') return;  // CDN blocked or offline
       const canvases = root.querySelectorAll('canvas.chart-pending');
@@ -4072,6 +4209,9 @@
           spec.options = spec.options || {};
           spec.options.responsive = spec.options.responsive !== false;
           spec.options.maintainAspectRatio = false;
+          // Inject value / percentage labels onto slices and bars unless
+          // the agent's spec explicitly opted out.
+          _mergeDatalabels(spec);
           new Chart(canvas.getContext('2d'), spec);
         } catch (e) {
           const container = canvas.parentElement;
@@ -5382,6 +5522,53 @@
         if ((m = block.match(/^### (.+)$/)))  { out.push(`<h4>${inline(m[1])}</h4>`); continue; }
         if ((m = block.match(/^## (.+)$/)))   { out.push(`<h3>${inline(m[1])}</h3>`); continue; }
         if ((m = block.match(/^# (.+)$/)))    { out.push(`<h2>${inline(m[1])}</h2>`); continue; }
+
+        // GFM-style pipe table:
+        //   | col1 | col2 |
+        //   |:---|---:|       ← separator row, alignment via colons
+        //   | a    | 1    |
+        // The block must have ≥ 2 lines AND the second line must look
+        // like a separator (only |, -, :, and whitespace). We render to
+        // an <table> with .md-table styling — much nicer than the raw
+        // pipes the analytic agent loves to emit.
+        const tlines = block.split('\n').filter(l => l.trim().length);
+        if (tlines.length >= 2 && /^\s*\|?[\s\-:|]+\|?\s*$/.test(tlines[1]) && tlines[1].includes('-')) {
+          const splitRow = (row) => {
+            // Strip the optional leading/trailing pipes, then split on
+            // the remaining ones. Cells are escaped already (block went
+            // through escHtml above), so we only need to inline()-format.
+            let s = row.trim();
+            if (s.startsWith('|')) s = s.slice(1);
+            if (s.endsWith('|'))   s = s.slice(0, -1);
+            return s.split('|').map(c => c.trim());
+          };
+          const aligns = splitRow(tlines[1]).map(c => {
+            const left  = c.startsWith(':');
+            const right = c.endsWith(':');
+            if (left && right) return 'center';
+            if (right)         return 'right';
+            if (left)          return 'left';
+            return null;
+          });
+          const headCells = splitRow(tlines[0]);
+          const bodyRows = tlines.slice(2).map(splitRow);
+          const styleFor = (i) => aligns[i] ? ` style="text-align:${aligns[i]}"` : '';
+          const headHtml =
+            '<thead><tr>' +
+            headCells.map((c, i) => `<th${styleFor(i)}>${inline(c)}</th>`).join('') +
+            '</tr></thead>';
+          const bodyHtml = bodyRows.length
+            ? '<tbody>' +
+              bodyRows.map(r =>
+                '<tr>' +
+                r.map((c, i) => `<td${styleFor(i)}>${inline(c)}</td>`).join('') +
+                '</tr>'
+              ).join('') +
+              '</tbody>'
+            : '';
+          out.push(`<div class="md-table-wrap"><table class="md-table">${headHtml}${bodyHtml}</table></div>`);
+          continue;
+        }
 
         const lines = block.split('\n');
         let listBuf = [];
