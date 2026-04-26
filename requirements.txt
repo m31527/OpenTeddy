@@ -34,3 +34,7 @@ google-cloud-pubsub>=2.0.0
 # out of the box without an extra approval step.
 pandas>=2.0.0
 numpy>=1.24.0
+# Excel readers — needed so analytic-mode tools can load .xlsx/.xls
+# directly without asking the user to convert to CSV.
+openpyxl>=3.1.0
+xlrd>=2.0.0

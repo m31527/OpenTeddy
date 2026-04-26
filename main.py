@@ -240,11 +240,23 @@ async def websocket_endpoint(ws: WebSocket) -> None:
         ws_manager.disconnect(ws)
 
 
+_NO_CACHE_HEADERS = {
+    # Browser MUST hit the server every load — without this, hot-fixes
+    # to /static/index.html get masked behind a 24h disk cache and the
+    # user thinks "the new feature didn't ship". Static asset files
+    # under /static/* still get the FastAPI defaults (long cache OK
+    # because their URL changes on disk → cache-bust by file path).
+    "Cache-Control": "no-cache, no-store, must-revalidate",
+    "Pragma":        "no-cache",
+    "Expires":       "0",
+}
+
+
 @app.get("/", include_in_schema=False)
 async def root() -> FileResponse:
     index = os.path.join(_static_dir, "index.html")
     if os.path.exists(index):
-        return FileResponse(index)
+        return FileResponse(index, headers=_NO_CACHE_HEADERS)
     return FileResponse(__file__)
 
 

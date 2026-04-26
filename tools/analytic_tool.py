@@ -73,10 +73,28 @@ async def csv_describe(path: str, working_dir: Optional[str] = None) -> Dict[str
     if not target.is_file():
         return make_result(False, error=f"not a regular file: {target}")
 
+    # Pick a reader based on extension. xlsx / xls go through pandas'
+    # Excel reader (openpyxl / xlrd) instead of read_csv — without this
+    # the agent saw "Unicode error" / "no header" and gave up, telling
+    # the user to "convert to CSV", which is the wrong UX.
+    ext = target.suffix.lower()
+    if ext in {".xlsx", ".xlsm"}:
+        reader_call = f"pd.read_excel({str(target)!r}, engine='openpyxl')"
+    elif ext == ".xls":
+        reader_call = f"pd.read_excel({str(target)!r}, engine='xlrd')"
+    elif ext == ".parquet":
+        reader_call = f"pd.read_parquet({str(target)!r})"
+    elif ext == ".json":
+        reader_call = f"pd.read_json({str(target)!r})"
+    elif ext in {".tsv", ".tab"}:
+        reader_call = f"pd.read_csv({str(target)!r}, sep='\\t', low_memory=False)"
+    else:
+        reader_call = f"pd.read_csv({str(target)!r}, low_memory=False)"
+
     code = textwrap.dedent(f"""\
         import json, sys
         import pandas as pd
-        df = pd.read_csv({str(target)!r}, low_memory=False)
+        df = {reader_call}
         out = {{
             "rows":    int(len(df)),
             "cols":    int(df.shape[1]),
@@ -137,19 +155,24 @@ async def python_exec(
     if path:
         target = _resolve(path, working_dir)
         ext = target.suffix.lower()
-        if ext == ".parquet":
-            reader = "pd.read_parquet"
+        # Map extension → full reader expression. We build the entire
+        # call inline (rather than just the function name) because Excel
+        # readers need the openpyxl/xlrd engine kwarg and read_csv needs
+        # the low_memory flag — they don't share a uniform signature.
+        if ext in {".xlsx", ".xlsm"}:
+            reader_call = f"pd.read_excel({str(target)!r}, engine='openpyxl')"
+        elif ext == ".xls":
+            reader_call = f"pd.read_excel({str(target)!r}, engine='xlrd')"
+        elif ext == ".parquet":
+            reader_call = f"pd.read_parquet({str(target)!r})"
         elif ext == ".json":
-            reader = "pd.read_json"
+            reader_call = f"pd.read_json({str(target)!r})"
         elif ext in {".tsv", ".tab"}:
-            reader = 'pd.read_csv'
-            preamble_lines.append(f"df = {reader}({str(target)!r}, sep='\\t', low_memory=False)")
-            preamble_lines.append("# df is the loaded dataframe — go.")
+            reader_call = f"pd.read_csv({str(target)!r}, sep='\\t', low_memory=False)"
         else:
-            reader = "pd.read_csv"
-        if ext not in {".tsv", ".tab"}:
-            preamble_lines.append(f"df = {reader}({str(target)!r}, low_memory=False)")
-            preamble_lines.append("# df is the loaded dataframe — go.")
+            reader_call = f"pd.read_csv({str(target)!r}, low_memory=False)"
+        preamble_lines.append(f"df = {reader_call}")
+        preamble_lines.append("# df is the loaded dataframe — go.")
 
     full_code = "\n".join(preamble_lines) + "\n\n" + textwrap.dedent(code)
 
@@ -229,8 +252,10 @@ _SCHEMA_DESCRIBE: Dict[str, Any] = {
     "function": {
         "name": "csv_describe",
         "description": (
-            "Quick CSV survey: shape, dtypes, head(5), and describe() per column. "
-            "Always call this FIRST when given a CSV — never guess column names."
+            "Quick tabular-file survey: shape, dtypes, head(5), and describe() "
+            "per column. Supports CSV, TSV, Excel (.xlsx/.xls/.xlsm), Parquet, "
+            "and JSON. Always call this FIRST when handed a data file — never "
+            "guess column names."
         ),
         "parameters": {
             "type": "object",
@@ -256,7 +281,8 @@ _SCHEMA_PYTHON_EXEC: Dict[str, Any] = {
         "description": (
             "Run Python (with pandas, numpy preloaded) in a sandboxed subprocess. "
             "If `path` is supplied, the file is auto-loaded as DataFrame `df` "
-            "(supports .csv, .tsv, .json, .parquet). Use `print(...)` to return "
+            "(supports .csv, .tsv, .json, .parquet, .xlsx, .xls, .xlsm). "
+            "Use `print(...)` to return "
             "results — only stdout is surfaced. Common use: compute repurchase "
             "rate, group-by aggregations, time-series resampling, basic charts "
             "(emit JSON the chat layer renders)."
