@@ -4168,12 +4168,14 @@
         };
       }
       // bar / line / scatter / radar — sit values just above the
-      // bar/point so they're readable on light + dark themes.
+      // bar/point. For mixed-sign data, anchor swaps so labels always
+      // appear on the side AWAY from zero (positive: above bar tip,
+      // negative: above zero baseline, never lost below the chart area).
       const textPrimary =
         getComputedStyle(document.documentElement)
           .getPropertyValue('--text-primary').trim() || '#1a1a1a';
       return {
-        anchor: 'end',
+        anchor: (ctx) => (Number(ctx.dataset.data[ctx.dataIndex] ?? 0) >= 0 ? 'end' : 'start'),
         align: 'top',
         offset: 4,
         clamp: true,
@@ -6275,8 +6277,40 @@
       });
     }
 
+    // ── Build-hash cache buster ──────────────────────────────────────────
+    // Browsers ignore Cache-Control: no-cache once they've already
+    // disk-cached an HTML response (especially on bfcache navigations).
+    // On first paint we hit /version, compare the git short-hash with
+    // what we last saw, and force a hard reload exactly once if it
+    // changed. After the first reload the new index.html is in
+    // memory and stays in sync. The sessionStorage flag prevents an
+    // infinite reload loop if /version is briefly unreachable.
+    async function _checkBuildAndMaybeReload() {
+      try {
+        const r = await fetch(`${API}/version`, { cache: 'no-store' });
+        if (!r.ok) return;
+        const { commit } = await r.json();
+        if (!commit) return;
+        const prev = localStorage.getItem('teddy.build');
+        if (prev && prev !== commit && !sessionStorage.getItem('teddy.refreshed')) {
+          sessionStorage.setItem('teddy.refreshed', '1');
+          // Hard reload — bypass disk cache so we pull the freshly-
+          // shipped index.html and i18n.js.
+          location.reload();
+          return;
+        }
+        localStorage.setItem('teddy.build', commit);
+        // Clear the once-per-session flag so a future build bump
+        // can trigger another reload.
+        if (prev === commit) sessionStorage.removeItem('teddy.refreshed');
+      } catch (_) { /* offline / version endpoint missing → ignore */ }
+    }
+
     // ── Init ─────────────────────────────────────────────────────────────────
     window.onload = async () => {
+      // First thing — if the build changed since last load, reload now
+      // so the rest of init runs against the freshly-fetched JS.
+      await _checkBuildAndMaybeReload();
       updateLangBtn();             // show current locale flag in sidebar
       initWS();
       installApprovalShortcuts();
