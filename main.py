@@ -698,6 +698,7 @@ async def admin_diagnostics() -> Response:
             "gemma_max_tokens":                config.gemma_max_tokens,
             "escalation_enabled":    config.escalation_enabled,
             "streaming_enabled":     getattr(config, "streaming_enabled", True),
+            "verification_enabled":  getattr(config, "verification_enabled", True),
         },
     }
 

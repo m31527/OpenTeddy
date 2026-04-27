@@ -60,6 +60,16 @@ SETTINGS_META: dict[str, dict[str, Any]] = {
                         "finishes. Disable for one-shot responses (legacy).",
         "type":        "bool",
     },
+    "verification_enabled": {
+        "label":       "Per-step deliverable verification",
+        "description": "After each successful subtask, run an extra LLM "
+                        "judge call to confirm the produced file actually "
+                        "matches the goal (catches the 'wrote a report "
+                        "instead of a working game' failure mode). On big "
+                        "models this adds 5–60s per step — turn OFF on "
+                        "DGX Spark / 35B-class setups for a major speedup.",
+        "type":        "bool",
+    },
     "gemma_base_url": {
         "label":       "Orchestrator Ollama URL",
         "description": "Base URL of the Ollama instance serving the orchestrator",
@@ -216,6 +226,7 @@ def _defaults_from_config() -> dict[str, str]:
         "anthropic_api_key":        config.anthropic_api_key,
         "escalation_enabled":       "true" if config.escalation_enabled else "false",
         "streaming_enabled":        "true" if config.streaming_enabled else "false",
+        "verification_enabled":     "true" if getattr(config, "verification_enabled", True) else "false",
         "gemma_base_url":           config.gemma_base_url,
         "qwen_base_url":            config.qwen_base_url,
         "escalation_threshold":     str(config.escalation_confidence_threshold),
@@ -412,6 +423,11 @@ class SettingsStore:
         if "streaming_enabled" in settings:
             config.streaming_enabled = (
                 str(settings["streaming_enabled"]).strip().lower()
+                not in {"0", "false", "no", "off", ""}
+            )
+        if "verification_enabled" in settings:
+            config.verification_enabled = (
+                str(settings["verification_enabled"]).strip().lower()
                 not in {"0", "false", "no", "off", ""}
             )
         if "gemma_base_url" in settings:

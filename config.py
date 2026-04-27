@@ -130,6 +130,17 @@ class Config:
         default_factory=lambda: os.getenv("STREAMING_ENABLED", "true").strip().lower()
         not in {"0", "false", "no", "off"}
     )
+    # #2 Per-step deliverable verification — LLM-as-judge call after each
+    # successful subtask to confirm the produced file matches the goal.
+    # Catches the "small model wrote a report instead of a working artifact"
+    # failure mode, but adds one extra LLM call per subtask. On big models
+    # (DGX Spark / qwen3.5:35b) each call is 5–60s; for multi-step CSV
+    # report plans that adds minutes. Set to "false" to skip — the agent
+    # will trust whatever the executor reports as success.
+    verification_enabled: bool = field(
+        default_factory=lambda: os.getenv("VERIFICATION_ENABLED", "true").strip().lower()
+        not in {"0", "false", "no", "off"}
+    )
     # Ollama "num_ctx" — how many tokens of input the model is willing
     # to read each turn. Default 16K is a sweet spot for thinking models
     # (qwen3.5 / gemma4): big enough to hold ~10 tool rounds, small
@@ -335,6 +346,10 @@ class Config:
         if "streaming_enabled" in settings:
             self.streaming_enabled = (
                 str(settings["streaming_enabled"]).strip().lower() not in _OFF
+            )
+        if "verification_enabled" in settings:
+            self.verification_enabled = (
+                str(settings["verification_enabled"]).strip().lower() not in _OFF
             )
 
         v = _f("escalation_threshold")

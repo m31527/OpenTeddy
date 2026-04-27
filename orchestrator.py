@@ -797,20 +797,43 @@ class Orchestrator:
     async def _verify_deliverable(
         self, st: SubTask, artifacts: List[Dict[str, Any]],
     ) -> Optional[Tuple[str, bool]]:
-        """Ask Qwen if the largest produced text artifact actually matches
-        the subtask goal. Returns ``(reason, ok)`` or ``None`` if there
-        was nothing to verify (no artifacts, or all binary)."""
+        """Ask Qwen if the largest produced deliverable artifact actually
+        matches the subtask goal. Returns ``(reason, ok)`` or ``None`` if
+        there was nothing to verify (no artifacts, none deliverable-shaped,
+        or verification globally disabled)."""
         if not artifacts:
             return None
-        # Pick the largest text-y artifact — that's most likely the
-        # primary deliverable. Skip binary extensions to avoid pointless
-        # checks (an image / parquet won't read sensibly as text).
-        TEXTY = {".html", ".htm", ".js", ".jsx", ".ts", ".tsx", ".py",
-                 ".md", ".txt", ".json", ".yaml", ".yml", ".css", ".sh",
-                 ".sql", ".csv", ".tsv", ".xml", ".toml", ".ini"}
-        candidates = [a for a in artifacts
-                      if any(a.get("path", "").lower().endswith(ext) for ext in TEXTY)]
+        # Master kill-switch — heavyweight on big models. Defaults true so
+        # legacy users keep the safety net; flip in Settings → Performance
+        # or via env VERIFICATION_ENABLED=false. The DGX-Spark/35B-class
+        # user case is the canonical reason to disable.
+        if not bool(getattr(config, "verification_enabled", True)):
+            logger.debug("Subtask %s: verification disabled by config — skipping.", st.id)
+            return None
+
+        # DELIVERABLE-shaped extensions only. Raw data (.csv / .tsv /
+        # .parquet / .json), config (.yaml / .toml / .ini / .xml), and
+        # plain text logs are NOT included — they're typically inputs or
+        # intermediates, not the user's actual deliverable. Including
+        # them caused a regression where CSV-report plans got stuck:
+        # the verifier picked the largest .csv artifact, judged it as
+        # "not the report" (correctly!), and forced infinite retries.
+        DELIVERABLE_EXTS = {
+            ".html", ".htm",                # web reports / dashboards
+            ".md",                          # markdown reports
+            ".py", ".js", ".jsx", ".ts", ".tsx",   # implementation code
+            ".css",                         # styling for HTML reports
+            ".sh", ".sql",                  # scripted deliverables
+        }
+        candidates = [
+            a for a in artifacts
+            if any(a.get("path", "").lower().endswith(ext) for ext in DELIVERABLE_EXTS)
+        ]
         if not candidates:
+            logger.debug(
+                "Subtask %s: no deliverable-shaped artifacts (had %d total) — "
+                "skipping verification.", st.id, len(artifacts),
+            )
             return None
         candidates.sort(key=lambda a: a.get("size_bytes") or 0, reverse=True)
         target = candidates[0]
@@ -853,7 +876,13 @@ class Orchestrator:
                         "num_ctx":     int(getattr(config, "qwen_num_ctx", 16384)),
                     },
                 },
-                timeout=90,
+                # 30s cap. The judge call only needs ~50 tokens of output
+                # ("PASS" / "FAIL" + 30-word reason). On a healthy big
+                # model that's <10s; if it blows past 30s something is
+                # wrong (model reload, cold start, unrelated job hogging
+                # GPU) and we're better off skipping verification than
+                # blocking the whole plan for a minute per step.
+                timeout=30,
             )
             resp.raise_for_status()
             msg = resp.json().get("message") or {}
