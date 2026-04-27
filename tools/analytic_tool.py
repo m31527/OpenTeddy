@@ -193,27 +193,137 @@ async def python_exec(
     return make_result(True, result=out)
 
 
-# ── Error post-processing ────────────────────────────────────────────────────
-
+# ── Error post-processing (#C: Python error translation) ─────────────────────
+# Convert raw subprocess tracebacks into one-line, actionable hints the
+# small executor model can actually parse and act on. Without this the
+# model sees a 30-line traceback, doesn't know which line matters, and
+# typically tries the same broken code with a tweak — burning rounds.
 import re as _re
 
-_MISSING_MOD_RE = _re.compile(r"ModuleNotFoundError: No module named ['\"]([^'\"]+)['\"]")
+# Patterns are tried in order; first match wins. Each entry is
+# (regex, hint_fn) where hint_fn(match) -> short actionable string.
+_PY_ERROR_PATTERNS = [
+    # ModuleNotFoundError: No module named 'X' or 'X.y'
+    (
+        _re.compile(r"ModuleNotFoundError: No module named ['\"]([^'\"]+)['\"]"),
+        lambda m: (
+            f"missing Python package '{m.group(1).split('.')[0]}' in the "
+            f"agent's venv — install with: pip install {m.group(1).split('.')[0]}"
+        ),
+    ),
+    # ImportError variant — covers "cannot import name 'X' from 'Y'"
+    (
+        _re.compile(r"ImportError: cannot import name ['\"]([^'\"]+)['\"] from ['\"]([^'\"]+)['\"]"),
+        lambda m: (
+            f"can't import '{m.group(1)}' from '{m.group(2)}' — package version mismatch "
+            f"or wrong name. Try a different import path or upgrade the package."
+        ),
+    ),
+    # FileNotFoundError: ... 'path'
+    (
+        _re.compile(r"FileNotFoundError: \[Errno 2\] No such file or directory: ['\"]([^'\"]+)['\"]"),
+        lambda m: (
+            f"file not found: '{m.group(1)}'. Check the path is correct and "
+            f"relative to the workspace (use csv_describe / list_directory to find it first)."
+        ),
+    ),
+    # KeyError on dataframe / dict access
+    (
+        _re.compile(r"KeyError: ['\"]([^'\"]+)['\"]"),
+        lambda m: (
+            f"key/column '{m.group(1)}' not found in DataFrame. Run csv_describe "
+            f"FIRST to see the exact column names — they are case-sensitive and "
+            f"may include spaces or different language characters than you expect."
+        ),
+    ),
+    # IndentationError — show the actual issue line
+    (
+        _re.compile(r"IndentationError: (.+?)(?:\n|$)"),
+        lambda m: (
+            f"Python indentation error: {m.group(1).strip()}. Use 4 spaces "
+            f"consistently. Mixed tabs/spaces will also trigger this."
+        ),
+    ),
+    # SyntaxError
+    (
+        _re.compile(r"SyntaxError: (.+?)(?:\n|$)"),
+        lambda m: (
+            f"Python syntax error: {m.group(1).strip()}. Re-check quotes, "
+            f"parentheses, colons, and f-string braces."
+        ),
+    ),
+    # AttributeError: 'X' object has no attribute 'Y'
+    (
+        _re.compile(r"AttributeError: ['\"]?(\w+)['\"]? object has no attribute ['\"]([^'\"]+)['\"]"),
+        lambda m: (
+            f"`{m.group(1)}` object has no attribute `{m.group(2)}` — likely a "
+            f"typo or a method name that doesn't exist on this type. Check the "
+            f"docs for {m.group(1)} or use dir() to list available attributes."
+        ),
+    ),
+    # NameError: name 'X' is not defined
+    (
+        _re.compile(r"NameError: name ['\"]?(\w+)['\"]? is not defined"),
+        lambda m: (
+            f"undefined name `{m.group(1)}` — define the variable / import the "
+            f"module before use, or check spelling. Note: pandas is `pd`, "
+            f"numpy is `np` (already imported in your runtime)."
+        ),
+    ),
+    # ValueError — common pandas mistakes
+    (
+        _re.compile(r"ValueError: (.+?)(?:\n|$)"),
+        lambda m: (
+            f"value error: {m.group(1).strip()[:160]}. Check input data shape / "
+            f"types match what the function expects."
+        ),
+    ),
+    # TypeError — likely wrong argument
+    (
+        _re.compile(r"TypeError: (.+?)(?:\n|$)"),
+        lambda m: (
+            f"type error: {m.group(1).strip()[:160]}. Verify argument types "
+            f"and signatures."
+        ),
+    ),
+    # Permission denied
+    (
+        _re.compile(r"PermissionError: \[Errno 13\] (.+?)(?:\n|$)"),
+        lambda m: (
+            f"permission denied: {m.group(1).strip()}. The agent runs in the "
+            f"workspace dir; writing outside it usually needs explicit setup."
+        ),
+    ),
+    # Connection refused (httpx / requests)
+    (
+        _re.compile(r"(?:ConnectionError|ConnectionRefused|HTTPError).*?\b(?:Refused|refused|Connection refused|Name or service not known)\b"),
+        lambda m: (
+            "network connection refused — check the URL is reachable and the "
+            "service is running. Local-only tasks shouldn't hit external URLs."
+        ),
+    ),
+]
 
 
-def _missing_package_hint(stderr: str) -> Optional[str]:
-    """Convert a raw ModuleNotFoundError traceback into an actionable
-    hint the agent can act on (it can chain a `pip_install` tool call,
-    or surface a clean message to the user)."""
+def _python_error_hint(stderr: str) -> Optional[str]:
+    """Convert a raw subprocess traceback into a one-line, actionable hint.
+    Returns None if no pattern matched — caller falls back to raw stderr."""
     if not stderr:
         return None
-    m = _MISSING_MOD_RE.search(stderr)
-    if not m:
-        return None
-    pkg = m.group(1).split(".")[0]   # toplevel package
-    return (
-        f"missing Python package '{pkg}' in the agent's venv — "
-        f"install with: pip install {pkg}"
-    )
+    for pattern, hint_fn in _PY_ERROR_PATTERNS:
+        m = pattern.search(stderr)
+        if m:
+            try:
+                return hint_fn(m)
+            except Exception:  # noqa: BLE001
+                continue
+    return None
+
+
+# Back-compat alias — the older call site used _missing_package_hint.
+# Keep it pointing at the broader translator so downstream code still
+# benefits from the wider pattern coverage.
+_missing_package_hint = _python_error_hint
 
 
 # ── Subprocess runner ────────────────────────────────────────────────────────

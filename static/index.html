@@ -300,11 +300,31 @@
       padding: 0.4rem 0;
     }
     .sidebar.collapsed .sidebar-status #wsLabel { display: none; }
-    .sidebar.collapsed .lang-btn {
-      padding: 0.3rem;
-      justify-content: center;
+
+    /* Author credit row, sits beneath the WS status. Subtle muted
+       text + dotted-underline link styling so it doesn't compete
+       with the nav for attention. Horizontal padding matches
+       .sidebar-status so this line lines up flush-left with the
+       "Connecting…" label above it. Hidden when sidebar collapses. */
+    .sidebar-credit {
+      padding: 0.1rem 0.65rem 0.4rem;
+      font-size: 0.7rem;
+      color: var(--sidebar-muted);
+      text-align: left;
+      letter-spacing: 0.01em;
     }
-    .sidebar.collapsed .lang-btn #langBtnLabel { display: none; }
+    .sidebar-credit a {
+      color: var(--sidebar-text);
+      text-decoration: none;
+      border-bottom: 1px dotted var(--sidebar-muted);
+      transition: color 0.12s, border-color 0.12s;
+      cursor: pointer;
+    }
+    .sidebar-credit a:hover {
+      color: var(--accent);
+      border-color: var(--accent);
+    }
+    .sidebar.collapsed .sidebar-credit { display: none; }
 
     /* ── Update pill (sidebar footer) + modal ─────────────────────────── */
     .update-pill {
@@ -520,6 +540,13 @@
     .mode-btn.active[data-mode="chat"]     { box-shadow: 0 0 0 1px #93c5fd, 0 1px 3px rgba(0,0,0,0.08); }
     .mode-btn.active[data-mode="code"]     { box-shadow: 0 0 0 1px #86efac, 0 1px 3px rgba(0,0,0,0.08); }
     .mode-btn.active[data-mode="analytic"] { box-shadow: 0 0 0 1px #c4b5fd, 0 1px 3px rgba(0,0,0,0.08); }
+    /* Locked state: the pill itself goes slightly muted so users see
+       at a glance that the segmented control is no longer interactive,
+       beyond just the disabled buttons. */
+    .mode-switch.locked {
+      opacity: 0.7;
+      cursor: not-allowed;
+    }
     .mode-btn:disabled {
       opacity: 0.5;
       cursor: not-allowed;
@@ -2372,25 +2399,10 @@
       }
     }
 
-    /* ── Language Switcher ───────────────────────────────────────────────── */
-    .lang-btn {
-      background: transparent;
-      border: none;
-      color: var(--sidebar-muted);
-      cursor: pointer;
-      font-size: 0.8rem;
-      padding: 0.3rem 0.4rem;
-      border-radius: 6px;
-      display: inline-flex;
-      align-items: center;
-      gap: 0.3rem;
-      font-family: inherit;
-      transition: background 0.1s, color 0.1s;
-      white-space: nowrap;
-    }
-    .lang-btn:hover { background: var(--sidebar-hover); color: var(--sidebar-text); }
-    .lang-btn .lang-btn-flag { font-size: 0.9rem; }
-
+    /* ── Language Switcher modal ────────────────────────────────────────── */
+    /* (The trigger button is a regular .sidebar-nav-btn now — see the
+       Settings/Language nav block. CSS for the bare .lang-btn was
+       retired when it folded into the nav.) */
     .lang-modal-backdrop {
       position: fixed; inset: 0; z-index: 2000;
       background: rgba(0,0,0,0.45);
@@ -2536,15 +2548,28 @@
           <button class="sidebar-nav-btn" data-tab="memory"   onclick="switchTab('memory')"   data-i18n-title="nav_memory"   title="Memory"><span class="nav-icon">🧠</span><span class="nav-label" data-i18n="nav_memory">Memory</span></button>
           <button class="sidebar-nav-btn" data-tab="usage"    onclick="switchTab('usage')"    data-i18n-title="nav_usage"    title="Usage"><span class="nav-icon">📊</span><span class="nav-label" data-i18n="nav_usage">Usage</span></button>
           <button class="sidebar-nav-btn" data-tab="settings" onclick="switchTab('settings')" data-i18n-title="nav_settings" title="Settings"><span class="nav-icon">⚙️</span><span class="nav-label" data-i18n="nav_settings">Settings</span></button>
+          <!-- Language switcher styled as a nav button so it lines up
+               flush under Settings. Icon slot shows the active locale's
+               flag (kept dynamic by updateLangBtn() in JS); the label
+               cell holds the locale's short label after switching. -->
+          <button class="sidebar-nav-btn" id="langBtn" onclick="__i18n.openLangSwitcher()" data-i18n-title="lang_switcher_title" title="Language">
+            <span class="nav-icon" id="langBtnFlag">🌐</span>
+            <span class="nav-label" id="langBtnLabel" data-i18n="lang_switcher_title">Language</span>
+          </button>
         </nav>
         <div class="sidebar-status">
           <span id="wsBadge" class="ws-badge" data-i18n-title="ws_badge_title" title="WebSocket connection"></span>
           <span id="wsLabel" data-i18n="ws_connecting">Connecting…</span>
         </div>
-        <button class="lang-btn" onclick="__i18n.openLangSwitcher()" id="langBtn" data-i18n-title="lang_switcher_title" title="Language">
-          <span class="lang-btn-flag" id="langBtnFlag">🌐</span>
-          <span id="langBtnLabel"></span>
-        </button>
+        <!-- Author credit. Click the handle → opens GitHub profile in
+             default browser (via openInBrowser bridge so Tauri webview
+             routes it through Rust open_external instead of being
+             silently blocked). Hidden when sidebar is collapsed. -->
+        <div class="sidebar-credit">
+          Developed by
+          <a href="https://github.com/m31527"
+             onclick="event.preventDefault(); openInBrowser('https://github.com/m31527')">m31527</a>
+        </div>
         <!-- Update pill — populated by checkForUpdate() if /update/check
              reports a newer GitHub release. Hidden by default so the
              sidebar isn't cluttered when the install is up to date. -->
@@ -3815,11 +3840,37 @@
     }
 
     // Reflect the current session's mode in the segmented pill.
+    // Sessions that have at least one task — once a task lands, mode
+    // is LOCKED. Mixing modes mid-session means the orchestrator
+    // would suddenly use a different system prompt + tool exposure
+    // halfway through the agent loop, which produces weird artifacts.
+    // Cleared when user creates a fresh session.
+    const _sessionHasTasks = new Set();
+
+    function isModeLocked() {
+      return _currentSessionId && _sessionHasTasks.has(_currentSessionId);
+    }
+
     function updateModeSwitchUI() {
       const m = currentMode();
+      const locked = isModeLocked();
       document.querySelectorAll('.mode-btn').forEach(btn => {
         btn.classList.toggle('active', btn.dataset.mode === m);
+        // Lock the buttons once the session has any task. Native
+        // disabled attribute kills the click + greys the button via
+        // the existing .mode-btn:disabled CSS rule.
+        btn.disabled = locked && btn.dataset.mode !== m;
+        btn.title = locked
+          ? (t('mode_locked_tooltip') || 'Mode is locked after the first message in this session.')
+          : (btn.getAttribute('data-i18n-title')
+              ? t(btn.getAttribute('data-i18n-title'))
+              : btn.title);
       });
+      // Cosmetic: dim the whole pill when locked so the user clearly
+      // sees they can't switch (matches the muted look we use for
+      // "Local only" privacy indicator).
+      const sw = document.getElementById('modeSwitch');
+      if (sw) sw.classList.toggle('locked', !!locked);
     }
 
     // Reflect the current session's local_only flag on the 🔒/🔓 pill
@@ -3935,6 +3986,13 @@
     async function changeMode(mode) {
       if (!MODES.includes(mode)) return;
       if (!_currentSessionId) return;
+      // Reject mode change once the session has any task. The button
+      // is already `disabled` so this guards against programmatic /
+      // race-condition calls only.
+      if (isModeLocked()) {
+        toast(t('mode_locked_tooltip') || 'Mode is locked after the first message in this session.', true);
+        return;
+      }
       const prev = currentMode();
       if (prev === mode) return;
       // Optimistic UI update — revert on failure.
@@ -4186,12 +4244,22 @@
         chat.innerHTML = '';
 
         if (!Array.isArray(tasks) || tasks.length === 0) {
+          // Empty session — mode is unlocked. Drop the flag so
+          // switching to this session re-enables the picker.
+          if (_currentSessionId) _sessionHasTasks.delete(_currentSessionId);
+          updateModeSwitchUI();
           const g = document.createElement('div');
           g.className = 'msg-agent';
           g.textContent = t('greeting');
           chat.appendChild(g);
           return;
         }
+
+        // Session has tasks → mode is locked. Refresh the UI so the
+        // pill reflects it (also covers the "switch into a session
+        // that already has tasks" case).
+        if (_currentSessionId) _sessionHasTasks.add(_currentSessionId);
+        updateModeSwitchUI();
 
         const ordered = tasks.slice().reverse();
         for (const tk of ordered) {
@@ -4771,7 +4839,14 @@
       const goalEl = document.getElementById('goal');
       const original = (goalEl.value || '').trim();
       if (!original) {
-        toast(t('optimize_no_text') || 'Type something first.', true);
+        // Empty input → show a self-explaining info toast (not an
+        // error) so first-time users learn what the ✨ button does
+        // instead of just being told "type something".
+        toast(
+          t('optimize_no_text') ||
+          '✨ Type your task first — this button uses Claude to refine your prompt for better agent execution.',
+          false,
+        );
         return;
       }
 
@@ -5152,6 +5227,13 @@
       _currentRunToolCards = [];  // fresh tool-call bucket per task
       _runAbort      = new AbortController();
       setRunningState(true);
+
+      // Lock the mode the moment a task is dispatched — even before the
+      // server confirms it. Switching mode mid-session would re-prompt
+      // the orchestrator with a different system instruction halfway
+      // through and produce inconsistent agent behaviour.
+      if (_currentSessionId) _sessionHasTasks.add(_currentSessionId);
+      updateModeSwitchUI();
 
       // Show what the user actually sees (plain goal) plus chip count.
       const userDisplay = attaches.length

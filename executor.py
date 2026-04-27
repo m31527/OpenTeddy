@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -517,6 +518,17 @@ class Executor:
         # Key = (tool_name, canonical args JSON). Stable across retries.
         call_counts: Dict[str, int] = {}
 
+        # ── A: Discovery tool memos ─────────────────────────────────────
+        # After "discovery" tools (csv_describe, read_file, list_directory,
+        # csv_head, json_read) succeed, we append a one-line summary of
+        # what was learned to this list. The memos get prepended to the
+        # system prompt on every subsequent chat call — which means
+        # they're NEVER subject to #4 compression (system field is
+        # separate from messages[]) and the model can't "forget" what
+        # it already inspected. Direct fix for the "small model called
+        # csv_describe 4 times on the same file" pathology.
+        discovery_memos: List[str] = []
+
         # ── B: per-tool-name hard cap (separate from exact-args dedup) ──
         # The exact-args gate above only catches `read_file({path:'a'})`
         # called 3× with identical args. It can't stop a model from
@@ -570,10 +582,23 @@ class Executor:
                 last_prompt_tokens = 0   # next call will re-measure
 
             stream_on = bool(getattr(config, "streaming_enabled", True))
+            # #A: stitch discovery memos onto the system prompt so the
+            # model sees them every turn. Putting them in `system`
+            # (not `messages`) keeps them safe from #4 compression
+            # which only ever rewrites the messages[] history.
+            effective_system = system_prompt
+            if discovery_memos:
+                effective_system = (
+                    system_prompt
+                    + "\n\n[Discovery memo — what you ALREADY learned in this subtask. "
+                    "Do NOT call these tools again on the same file/path; "
+                    "use the info below directly:]\n"
+                    + "\n".join(f"  • {m}" for m in discovery_memos)
+                )
             payload: Dict[str, Any] = {
                 "model": config.qwen_model,
                 "messages": messages,
-                "system": system_prompt,
+                "system": effective_system,
                 "stream": stream_on,
                 "options": {
                     "temperature": float(getattr(config, "qwen_temperature", 0.2)),
@@ -1065,6 +1090,31 @@ class Executor:
                             except Exception:  # noqa: BLE001
                                 pass
 
+                # ── #A: Discovery tool memos ──────────────────────────
+                # After a successful "discovery" call, summarise what was
+                # learned in one line and pin it to the system prompt
+                # going forward. Stops the model re-asking what it
+                # already knows. Cap at 12 memos so a 50-tool task
+                # doesn't bloat the system message.
+                if (
+                    tool_result.get("success")
+                    and tool_name in {
+                        "csv_describe", "read_file", "list_directory",
+                        "csv_head", "json_read",
+                    }
+                    and len(discovery_memos) < 12
+                ):
+                    memo = self._build_discovery_memo(tool_name, args, tool_result)
+                    if memo:
+                        # Only add if not already there (avoid noise from
+                        # the rare "successful re-call before B kicks in").
+                        if memo not in discovery_memos:
+                            discovery_memos.append(memo)
+                            logger.info(
+                                "Discovery memo (#A) pinned: %s",
+                                memo[:120],
+                            )
+
                 # Soft nudge: if this is the 2nd identical call, append a
                 # visible warning to the tool result so Qwen sees "you're
                 # about to loop — don't". Real output is preserved (state
@@ -1161,6 +1211,70 @@ class Executor:
         return self._finalize_response(raw_text, objective_failure_seen)
 
     # ── Helpers ───────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _build_discovery_memo(
+        tool_name: str,
+        args: Dict[str, Any],
+        tool_result: Dict[str, Any],
+    ) -> Optional[str]:
+        """Render a one-line "you already know this" memo for a successful
+        discovery tool. Returns None if the result shape is unexpected
+        (memos are best-effort: a missed memo costs an extra round; a
+        misleading memo would actively harm)."""
+        inner = tool_result.get("result")
+        if not isinstance(inner, dict):
+            return None
+        path = (
+            args.get("path") or args.get("file_path")
+            or inner.get("relative_path") or inner.get("path") or ""
+        )
+        path_short = os.path.basename(path) if path else "(unknown)"
+
+        if tool_name == "csv_describe":
+            rows = inner.get("rows", "?")
+            cols = inner.get("cols", "?")
+            cnames = inner.get("columns") or []
+            sample = ", ".join(repr(c) for c in cnames[:8])
+            tail = ", …" if len(cnames) > 8 else ""
+            return (
+                f"csv_describe('{path_short}') → {rows} rows × {cols} cols. "
+                f"Columns: [{sample}{tail}]. Don't call csv_describe on this file again."
+            )
+
+        if tool_name == "read_file":
+            size = inner.get("size_bytes") or inner.get("bytes")
+            content = inner.get("content") or inner.get("text") or ""
+            preview = (str(content)[:140] + "…") if len(str(content)) > 140 else str(content)
+            preview = " ".join(preview.split())  # flatten newlines
+            return (
+                f"read_file('{path_short}') → {size or '?'} bytes. "
+                f"First chars: {preview!r}. Don't re-read this file."
+            )
+
+        if tool_name == "list_directory":
+            entries = inner.get("entries") or inner.get("items") or []
+            n = len(entries) if isinstance(entries, list) else "?"
+            sample = ", ".join(
+                (e.get("name") if isinstance(e, dict) else str(e))
+                for e in (entries[:6] if isinstance(entries, list) else [])
+            )
+            return (
+                f"list_directory('{path_short}') → {n} entries: [{sample}…]. "
+                f"Don't list this directory again."
+            )
+
+        if tool_name == "csv_head":
+            return (
+                f"csv_head('{path_short}') already returned the head of this "
+                f"file. Don't call csv_head on it again."
+            )
+        if tool_name == "json_read":
+            return (
+                f"json_read('{path_short}') already returned this JSON's "
+                f"contents. Don't re-read it."
+            )
+        return None
 
     async def _push_event(self, event: Dict[str, Any]) -> None:
         """Push an event to the Web UI via ws_callback (if registered)."""

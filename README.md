@@ -17,6 +17,8 @@
   <a href="https://github.com/m31527/OpenTeddy/stargazers"><img alt="Stars" src="https://img.shields.io/github/stars/m31527/OpenTeddy?style=social" /></a>
 </p>
 
+🌐 **Web:** [openteddy-72cee.web.app](https://openteddy-72cee.web.app/) &nbsp;·&nbsp; 📦 **Source:** [github.com/m31527/OpenTeddy](https://github.com/m31527/OpenTeddy)
+
 OpenTeddy orchestrates a trio of AI agents to autonomously plan, execute,
 and improve over time — automatically generating Python "skills" to handle
 recurring tasks faster on future runs.

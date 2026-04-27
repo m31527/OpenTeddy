@@ -10,6 +10,8 @@
 
 本機模型 + 技能（Skills）+ 少量商業模型的混搭方案。
 
+🌐 **官網：** [openteddy-72cee.web.app](https://openteddy-72cee.web.app/) &nbsp;·&nbsp; 📦 **原始碼：** [github.com/m31527/OpenTeddy](https://github.com/m31527/OpenTeddy)
+
 </div>
 
 ---
