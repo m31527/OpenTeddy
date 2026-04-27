@@ -1663,6 +1663,34 @@
       line-height: 1.55;
     }
 
+    /* Animated 3-dot loader that replaces the static ⏳ glyph in the
+       "Working on it…" bubble. Each dot bounces with a 150 ms phase
+       offset for a wave effect. The dots are the only thing painting
+       in that bubble until the streaming handler takes over, so the
+       user always sees motion = "something is still happening". */
+    .msg-spinner {
+      display: inline-flex;
+      gap: 3px;
+      vertical-align: middle;
+      margin-right: 7px;
+    }
+    .msg-spinner > span {
+      width: 5px;
+      height: 5px;
+      border-radius: 50%;
+      background: var(--accent, #2563eb);
+      animation: msgSpinnerBounce 1.2s ease-in-out infinite;
+    }
+    .msg-spinner > span:nth-child(2) { animation-delay: 0.15s; }
+    .msg-spinner > span:nth-child(3) { animation-delay: 0.30s; }
+    @keyframes msgSpinnerBounce {
+      0%, 80%, 100% { opacity: 0.3; transform: translateY(0); }
+      40%           { opacity: 1;   transform: translateY(-3px); }
+    }
+    .msg-thinking-text {
+      vertical-align: middle;
+    }
+
     .msg-user {
       background: var(--text-primary);
       color: #ffffff;
@@ -4189,7 +4217,10 @@
       }
     }
     function bindRunningHistoryTimer(el, taskId, createdAt) {
-      const startMs = new Date(createdAt).getTime() || Date.now();
+      // parseServerTs() forces UTC interpretation of naive isoformat
+      // strings — without this a UTC+8 user sees the timer jump to
+      // ~480 minutes whenever they revisit the tab.
+      const startMs = parseServerTs(createdAt);
       // Stop any previous binding for this task id (avoids double-tick
       // when loadChatHistory runs twice in quick succession).
       const prev = _historyTimers[taskId];
@@ -4197,9 +4228,14 @@
         if (prev.tick) clearInterval(prev.tick);
         if (prev.poll) clearInterval(prev.poll);
       }
+      // Inject the spinner + text-span structure once. The tick handler
+      // updates only the text span so the animated dots keep running.
+      el.innerHTML =
+        '<span class="msg-spinner" aria-hidden="true"><span></span><span></span><span></span></span>' +
+        '<span class="msg-thinking-text"></span>';
       const tick = () => {
         const elapsed = Date.now() - startMs;
-        el.textContent = '⏳ Working on it… · ' + fmtElapsed(elapsed);
+        setThinkingText(el, _THINKING_BASE_EN + ' · ' + fmtElapsed(elapsed));
       };
       tick();
       const tickId = setInterval(tick, 1000);
@@ -4215,7 +4251,10 @@
             clearInterval(tickId);
             clearInterval(pollId);
             delete _historyTimers[taskId];
-            const elapsedMs = Date.now() - startMs;
+            // Prefer server-side completed_at over wall-clock now() so the
+            // final footer agrees with what /tasks returns on reload.
+            const endMs = data.completed_at ? parseServerTs(data.completed_at) : Date.now();
+            const elapsedMs = endMs - startMs;
             let html = data.summary
               ? `<div class="md-body">${renderMarkdown(data.summary)}</div>`
               : `<span style="color:var(--text-muted)">(${escHtml(data.status)})</span>`;
@@ -4281,7 +4320,7 @@
           }
           const elapsedFooter = (tk.created_at && tk.completed_at)
             ? `<div class="task-elapsed-footer">⏱ ${escHtml(fmtElapsed(
-                new Date(tk.completed_at).getTime() - new Date(tk.created_at).getTime()
+                parseServerTs(tk.completed_at) - parseServerTs(tk.created_at)
               ))}</div>`
             : '';
           const body = tk.summary
@@ -5046,6 +5085,39 @@
       if (m === 0) return s + 's';
       return m + 'm ' + (s < 10 ? '0' : '') + s + 's';
     }
+    // Parse a server-emitted timestamp as UTC. The backend uses
+    // `datetime.utcnow().isoformat()` which produces a naive string
+    // like "2026-04-27T07:23:45" with NO timezone marker. JS's
+    // `new Date(s)` parses such strings as LOCAL time — for a user
+    // in UTC+8 that means the timer reads as ~8 h earlier than reality
+    // (the "481m 41s ghost timer" bug). Adding a trailing 'Z' forces
+    // UTC interpretation.
+    function parseServerTs(s) {
+      if (!s) return Date.now();
+      const hasTz = /Z|[+-]\d\d:?\d\d$/.test(s);
+      const ms = new Date(hasTz ? s : (s + 'Z')).getTime();
+      return Number.isFinite(ms) ? ms : Date.now();
+    }
+
+    // The "Working on it…" bubble is structured as:
+    //   <span class="msg-spinner"></span><span class="msg-thinking-text">…</span>
+    // The spinner is a CSS-animated 3-dot loader so the user sees
+    // motion rather than a static ⏳ glyph. Timer ticks update only the
+    // text span, leaving the spinner alive.
+    const _THINKING_BASE_EN = 'Working on it…';
+    function makeThinkingBubble() {
+      const html =
+        '<span class="msg-spinner" aria-hidden="true"><span></span><span></span><span></span></span>' +
+        '<span class="msg-thinking-text"></span>';
+      return addAgentMessage(html, /* asText = */ false);
+    }
+    function setThinkingText(el, text) {
+      if (!el) return;
+      const span = el.querySelector('.msg-thinking-text');
+      if (span) span.textContent = text;
+      else      el.textContent = text;   // fallback: pre-spinner element
+    }
+
     function startTaskTimer(el, baseText) {
       if (!el) return;
       el._teddyTimerStart = performance.now();
@@ -5057,7 +5129,7 @@
         // stopTaskTimer() can still report the elapsed total.
         if (el._streamingActive) return;
         const elapsed = performance.now() - el._teddyTimerStart;
-        el.textContent = baseText + ' · ' + fmtElapsed(elapsed);
+        setThinkingText(el, baseText + ' · ' + fmtElapsed(elapsed));
       };
       tick();
       el._teddyTimerId = setInterval(tick, 1000);
@@ -5244,9 +5316,13 @@
       goalEl.style.height = 'auto';
       clearAttachments();   // chips consumed with this message
 
-      const thinkingEl = addAgentMessage('⏳ Working on it…');
+      // Spinner-bubble (animated dots) instead of a static ⏳ glyph.
+      // The spinner element stays put while the text span gets updated
+      // by startTaskTimer() / setThinkingText().
+      const thinkingEl = makeThinkingBubble();
       // Live elapsed counter — overwrites the bubble text every second.
-      startTaskTimer(thinkingEl, '⏳ Working on it…');
+      // Base text deliberately omits ⏳ — the spinner provides the visual.
+      startTaskTimer(thinkingEl, _THINKING_BASE_EN);
       // Register the bubble as the target for chat.stream.delta events
       // — the WebSocket handler will paint tokens into it as they
       // arrive (taskId-scoped so stale streams from cancelled tasks
