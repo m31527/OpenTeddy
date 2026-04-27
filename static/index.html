@@ -3315,22 +3315,53 @@
       return _sessionModes[_currentSessionId] || MODE_DEFAULT;
     }
 
+    // ── #7 WS reconnect + replay ────────────────────────────────────────
+    // We track the server-stamped `_ts` of the latest event we've seen.
+    // On reconnect we hand it to the server as ?since=<ts>, which then
+    // replays any events buffered while we were dead — so a wifi blip
+    // / laptop sleep doesn't leave the UI stuck on a stale spinner.
+    // Backoff is exponential with jitter, capped at 30 s.
+    let _wsLastEventTs = 0;       // server epoch seconds
+    let _wsBackoffMs   = 1000;    // current retry delay
+    let _wsRetryTimer  = null;    // pending setTimeout id
+    let _wsClosing     = false;   // distinguish manual close vs unexpected
+    const _WS_BACKOFF_MAX_MS = 30_000;
+
     function initWS() {
+      if (_wsRetryTimer) { clearTimeout(_wsRetryTimer); _wsRetryTimer = null; }
       const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-      _ws = new WebSocket(`${proto}://${location.host}/ws`);
+      // Append ?since= so the server can replay buffered events from
+      // the moment we last saw something. First-ever connect sends
+      // since=0 → server treats as fresh start, no replay.
+      const sinceQS = _wsLastEventTs > 0
+        ? `?since=${encodeURIComponent(_wsLastEventTs)}`
+        : '';
+      _ws = new WebSocket(`${proto}://${location.host}/ws${sinceQS}`);
       _ws.onopen  = () => {
         document.getElementById('wsBadge').classList.add('connected');
         const l = document.getElementById('wsLabel'); if (l) l.textContent = t('ws_connected');
+        _wsBackoffMs = 1000;   // healthy connect → reset backoff
       };
       _ws.onclose = () => {
         document.getElementById('wsBadge').classList.remove('connected');
-        const l = document.getElementById('wsLabel'); if (l) l.textContent = t('ws_disconnected');
-        setTimeout(initWS, 3000);
+        const l = document.getElementById('wsLabel');
+        if (l) l.textContent = `${t('ws_disconnected')} (${Math.round(_wsBackoffMs/1000)}s)`;
+        if (_wsClosing) return;   // manual close, don't reconnect
+        // Schedule retry with exponential backoff + 0-200 ms jitter
+        // (jitter avoids thundering-herd if a relay restarts).
+        const jitter = Math.floor(Math.random() * 200);
+        _wsRetryTimer = setTimeout(initWS, _wsBackoffMs + jitter);
+        _wsBackoffMs = Math.min(_wsBackoffMs * 2, _WS_BACKOFF_MAX_MS);
       };
       _ws.onerror = () => _ws.close();
       _ws.onmessage = (evt) => {
         try {
           const data = JSON.parse(evt.data);
+          // Track the server-stamped timestamp so the next reconnect
+          // can replay only events newer than this.
+          if (typeof data._ts === 'number' && data._ts > _wsLastEventTs) {
+            _wsLastEventTs = data._ts;
+          }
           if (_currentTaskId && data.task_id && data.task_id !== _currentTaskId) return;
           if (data.event === 'tool_call')         handleToolCall(data);
           if (data.event === 'tool_result')       handleToolResult(data);
@@ -3344,6 +3375,7 @@
           if (data.type  === 'plan.stream.end')   handlePlanStreamEnd(data);
           if (data.type  === 'update.progress')   handleUpdateProgress(data);
           if (data.type  === 'context.compressed') handleContextCompressed(data);
+          if (data.event === 'circuit_breaker')   handleCircuitBreaker(data);
         } catch (e) { /* ignore */ }
       };
     }
@@ -5076,6 +5108,17 @@
       const chip = document.createElement('div');
       chip.className = 'msg-system';
       chip.textContent = `🪶 ${t('context_compressed', { n: dropped }) || `Compressed ${dropped} earlier rounds`} (${recap} chars)`;
+      appendToChat(chip);
+    }
+
+    // Circuit breaker (#D) — agent loop hit too many tool failures
+    // and was forced to finalize. Visible chip tells the user what
+    // happened so the truncated answer doesn't look like a glitch.
+    function handleCircuitBreaker(data) {
+      const n = data.failures ?? 0;
+      const chip = document.createElement('div');
+      chip.className = 'msg-system';
+      chip.textContent = `⛔ ${t('circuit_breaker_chip', { n }) || `Circuit breaker tripped (${n} tool failures) — agent forced to commit to a final answer`}`;
       appendToChat(chip);
     }
 

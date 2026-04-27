@@ -46,3 +46,7 @@ landing-page/
 
 # Desktop client (separate repo, not part of this repo)
 desktop/
+
+# Agent workspace — runtime scratch dir for git clones, file writes,
+# uploaded user data. Not part of the source tree.
+agent-workspace/

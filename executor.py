@@ -517,6 +517,24 @@ class Executor:
         # Key = (tool_name, canonical args JSON). Stable across retries.
         call_counts: Dict[str, int] = {}
 
+        # ── B: per-tool-name hard cap (separate from exact-args dedup) ──
+        # The exact-args gate above only catches `read_file({path:'a'})`
+        # called 3× with identical args. It can't stop a model from
+        # firing 12 different `python_exec` calls at the same dataset
+        # — exactly the failure mode that ate 8 hours on a real task.
+        # Cap each tool NAME at MAX_PER_TOOL_NAME calls per subtask;
+        # past that we synthesize a refusal so the model has to commit.
+        tool_name_counts: Dict[str, int] = {}
+        MAX_PER_TOOL_NAME = 5
+
+        # ── D: stuck-loop circuit breaker ────────────────────────────
+        # If a subtask accumulates this many tool failures in total, we
+        # stop letting it spin and force the model to emit a final answer
+        # with what it has. Catches "kept retrying python_exec with new
+        # syntax errors forever" pattern.
+        total_tool_failures = 0
+        MAX_TOTAL_FAILURES  = 5
+
         def _call_key(tname: str, targs: Dict[str, Any]) -> str:
             try:
                 return f"{tname}::{json.dumps(targs, sort_keys=True, ensure_ascii=False)}"
@@ -770,6 +788,13 @@ class Executor:
                 prev_count = call_counts.get(k, 0)
                 call_counts[k] = prev_count + 1
 
+                # ── B: per-tool-name hard cap (independent of args) ──
+                # Catches "12 different python_exec calls trying random
+                # variations" — the exact-args gate above misses that
+                # because each call's code differs.
+                tn_prev = tool_name_counts.get(tool_name, 0)
+                tool_name_counts[tool_name] = tn_prev + 1
+
                 # Push event to Web UI. call_idx disambiguates multiple calls
                 # of the same tool within a single round so each gets its own
                 # card instead of sharing a DOM id.
@@ -823,6 +848,49 @@ class Executor:
                         "tool_call_id": call.get("id", ""),
                     })
                     continue  # skip real execution
+
+                # ── B cap check: per-tool-name limit ────────────────
+                # Already-executed tn_prev = N means we've seen this
+                # tool name N times before → this is the (N+1)-th call.
+                # Refuse the 6th onwards (5 calls is the cap).
+                if tn_prev >= MAX_PER_TOOL_NAME:
+                    logger.warning(
+                        "Tool-name cap (#B): %s called %d times in subtask "
+                        "%s — refusing further executions, forcing finalize.",
+                        tool_name, tn_prev + 1, subtask_id,
+                    )
+                    tool_result = {
+                        "success": False,
+                        "error": (
+                            f"⛔ TOOL OVERUSE: You have called `{tool_name}` "
+                            f"{tn_prev + 1} times in this subtask — that's "
+                            f"way past the {MAX_PER_TOOL_NAME}-call limit. "
+                            "Stop trying new variations and emit your final "
+                            "answer NOW with whatever you've already learned. "
+                            "If you genuinely cannot complete the task with "
+                            "the existing tool results, say so explicitly so "
+                            "the user knows to escalate."
+                        ),
+                        "result": {"stdout": "", "stderr": "", "exit_code": -3},
+                        "duration_ms": 0,
+                    }
+                    force_finalize = True
+                    await self._push_event({
+                        "event":    "tool_result",
+                        "round":    round_idx,
+                        "call_idx": call_idx,
+                        "tool":     tool_name,
+                        "success":  False,
+                        "error":    f"Tool name cap hit ({tn_prev + 1}× {tool_name})",
+                        "output":   "",
+                        "task_id":  task_id,
+                    })
+                    messages.append({
+                        "role": "tool",
+                        "content": tool_result["error"],
+                        "tool_call_id": call.get("id", ""),
+                    })
+                    continue
 
                 try:
                     if call_idx in parallel_pre:
@@ -923,6 +991,44 @@ class Executor:
                     "output": output_preview,
                     "task_id": task_id,
                 })
+
+                # ── D: stuck-loop circuit breaker ────────────────────
+                # Track total tool failures in this subtask. When we
+                # hit MAX_TOTAL_FAILURES, force the model to give up
+                # and emit a final answer with whatever it has — saves
+                # us from "kept retrying python_exec with new syntax
+                # errors for 8 hours" pathology.
+                if not tool_result.get("success"):
+                    total_tool_failures += 1
+                    if total_tool_failures >= MAX_TOTAL_FAILURES and not force_finalize:
+                        logger.warning(
+                            "Circuit breaker (#D): %d tool failures in subtask "
+                            "%s — force-finalising loop.",
+                            total_tool_failures, subtask_id,
+                        )
+                        force_finalize = True
+                        # Inject a strong nudge into the conversation so
+                        # the model's NEXT (final) round knows it must
+                        # stop trying tools and synthesize an answer.
+                        messages.append({
+                            "role": "tool",
+                            "content": (
+                                f"⛔ CIRCUIT BREAKER: This subtask has had "
+                                f"{total_tool_failures} tool failures. The "
+                                "system is forcing you to STOP calling tools. "
+                                "On your next turn, emit ONLY a final-answer "
+                                "summary of what you have learned, what failed, "
+                                "and (if relevant) what the user should try "
+                                "instead. Do NOT call any more tools."
+                            ),
+                            "tool_call_id": call.get("id", ""),
+                        })
+                        await self._push_event({
+                            "event":   "circuit_breaker",
+                            "task_id": task_id,
+                            "subtask_id": subtask_id,
+                            "failures": total_tool_failures,
+                        })
 
                 # ── Artifact event ───────────────────────────────────
                 # When a tool produces a file on disk, surface a

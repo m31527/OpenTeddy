@@ -92,23 +92,65 @@ memory_manager:   MemoryManager
 # ── WebSocket connection manager ──────────────────────────────────────────────
 
 class _WSManager:
-    """Tracks all active WebSocket connections and broadcasts events."""
+    """Tracks all active WebSocket connections and broadcasts events.
+
+    #7 Reconnect + replay: keeps a small ring buffer of recently
+    broadcast events stamped with `_ts` (server epoch seconds). Clients
+    that reconnect after a network blip / laptop sleep can pass
+    `?since=<ts>` on the WS URL, and we replay every buffered event
+    that came in after that timestamp before resuming live streaming.
+    """
+
+    # Buffer enough to cover ~30 s of a chatty task without the buffer
+    # eating much memory (each event ~500 B → 600 events ≈ 300 KB).
+    _BUFFER_MAX = 600
 
     def __init__(self) -> None:
         self._connections: set[WebSocket] = set()
+        from collections import deque
+        # deque of (ts: float, msg: str)
+        self._buffer: deque = deque(maxlen=self._BUFFER_MAX)
 
-    async def connect(self, ws: WebSocket) -> None:
+    async def connect(self, ws: WebSocket, since: float = 0.0) -> None:
         await ws.accept()
         self._connections.add(ws)
+        # Replay missed events. Walk the ring buffer; deque's iteration
+        # is in insertion order so events come back in the original
+        # sequence, which preserves UI rendering correctness.
+        if since > 0 and self._buffer:
+            replayed = 0
+            for ts, msg in self._buffer:
+                if ts > since:
+                    try:
+                        await ws.send_text(msg)
+                        replayed += 1
+                    except Exception:  # noqa: BLE001
+                        return
+            if replayed:
+                logger.info(
+                    "WS reconnect replay: sent %d buffered events since ts=%.3f",
+                    replayed, since,
+                )
 
     def disconnect(self, ws: WebSocket) -> None:
         self._connections.discard(ws)
 
     async def broadcast(self, data: dict) -> None:
-        """Send a JSON event to every connected client (fire-and-forget per client)."""
+        """Send a JSON event to every connected client (fire-and-forget per client).
+        Also stamps the event with `_ts` and stores it in the ring buffer
+        for late-joining / reconnecting clients to replay (#7)."""
         import json as _json
-        dead: set[WebSocket] = set()
+        import time as _time
+        # Stamp event server-side so client knows what to send back as
+        # `since` on reconnect. Don't overwrite any existing _ts (caller
+        # might have set one for testing).
+        if "_ts" not in data:
+            data["_ts"] = _time.time()
         msg = _json.dumps(data, ensure_ascii=False)
+        # Buffer first so a slow client can't drop us — we want every
+        # broadcast captured for replay, even ones that fail to deliver.
+        self._buffer.append((data["_ts"], msg))
+        dead: set[WebSocket] = set()
         for ws in list(self._connections):
             try:
                 await ws.send_text(msg)
@@ -228,10 +270,21 @@ if os.path.isdir(_static_dir):
 
 @app.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket) -> None:
-    """WebSocket endpoint — streams tool_call / tool_result events to the UI."""
-    await ws_manager.connect(ws)
+    """WebSocket endpoint — streams tool_call / tool_result events to the UI.
+
+    Accepts an optional ``?since=<float>`` query param (server epoch
+    seconds, taken from the latest event the client has already seen).
+    On reconnect we replay every buffered event newer than that
+    timestamp so brief disconnects (laptop sleep, wifi switch) don't
+    leave the UI stuck on a stale state. See _WSManager._buffer."""
+    since_raw = ws.query_params.get("since", "0")
     try:
-        # Keep the connection alive; client sends pings if needed
+        since = float(since_raw)
+    except (TypeError, ValueError):
+        since = 0.0
+    await ws_manager.connect(ws, since=since)
+    try:
+        # Keep the connection alive; client sends pings if needed.
         while True:
             await ws.receive_text()
     except WebSocketDisconnect:
