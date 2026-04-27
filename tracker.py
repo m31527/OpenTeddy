@@ -75,6 +75,13 @@ class Tracker:
             "ALTER TABLE usage_records ADD COLUMN session_id TEXT NOT NULL DEFAULT ''",
             "ALTER TABLE usage_records ADD COLUMN model_provider TEXT NOT NULL DEFAULT 'ollama'",
             "ALTER TABLE usage_records ADD COLUMN task_description TEXT DEFAULT ''",
+            # #6 Auto-benchmark — capture wall time + measured t/s on
+            # every Ollama call so Settings can surface "qwen3.5:2b
+            # runs at 18 t/s on your machine, consider qwen3.5:0.8b".
+            # tokens_per_sec is denormalised so the stats query stays a
+            # single fast aggregate instead of needing per-row math.
+            "ALTER TABLE usage_records ADD COLUMN duration_ms INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE usage_records ADD COLUMN tokens_per_sec REAL NOT NULL DEFAULT 0",
             "ALTER TABLE tasks ADD COLUMN session_id TEXT",
             # Session mode selector (chat / code / analytic). Default 'code'
             # so existing sessions keep their full-autonomy behavior.
@@ -456,6 +463,12 @@ class Tracker:
         task_description: str = "",
         session_id: str = "",
         cost_usd: Optional[float] = None,
+        # #6 Auto-benchmark: duration of THIS call and the resulting
+        # tokens/sec. Both default to 0 so legacy callers (or paths
+        # without timing info) still record fine — the model_perf_stats
+        # query just filters those rows out.
+        duration_ms: int = 0,
+        tokens_per_sec: float = 0.0,
     ) -> None:
         """
         Persist a single API call record to usage_records.
@@ -471,8 +484,9 @@ class Tracker:
             await self.db.execute(
                 "INSERT INTO usage_records "
                 "(id, task_id, session_id, model, model_provider, "
-                "tokens_in, tokens_out, cost_usd, task_description, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "tokens_in, tokens_out, cost_usd, task_description, "
+                "duration_ms, tokens_per_sec, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     record_id,
                     task_id,
@@ -483,12 +497,68 @@ class Tracker:
                     tokens_out,
                     cost_usd,
                     task_description[:500] if task_description else "",
+                    int(duration_ms or 0),
+                    float(tokens_per_sec or 0.0),
                     created_at,
                 ),
             )
             await self.db.commit()
         except Exception as exc:  # noqa: BLE001
             logger.error("record_usage failed: %s", exc)
+
+    async def get_model_perf_stats(self, limit_per_model: int = 50) -> List[dict]:
+        """Aggregate per-model performance over the most recent N
+        recorded calls. Used by the Settings page (#6) to surface
+        "qwen3.5:2b · 18 t/s avg over 45 calls" + tier suggestions.
+
+        Only counts rows where tokens_per_sec > 0 (we recorded perf
+        data for them — older rows have it as the default 0).
+        """
+        # Simple SELECT + Python-side bucketing — avoids SQL window
+        # functions which aren't available on every aiosqlite build.
+        # 4000 rows is plenty even at heavy daily use; per-model cap
+        # is enforced after the fact.
+        async with self.db.execute(
+            "SELECT model, model_provider, tokens_per_sec, duration_ms "
+            "FROM usage_records "
+            "WHERE tokens_per_sec > 0 "
+            "ORDER BY created_at DESC LIMIT 4000"
+        ) as cur:
+            rows = await cur.fetchall()
+
+        from collections import defaultdict
+        buckets: dict[str, dict] = defaultdict(
+            lambda: {"tps": [], "dur": [], "provider": ""}
+        )
+        for r in rows:
+            cols = list(r)
+            m, provider, tps, dur = cols[0], cols[1], float(cols[2] or 0), int(cols[3] or 0)
+            if not m or tps <= 0:
+                continue
+            b = buckets[m]
+            if len(b["tps"]) >= limit_per_model:
+                continue
+            b["tps"].append(tps)
+            b["dur"].append(dur)
+            if provider:
+                b["provider"] = provider
+
+        out: list[dict] = []
+        for m, b in buckets.items():
+            n = len(b["tps"])
+            if n == 0:
+                continue
+            avg_tps = sum(b["tps"]) / n
+            avg_dur = sum(b["dur"]) / n if b["dur"] else 0
+            out.append({
+                "model":          m,
+                "model_provider": b["provider"],
+                "samples":        n,
+                "avg_tokens_per_sec": round(avg_tps, 2),
+                "avg_duration_ms":    int(avg_dur),
+            })
+        out.sort(key=lambda x: x["avg_tokens_per_sec"])  # slowest first
+        return out
 
     async def get_usage_paginated(
         self,

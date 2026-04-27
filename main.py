@@ -303,6 +303,25 @@ def _git_info() -> dict:
     return {"commit": commit, "branch": branch, "dirty": dirty}
 
 
+@app.get("/benchmark/stats")
+async def benchmark_stats() -> dict:
+    """Per-model performance over the most recent calls. Powers the
+    Settings page's "your machine runs qwen3.5:2b at 18 t/s" banner +
+    suggestion engine (#6).
+
+    Each row is one local Ollama model that this OpenTeddy install
+    has actually run, with averages over its last (default 50) calls.
+    Tier suggestion is computed in JS — backend just returns raw
+    measurements so the UI can re-render when settings change.
+    """
+    try:
+        rows = await tracker.get_model_perf_stats(limit_per_model=50)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("benchmark/stats failed: %s", exc)
+        return {"success": False, "data": [], "error": str(exc)}
+    return {"success": True, "data": rows, "error": None}
+
+
 @app.get("/version")
 async def version_info() -> dict:
     """Current version + git state — used by the UI's update pill to

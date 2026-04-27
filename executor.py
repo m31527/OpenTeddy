@@ -611,15 +611,20 @@ class Executor:
                             if chunk.get("done"):
                                 last_chunk = chunk
                     # Re-shape into the same structure non-streaming returned.
+                    # Carry through Ollama's timing stats (eval_duration,
+                    # total_duration) so #6 can compute t/s from them.
                     data = {
                         "message": {
                             "content":    acc_content,
                             "thinking":   acc_thinking,
                             "tool_calls": acc_tool_calls,
                         },
-                        "prompt_eval_count": last_chunk.get("prompt_eval_count", 0),
-                        "eval_count":        last_chunk.get("eval_count", 0),
-                        "done_reason":       last_chunk.get("done_reason"),
+                        "prompt_eval_count":    last_chunk.get("prompt_eval_count", 0),
+                        "eval_count":           last_chunk.get("eval_count", 0),
+                        "eval_duration":        last_chunk.get("eval_duration", 0),
+                        "total_duration":       last_chunk.get("total_duration", 0),
+                        "prompt_eval_duration": last_chunk.get("prompt_eval_duration", 0),
+                        "done_reason":          last_chunk.get("done_reason"),
                     }
                     # Mark the stream as complete so the UI can stop the
                     # word-by-word painter and lock in the final markdown.
@@ -645,6 +650,15 @@ class Executor:
             # Feed the watchdog so the *next* round can decide if it
             # needs to compress before sending another giant prompt.
             last_prompt_tokens = _tokens_in
+            # #6 Auto-benchmark: pull Ollama's own timing stats so the
+            # Settings page can surface real per-model t/s. eval_duration
+            # is in nanoseconds; tokens/sec = eval_count / (eval_dur / 1e9).
+            _eval_dur_ns  = data.get("eval_duration", 0) or 0
+            _total_dur_ns = data.get("total_duration", 0) or 0
+            _tps = (
+                (_tokens_out * 1_000_000_000 / _eval_dur_ns)
+                if _eval_dur_ns > 0 and _tokens_out > 0 else 0.0
+            )
             try:
                 await self.tracker.record_usage(
                     task_id=task_id,
@@ -654,6 +668,8 @@ class Executor:
                     tokens_out=_tokens_out,
                     task_description=description,
                     cost_usd=0.0,
+                    duration_ms=int(_total_dur_ns / 1_000_000),
+                    tokens_per_sec=_tps,
                 )
             except Exception:  # noqa: BLE001
                 pass
@@ -679,6 +695,55 @@ class Executor:
                 "content": message.get("content", ""),
                 "tool_calls": tool_calls,
             })
+
+            # ── #5 Parallel tool calls ──────────────────────────────────
+            # When the model emits multiple tool_calls in one round AND
+            # every call is low-risk (read-only per registry taxonomy),
+            # we launch them concurrently up-front via asyncio.gather.
+            # The dedup / event-push / message-append loop below still
+            # runs once per call, but each iteration consumes a
+            # pre-completed result instead of awaiting registry.execute
+            # serially — N reads/HTTP fetches now overlap on the network
+            # / disk timeline instead of stacking.
+            #
+            # We deliberately bail out (and stay sequential) if ANY call
+            # is medium/high risk: writes might depend on prior writes,
+            # shell commands can have order-sensitive side effects, and
+            # high-risk gating runs through the approval queue which
+            # mustn't be batched.
+            parallel_pre: Dict[int, Dict[str, Any]] = {}
+            if len(tool_calls) >= 2 and all(
+                self.registry.risk_of((c.get("function") or {}).get("name", "")) == "low"
+                for c in tool_calls
+            ):
+                async def _exec_parallel(i: int, c: Dict[str, Any]) -> Tuple[int, Dict[str, Any]]:
+                    fn = c.get("function") or {}
+                    a  = fn.get("arguments") or {}
+                    if not isinstance(a, dict):
+                        try:
+                            a = json.loads(a)
+                        except Exception:  # noqa: BLE001
+                            a = {}
+                    try:
+                        r = await self.registry.execute(
+                            fn.get("name", ""), a, task_id=task_id,
+                        )
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as e:  # noqa: BLE001
+                        from tool_registry import make_result as _mr
+                        r = _mr(False, error=str(e))
+                    return i, r
+
+                logger.info(
+                    "Round %d: %d low-risk tool_calls — running concurrently (#5)",
+                    round_idx, len(tool_calls),
+                )
+                pre_results = await asyncio.gather(
+                    *(_exec_parallel(i, c) for i, c in enumerate(tool_calls))
+                )
+                for idx, res in pre_results:
+                    parallel_pre[idx] = res
 
             # Execute each tool and collect results
             force_finalize = False  # set True if we detect a runaway loop
@@ -760,9 +825,15 @@ class Executor:
                     continue  # skip real execution
 
                 try:
-                    tool_result = await self.registry.execute(
-                        tool_name, args, task_id=task_id
-                    )
+                    if call_idx in parallel_pre:
+                        # Already executed concurrently before the loop
+                        # — just consume the cached result. Saves
+                        # awaiting registry.execute serially again.
+                        tool_result = parallel_pre[call_idx]
+                    else:
+                        tool_result = await self.registry.execute(
+                            tool_name, args, task_id=task_id
+                        )
                 except asyncio.CancelledError:
                     # Orchestrator cancelled us (usually subtask timeout).
                     # Fire-and-forget a cancellation event via create_task

@@ -1193,28 +1193,97 @@ class Orchestrator:
         self, prompt: str, system: Optional[str] = None,
         task_id: str = "", task_description: str = "[orchestrator]",
     ) -> str:
+        # Stream if globally enabled — this is #3 (Streaming for
+        # orchestrator). Without it the user stares at a blank "Working
+        # on it… 0:14" for 5–15 s while Gemma plans the task. With it
+        # enabled, JSON / reasoning text appears chunk-by-chunk so the
+        # user immediately sees the agent is alive and thinking.
+        stream_on = bool(getattr(config, "streaming_enabled", True))
+        # Reach into the executor for its ws_callback so we don't have
+        # to thread one separately into the orchestrator constructor.
+        ws_emit = getattr(self.executor, "ws_callback", None) if stream_on else None
+
         payload = {
             "model":   config.gemma_model,
             "prompt":  prompt,
             "system":  system or _PLAN_SYSTEM_BASE,
-            "stream":  False,
+            "stream":  stream_on,
             "options": {
                 "temperature": float(getattr(config, "gemma_temperature", 0.1)),
                 "num_predict": config.gemma_max_tokens,
+                "num_ctx":     int(getattr(config, "gemma_num_ctx", 16384)),
             },
         }
         try:
-            resp = await self._http.post(
-                f"{config.gemma_base_url}/api/generate",
-                json=payload,
-            )
-            resp.raise_for_status()
-            data = resp.json()
+            if stream_on:
+                # /api/generate streams as NDJSON, each line:
+                #   {"response": "...", "done": false}
+                # final line carries done: true plus prompt/eval counts.
+                acc = ""
+                last: Dict[str, Any] = {}
+                async with self._http.stream(
+                    "POST",
+                    f"{config.gemma_base_url}/api/generate",
+                    json=payload,
+                ) as resp:
+                    resp.raise_for_status()
+                    async for line in resp.aiter_lines():
+                        if not line.strip():
+                            continue
+                        try:
+                            chunk = json.loads(line)
+                        except Exception:  # noqa: BLE001
+                            continue
+                        delta = chunk.get("response") or ""
+                        if delta:
+                            acc += delta
+                            if ws_emit:
+                                try:
+                                    await ws_emit({
+                                        "type":    "plan.stream.delta",
+                                        "task_id": task_id,
+                                        "text":    delta,
+                                    })
+                                except Exception:  # noqa: BLE001
+                                    pass
+                        if chunk.get("done"):
+                            last = chunk
+                # Mark stream end so the UI can switch from "planning…"
+                # placeholder to the regular "Working on it…" timer.
+                if ws_emit:
+                    try:
+                        await ws_emit({
+                            "type":    "plan.stream.end",
+                            "task_id": task_id,
+                        })
+                    except Exception:  # noqa: BLE001
+                        pass
+                tokens_in    = last.get("prompt_eval_count", 0) or 0
+                tokens_out   = last.get("eval_count", 0) or 0
+                eval_dur_ns  = last.get("eval_duration", 0) or 0
+                total_dur_ns = last.get("total_duration", 0) or 0
+                response_text = acc
+            else:
+                resp = await self._http.post(
+                    f"{config.gemma_base_url}/api/generate",
+                    json=payload,
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                tokens_in    = data.get("prompt_eval_count", 0) or 0
+                tokens_out   = data.get("eval_count", 0) or 0
+                eval_dur_ns  = data.get("eval_duration", 0) or 0
+                total_dur_ns = data.get("total_duration", 0) or 0
+                response_text = data.get("response", "")
 
             # ── Record Ollama usage (best-effort) ─────────────────────────────
-            tokens_in  = data.get("prompt_eval_count", 0) or 0
-            tokens_out = data.get("eval_count", 0) or 0
+            # #6 Auto-benchmark: include real wall-clock + measured t/s
+            # so the Settings perf-stats query has data to aggregate.
             if tokens_in or tokens_out:
+                tps = (
+                    tokens_out * 1_000_000_000 / eval_dur_ns
+                    if eval_dur_ns > 0 and tokens_out > 0 else 0.0
+                )
                 try:
                     await self.tracker.record_usage(
                         task_id=task_id,
@@ -1223,11 +1292,13 @@ class Orchestrator:
                         tokens_in=tokens_in,
                         tokens_out=tokens_out,
                         task_description=task_description,
+                        duration_ms=int(total_dur_ns / 1_000_000),
+                        tokens_per_sec=tps,
                     )
                 except Exception:  # noqa: BLE001
                     pass
 
-            return data.get("response", "")
+            return response_text
         except Exception as exc:  # noqa: BLE001
             logger.error("Gemma call failed: %s", exc)
             return "[]"

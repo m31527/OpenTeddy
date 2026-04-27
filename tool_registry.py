@@ -84,6 +84,15 @@ class ToolRegistry:
 
     # ── Schema export ─────────────────────────────────────────────────────────
 
+    def risk_of(self, tool_name: str) -> RiskLevel:
+        """Return the registered risk level (or 'high' if the tool is
+        unknown — fail-closed so we never accidentally parallelize
+        something we don't know about)."""
+        tool = self._tools.get(tool_name)
+        if not tool:
+            return "high"
+        return tool["risk"]
+
     def get_schemas(self) -> List[Dict[str, Any]]:
         """Return all tool schemas in Ollama tools format."""
         return [t["schema"] for t in self._tools.values()]

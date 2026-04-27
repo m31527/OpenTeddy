@@ -681,6 +681,64 @@
     .escalation-toggle-title { font-size: 0.82rem; font-weight: 600; color: var(--text-primary); }
     .escalation-toggle-hint  { font-size: 0.72rem; color: var(--text-secondary); line-height: 1.5; }
 
+    /* ── Perf stats (#6) — appears in Settings → Model Settings ───────── */
+    .perf-stats-wrap {
+      margin-bottom: 0.85rem;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: var(--surface);
+      overflow: hidden;
+    }
+    .perf-stats-empty {
+      display: block;
+      padding: 0.7rem 0.9rem;
+      font-size: 0.78rem;
+      color: var(--text-muted);
+      text-align: center;
+    }
+    .perf-row {
+      display: grid;
+      grid-template-columns: 1fr auto auto auto;
+      align-items: center;
+      gap: 0.85rem;
+      padding: 0.5rem 0.85rem;
+      font-size: 0.8rem;
+      border-bottom: 1px solid rgba(0,0,0,0.04);
+    }
+    .perf-row:last-child { border-bottom: none; }
+    .perf-row .perf-name {
+      font-family: "SF Mono", Menlo, monospace;
+      font-size: 0.78rem;
+      color: var(--text-primary);
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .perf-row .perf-tps {
+      font-variant-numeric: tabular-nums;
+      font-weight: 600;
+    }
+    .perf-row .perf-tps.fast   { color: var(--success); }
+    .perf-row .perf-tps.medium { color: var(--text-primary); }
+    .perf-row .perf-tps.slow   { color: var(--error); }
+    .perf-row .perf-samples,
+    .perf-row .perf-dur {
+      font-size: 0.72rem;
+      color: var(--text-muted);
+      font-variant-numeric: tabular-nums;
+    }
+    .perf-suggest {
+      margin: 0 0 0.6rem;
+      padding: 0.65rem 0.85rem;
+      background: rgba(196, 109, 79, 0.10);
+      border: 1px solid rgba(196, 109, 79, 0.35);
+      border-radius: 10px;
+      font-size: 0.78rem;
+      color: var(--text-primary);
+      line-height: 1.5;
+    }
+    .perf-suggest[hidden] { display: none; }
+    .perf-suggest strong { color: var(--accent); }
+
     /* ── Buttons ─────────────────────────────────────────────────────────── */
     button {
       background: transparent;
@@ -1808,6 +1866,33 @@
       font-weight: 600;
     }
 
+    /* Plan-phase streaming preview — faded, tabular-numbers, capped
+       height. Lives INSIDE the "Working on it…" bubble while Gemma
+       is still planning, so the user sees the agent thinking instead
+       of staring at a static spinner for 5–15 s. */
+    .plan-stream-preview {
+      margin-top: 6px;
+      padding-top: 6px;
+      border-top: 1px dashed var(--border);
+      font-family: "SF Mono", Menlo, monospace;
+      font-size: 0.72rem;
+      line-height: 1.45;
+      color: var(--text-muted);
+      max-height: 110px;
+      overflow: hidden;
+      white-space: pre-wrap;
+      word-break: break-all;
+      transition: opacity 0.25s ease;
+    }
+    .msg-agent.planning {
+      /* Subtle pulse so the user knows planning is in progress. */
+      animation: plan-pulse 1.6s ease-in-out infinite;
+    }
+    @keyframes plan-pulse {
+      0%, 100% { background: var(--bg-secondary); }
+      50%      { background: rgba(196,109,79,0.07); }
+    }
+
     /* Subtle "took 1m 23s" stamp shown beneath the agent's final answer
        so the user can see how long the round-trip took at a glance. */
     .task-elapsed-footer {
@@ -2817,6 +2902,16 @@
                   <input type="text" id="inp_qwen_base_url" data-i18n-placeholder="qwen_url_placeholder" placeholder="http://localhost:11434" />
                 </div>
               </div>
+              <!-- #6 Auto-benchmark — passive perf stats from every
+                   real task, plus a "your machine runs this slow"
+                   suggestion banner when the configured model is below
+                   the comfort threshold. Populated by loadPerfStats(). -->
+              <div style="font-size:0.76rem;color:var(--text-muted);margin-bottom:0.5rem;font-weight:500" data-i18n="perf_stats_heading">Model Performance (your machine)</div>
+              <div id="perfSuggestBanner" class="perf-suggest" hidden></div>
+              <div id="perfStatsTable" class="perf-stats-wrap">
+                <span class="perf-stats-empty" data-i18n="perf_stats_empty">No measurements yet — run a task to start collecting stats.</span>
+              </div>
+
               <div style="font-size:0.76rem;color:var(--text-muted);margin-bottom:0.5rem;font-weight:500" data-i18n="pull_model_heading">Pull New Model</div>
               <div class="pull-row">
                 <div class="field">
@@ -3245,6 +3340,8 @@
           if (data.type  === 'approval_required') handleApprovalRequired(data);
           if (data.type  === 'chat.stream.delta') handleStreamDelta(data);
           if (data.type  === 'chat.stream.end')   handleStreamEnd(data);
+          if (data.type  === 'plan.stream.delta') handlePlanStreamDelta(data);
+          if (data.type  === 'plan.stream.end')   handlePlanStreamEnd(data);
           if (data.type  === 'update.progress')   handleUpdateProgress(data);
           if (data.type  === 'context.compressed') handleContextCompressed(data);
         } catch (e) { /* ignore */ }
@@ -4916,6 +5013,59 @@
       // the final summary + elapsed footer. detach happens there.
     }
 
+    // ── Plan-phase streaming (#3) ───────────────────────────────────────
+    // Orchestrator (Gemma) streams its planning JSON token-by-token via
+    // `plan.stream.delta`. We surface it inside the existing "Working
+    // on it…" bubble as a faded preview so the user sees the agent is
+    // actively thinking instead of a 5–15 s blank wait. When the plan
+    // finishes (`plan.stream.end`), we fade the preview out and let
+    // the regular timer/streamed-answer flow take over.
+    function handlePlanStreamDelta(data) {
+      if (!data || !data.text) return;
+      // Bind to the same thinkingEl that the run-task flow created.
+      // Reuse _streamState's task_id check so stale events don't leak.
+      if (_streamState.taskId && data.task_id !== _streamState.taskId) return;
+      const el = _streamState.el;
+      if (!el) return;
+      // Set up a planning-preview surface inside the bubble on first
+      // chunk. Keep the original timer text on top, planning preview
+      // below in muted style.
+      if (!el._planActive) {
+        el._planActive = true;
+        el._planAcc    = '';
+        el.classList.add('planning');
+        // Inject a sub-element. Don't overwrite el.textContent — the
+        // timer's tick keeps appending elapsed; we put the plan text
+        // in a child div the timer doesn't touch.
+        const sub = document.createElement('div');
+        sub.className = 'plan-stream-preview';
+        el.appendChild(sub);
+        el._planSub = sub;
+      }
+      el._planAcc += data.text;
+      // Cap to last ~600 chars so a verbose model doesn't tank the DOM
+      // — the orchestrator output is structured JSON anyway, the
+      // preview just needs to convey "things are happening".
+      const view = el._planAcc.slice(-600);
+      el._planSub.textContent = view;
+    }
+    function handlePlanStreamEnd(data) {
+      if (_streamState.taskId && data.task_id !== _streamState.taskId) return;
+      const el = _streamState.el;
+      if (!el) return;
+      el.classList.remove('planning');
+      // Fade + drop the preview so the bubble cleans up before
+      // executor streaming takes over.
+      if (el._planSub) {
+        el._planSub.style.opacity = '0';
+        setTimeout(() => {
+          if (el._planSub && el._planSub.parentNode) el._planSub.remove();
+          el._planSub = null;
+        }, 250);
+      }
+      el._planActive = false;
+    }
+
     // Context watchdog (#4) — backend compressed N earlier rounds to
     // avoid blowing num_ctx. Drop a tiny system-style chip so the user
     // sees the agent actively kept its memory under control rather than
@@ -5745,12 +5895,70 @@
       }
     }
 
+    // ── #6 Perf stats — render per-model t/s + suggestion banner ──────
+    // Pulls /benchmark/stats which aggregates the most recent
+    // tokens_per_sec across all usage_records. Slowest models bubble
+    // to the top of the table; if the currently-configured executor
+    // is below the comfort threshold (25 t/s), we show a banner with
+    // a suggestion to switch to a smaller / non-thinking model.
+    function _perfTier(tps) {
+      if (tps >= 50) return 'fast';
+      if (tps >= 20) return 'medium';
+      return 'slow';
+    }
+    async function loadPerfStats() {
+      const wrap   = document.getElementById('perfStatsTable');
+      const banner = document.getElementById('perfSuggestBanner');
+      if (!wrap) return;
+      let rows = [];
+      try {
+        const r = await fetch(`${API}/benchmark/stats`);
+        const d = await r.json();
+        if (d.success) rows = d.data || [];
+      } catch (_) { /* offline → fall through to empty state */ }
+      if (!rows.length) {
+        wrap.innerHTML = `<span class="perf-stats-empty">${escHtml(t('perf_stats_empty') || 'No measurements yet — run a task to start collecting stats.')}</span>`;
+        if (banner) banner.hidden = true;
+        return;
+      }
+      wrap.innerHTML = rows.map(r => {
+        const tps = +(r.avg_tokens_per_sec || 0);
+        const tier = _perfTier(tps);
+        const dur = (r.avg_duration_ms || 0) / 1000;
+        return `<div class="perf-row">
+          <span class="perf-name">${escHtml(r.model)}</span>
+          <span class="perf-tps ${tier}">${tps.toFixed(1)} t/s</span>
+          <span class="perf-dur">~${dur.toFixed(1)}s/call</span>
+          <span class="perf-samples">n=${r.samples}</span>
+        </div>`;
+      }).join('');
+      // Suggestion: if the currently-configured executor is the slowest
+      // row AND its t/s is below 25, surface a banner.
+      const execModel = document.getElementById('sel_executor_model')?.value
+                     || document.getElementById('inp_qwen_model')?.value || '';
+      const me = rows.find(r => r.model === execModel);
+      if (banner) {
+        if (me && me.avg_tokens_per_sec < 25 && me.samples >= 3) {
+          const msg = (t('perf_suggest_slow') ||
+            'Your machine runs <strong>{model}</strong> at {tps} t/s. Consider switching to a smaller / non-thinking variant for snappier responses.')
+            .replace('{model}', escHtml(me.model))
+            .replace('{tps}',   me.avg_tokens_per_sec.toFixed(1));
+          banner.innerHTML = '⚡ ' + msg;
+          banner.hidden = false;
+        } else {
+          banner.hidden = true;
+        }
+      }
+    }
+
     async function loadSettings() {
       try {
         const res  = await fetch(`${API}/settings`);
         const data = await res.json();
         if (!data.success) { toast('Settings load error: ' + data.error, true); return; }
         const s = data.data;
+        // Refresh perf stats alongside settings (cheap, read-only).
+        loadPerfStats().catch(() => {});
         _setInput('inp_claude_model',      s.claude_model?.value      ?? '');
         _setInput('inp_anthropic_api_key', s.anthropic_api_key?.value ?? '');
         const escEl = document.getElementById('chk_escalation_enabled');
