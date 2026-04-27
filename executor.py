@@ -406,6 +406,10 @@ class Executor:
         self.registry: ToolRegistry = registry or _default_registry
         self.ws_callback = ws_callback   # async fn(event_dict) for UI pushes
         self._http = httpx.AsyncClient(timeout=120)
+        # subtask_id → list of {path, relative_path, size_bytes, tool}.
+        # Populated by _push_event when an artifact event flows; drained
+        # by orchestrator's deliverable verifier (#2). See pop_subtask_artifacts.
+        self._subtask_artifacts: Dict[str, List[Dict[str, Any]]] = {}
 
     async def close(self) -> None:
         await self._http.aclose()
@@ -519,7 +523,34 @@ class Executor:
             except Exception:  # noqa: BLE001
                 return f"{tname}::{targs!r}"
 
+        # Context watchdog state. We track the most recent prompt_eval_count
+        # from Ollama so the next round can decide if it needs to compress
+        # earlier turns before they bust num_ctx and the model starts
+        # truncating (or in extreme cases, simply silently dropping the
+        # original task description). Reset to 0 after a successful compress.
+        last_prompt_tokens = 0
+        num_ctx       = int(getattr(config, "qwen_num_ctx", 16384))
+        compress_at_f = float(getattr(config, "context_compress_at", 0.7))
+        compress_threshold = max(1024, int(num_ctx * compress_at_f))
+
         for round_idx in range(_MAX_TOOL_ROUNDS):
+            # ── Context watchdog (#4) ──────────────────────────────────────
+            # If the previous round's prompt was already >= 70% of num_ctx,
+            # we're one turn away from the model losing its grip. Compress
+            # mid-conversation messages now while there's still headroom.
+            if (
+                last_prompt_tokens >= compress_threshold
+                and len(messages) > 4
+            ):
+                logger.info(
+                    "Context watchdog: prompt_tokens=%d >= %d (num_ctx=%d) "
+                    "— compressing %d earlier messages.",
+                    last_prompt_tokens, compress_threshold, num_ctx,
+                    len(messages) - 4,
+                )
+                messages = await self._compress_messages(messages, system_prompt)
+                last_prompt_tokens = 0   # next call will re-measure
+
             stream_on = bool(getattr(config, "streaming_enabled", True))
             payload: Dict[str, Any] = {
                 "model": config.qwen_model,
@@ -529,6 +560,9 @@ class Executor:
                 "options": {
                     "temperature": float(getattr(config, "qwen_temperature", 0.2)),
                     "num_predict": config.qwen_max_tokens,
+                    # Tell Ollama how big a context window we want — this
+                    # is the real budget the watchdog is keeping us under.
+                    "num_ctx":     num_ctx,
                 },
             }
             if tools:
@@ -608,6 +642,9 @@ class Executor:
             # ── Record Qwen usage ─────────────────────────────────────────────
             _tokens_in  = data.get("prompt_eval_count", 0) or 0
             _tokens_out = data.get("eval_count", 0) or 0
+            # Feed the watchdog so the *next* round can decide if it
+            # needs to compress before sending another giant prompt.
+            last_prompt_tokens = _tokens_in
             try:
                 await self.tracker.record_usage(
                     task_id=task_id,
@@ -835,15 +872,18 @@ class Executor:
                                 import os as _os
                                 if _os.path.isfile(file_path):
                                     await self._push_event({
-                                        "event":    "artifact",
-                                        "task_id":  task_id,
-                                        "tool":     tool_name,
-                                        "path":     file_path,
+                                        "event":     "artifact",
+                                        "task_id":   task_id,
+                                        # subtask_id lets the verifier
+                                        # (#2) bucket artifacts per-subtask.
+                                        "subtask_id": subtask_id,
+                                        "tool":      tool_name,
+                                        "path":      file_path,
                                         "relative_path": inner.get("relative_path", ""),
                                         "size_bytes":    inner.get("size_bytes")
                                                         or inner.get("bytes_written")
                                                         or _os.path.getsize(file_path),
-                                        "name":     _os.path.basename(file_path),
+                                        "name":      _os.path.basename(file_path),
                                     })
                             except Exception:  # noqa: BLE001
                                 pass
@@ -947,11 +987,127 @@ class Executor:
 
     async def _push_event(self, event: Dict[str, Any]) -> None:
         """Push an event to the Web UI via ws_callback (if registered)."""
+        # Side-channel: also collect artifact events into an in-memory
+        # bucket keyed by subtask_id so the orchestrator can verify the
+        # produced files (#2 Per-step verification) without us having
+        # to thread file paths through the existing return tuple.
+        if event.get("event") == "artifact":
+            sid = event.get("subtask_id") or event.get("task_id") or ""
+            path = event.get("path")
+            if sid and path:
+                self._subtask_artifacts.setdefault(sid, []).append({
+                    "path":          path,
+                    "relative_path": event.get("relative_path", ""),
+                    "size_bytes":    event.get("size_bytes") or 0,
+                    "tool":          event.get("tool", ""),
+                })
         if self.ws_callback:
             try:
                 await self.ws_callback(event)
             except Exception as exc:  # noqa: BLE001
                 logger.debug("ws_callback error: %s", exc)
+
+    def pop_subtask_artifacts(self, subtask_id: str) -> List[Dict[str, Any]]:
+        """Return + clear the artifact list collected for a given subtask."""
+        return self._subtask_artifacts.pop(subtask_id, [])
+
+    # ── Context watchdog (#4) ────────────────────────────────────────────
+    # When the running prompt size approaches the model's num_ctx, this
+    # collapses the middle of the conversation into a single
+    # "<earlier-rounds-summary>" assistant message. Keeps:
+    #   • messages[0]   — the original task description (NEVER drop)
+    #   • messages[-3:] — the most recent assistant turn + its tool
+    #                     results, so the next call still has fresh
+    #                     concrete context to act on
+    # Drops the middle, summarised by Qwen itself with a tight prompt.
+
+    _COMPRESS_PROMPT = (
+        "You are compressing earlier turns of an AI agent's tool-use "
+        "session so the conversation can continue without busting the "
+        "model's context window. Read the dropped turns below and emit "
+        "a SHORT bullet recap (≤ 200 words, plain text, no markdown "
+        "fences) covering:\n"
+        "  1. What the agent has TRIED so far (tools called, args used)\n"
+        "  2. What WORKED — concrete results, file paths, values found\n"
+        "  3. What FAILED — errors, dead-ends, things to NOT retry\n"
+        "  4. Any open questions / next-step hints for the agent\n"
+        "Write tersely; the agent will read this verbatim before its "
+        "next turn. Output ONLY the recap text — no preamble.\n\n"
+        "── Dropped turns ──\n"
+    )
+
+    async def _compress_messages(
+        self,
+        messages: List[Dict[str, Any]],
+        system_prompt: str,
+    ) -> List[Dict[str, Any]]:
+        if len(messages) <= 4:
+            return messages
+        head = messages[:1]              # original user task
+        tail = messages[-3:]             # last assistant turn + its tool results
+        drop = messages[1:-3]            # what we summarise
+
+        # Render dropped turns as plain text. Cap each tool result so a
+        # 50-KB CSV dump doesn't poison the summary call's own context.
+        drop_lines = []
+        for m in drop:
+            role = m.get("role", "?")
+            content = m.get("content") or ""
+            if isinstance(content, list):
+                content = json.dumps(content, ensure_ascii=False)
+            content = content[:1200]
+            tcs = m.get("tool_calls")
+            if tcs:
+                content = (content + "\n").lstrip() + "[tool_calls=" + json.dumps(tcs, ensure_ascii=False)[:500] + "]"
+            drop_lines.append(f"{role.upper()}: {content}")
+        prompt = self._COMPRESS_PROMPT + "\n\n".join(drop_lines)
+
+        # Use a small num_predict so the recap stays compact even if the
+        # model wants to ramble. num_ctx stays generous so the summary
+        # call itself doesn't truncate the input we're trying to compress.
+        try:
+            resp = await self._http.post(
+                f"{config.qwen_base_url}/api/chat",
+                json={
+                    "model":    config.qwen_model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "stream":   False,
+                    "options":  {
+                        "temperature": 0.1,
+                        "num_predict": 600,
+                        "num_ctx":     int(getattr(config, "qwen_num_ctx", 16384)),
+                    },
+                },
+                timeout=120,
+            )
+            resp.raise_for_status()
+            msg = resp.json().get("message") or {}
+            recap = (msg.get("content") or msg.get("thinking") or "").strip()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "Context compression failed: %s. Falling back to "
+                "drop-middle without summary.", exc,
+            )
+            recap = f"(earlier {len(drop)} messages omitted; compression failed: {exc})"
+
+        # Best-effort: emit a UI event so the chat shows a small
+        # "🪶 compressed earlier rounds" chip — gives the user a hint
+        # that the agent had to truncate (not silent failure mode).
+        await self._push_event({
+            "type":   "context.compressed",
+            "dropped": len(drop),
+            "recap_chars": len(recap),
+        })
+
+        summary_msg = {
+            "role": "assistant",
+            "content": (
+                f"<earlier-rounds-summary dropped=\"{len(drop)}\">\n"
+                f"{recap}\n"
+                f"</earlier-rounds-summary>"
+            ),
+        }
+        return head + [summary_msg] + tail
 
     async def _try_skill(
         self, subtask: SubTask, context: Dict

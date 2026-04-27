@@ -130,6 +130,24 @@ class Config:
         default_factory=lambda: os.getenv("STREAMING_ENABLED", "true").strip().lower()
         not in {"0", "false", "no", "off"}
     )
+    # Ollama "num_ctx" — how many tokens of input the model is willing
+    # to read each turn. Default 16K is a sweet spot for thinking models
+    # (qwen3.5 / gemma4): big enough to hold ~10 tool rounds, small
+    # enough that Ollama doesn't fall back to CPU layers on a 16 GB Mac.
+    # When prompt_eval_count approaches this, the executor compresses
+    # older turns (#4 Context watchdog).
+    qwen_num_ctx: int = field(
+        default_factory=lambda: int(os.getenv("QWEN_NUM_CTX", "16384"))
+    )
+    gemma_num_ctx: int = field(
+        default_factory=lambda: int(os.getenv("GEMMA_NUM_CTX", "16384"))
+    )
+    # Trigger compression when the most recent prompt_eval_count crosses
+    # this fraction of num_ctx. 0.7 leaves 30% headroom for the next
+    # tool result + thinking tokens before the model truncates input.
+    context_compress_at: float = field(
+        default_factory=lambda: float(os.getenv("CONTEXT_COMPRESS_AT", "0.7"))
+    )
 
     # ── Database ─────────────────────────────────────────────────────────────
     db_path: str = field(

@@ -711,7 +711,36 @@ class Orchestrator:
                             return st
                         st = await self.escalation.resolve(st, context)
                         return st
-                    await self.tracker.update_subtask(st)
+
+                # ── Per-step deliverable verification (#2) ───────────
+                # Pull the artifacts the executor produced for this
+                # subtask, ask Qwen if any of them actually fulfils the
+                # goal (vs. being a description / report / plan ABOUT
+                # the goal — the snake.html "fake completion" pattern).
+                # Last shot at retry — bumps the failure counter and
+                # falls through to the loop's retry path.
+                artifacts = self.executor.pop_subtask_artifacts(st.id)
+                deliverable = await self._verify_deliverable(st, artifacts)
+                if deliverable:
+                    judge_text, judge_ok = deliverable
+                    st.result = (st.result or "") + f"\n\n{judge_text}"
+                    if not judge_ok:
+                        logger.info(
+                            "Subtask %s deliverable judge FAILED — "
+                            "retrying with feedback.", st.id,
+                        )
+                        st.status = TaskStatus.FAILED
+                        st.error = (
+                            "Deliverable did not match the goal — looks like "
+                            "a description / placeholder rather than the "
+                            "requested artifact. " + judge_text
+                        )
+                        st.confidence = 0.3   # force the loop to retry
+                        await self.tracker.update_subtask(st)
+                        # Fall through to retry — DON'T return success.
+                        continue
+
+                await self.tracker.update_subtask(st)
                 return st
 
             logger.info(
@@ -739,6 +768,139 @@ class Orchestrator:
         )
         st = await self.escalation.resolve(st, context)
         return st
+
+    # ── Per-step deliverable verification (#2) ──────────────────────────
+    # LLM-as-judge check: for tasks that produced a file, ask Qwen
+    # whether the file content actually fulfils the original goal, vs.
+    # being a description / report / placeholder ABOUT the goal.
+    # This is the direct fix for the "small model wrote a Snake Game
+    # report instead of a runnable game" failure mode the user saw.
+    _DELIVERABLE_JUDGE_PROMPT = (
+        "You are a strict QA reviewer for an AI agent. Decide if the "
+        "produced FILE actually fulfils the user's GOAL — i.e. it is a "
+        "real working artifact, NOT a report / outline / tutorial / "
+        "description ABOUT the goal.\n\n"
+        "Examples of FAIL:\n"
+        "  • Goal asks for a working HTML game, file is a markdown / "
+        "HTML report describing what such a game would contain "
+        "(skeleton, placeholder, no real game loop / no addEventListener).\n"
+        "  • Goal asks for a Python script, file is pseudocode in a "
+        "code-fence with no runnable definitions.\n"
+        "  • Goal asks for an analysis with numeric results, file just "
+        "lists what the analysis WOULD compute.\n\n"
+        "Reply STRICTLY with a JSON object — no markdown fences, no "
+        "preamble — in this exact shape:\n"
+        '  {"verdict": "PASS" | "FAIL", "reason": "<<= 30 words>"}\n'
+        "Nothing else."
+    )
+
+    async def _verify_deliverable(
+        self, st: SubTask, artifacts: List[Dict[str, Any]],
+    ) -> Optional[Tuple[str, bool]]:
+        """Ask Qwen if the largest produced text artifact actually matches
+        the subtask goal. Returns ``(reason, ok)`` or ``None`` if there
+        was nothing to verify (no artifacts, or all binary)."""
+        if not artifacts:
+            return None
+        # Pick the largest text-y artifact — that's most likely the
+        # primary deliverable. Skip binary extensions to avoid pointless
+        # checks (an image / parquet won't read sensibly as text).
+        TEXTY = {".html", ".htm", ".js", ".jsx", ".ts", ".tsx", ".py",
+                 ".md", ".txt", ".json", ".yaml", ".yml", ".css", ".sh",
+                 ".sql", ".csv", ".tsv", ".xml", ".toml", ".ini"}
+        candidates = [a for a in artifacts
+                      if any(a.get("path", "").lower().endswith(ext) for ext in TEXTY)]
+        if not candidates:
+            return None
+        candidates.sort(key=lambda a: a.get("size_bytes") or 0, reverse=True)
+        target = candidates[0]
+        path = target.get("path") or ""
+
+        # Cap content read at ~6 KB — enough to spot "this is a report
+        # not a game", not enough to drown the verification call's
+        # context. We sample HEAD only (most files give away their
+        # nature in the first ~100 lines).
+        try:
+            with open(path, "r", encoding="utf-8", errors="replace") as f:
+                content = f.read(6_000)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Verifier could not read %s: %s", path, exc)
+            return None
+
+        user_msg = (
+            f"GOAL: {st.description}\n\n"
+            f"PRODUCED FILE: {os.path.basename(path)}\n"
+            f"FILE CONTENT (first {len(content)} chars):\n"
+            f"------\n{content}\n------"
+        )
+        try:
+            resp = await self._http.post(
+                f"{config.qwen_base_url}/api/chat",
+                json={
+                    "model":    config.qwen_model,
+                    "messages": [{"role": "user", "content": user_msg}],
+                    "system":   self._DELIVERABLE_JUDGE_PROMPT,
+                    "stream":   False,
+                    # Ollama's structured-output mode — forces the
+                    # response.message.content to be valid JSON. Without
+                    # this small thinking models love to wrap the
+                    # verdict in essay-style commentary that's too
+                    # ambiguous to parse reliably.
+                    "format":   "json",
+                    "options":  {
+                        "temperature": 0.1,
+                        "num_predict": 200,
+                        "num_ctx":     int(getattr(config, "qwen_num_ctx", 16384)),
+                    },
+                },
+                timeout=90,
+            )
+            resp.raise_for_status()
+            msg = resp.json().get("message") or {}
+            verdict_raw = (msg.get("content") or msg.get("thinking") or "").strip()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Deliverable verifier crashed: %s — skipping.", exc)
+            return None
+
+        # Parse the JSON response. Be defensive — Ollama's `format: json`
+        # is reliable but not bulletproof, and some thinking models still
+        # leak prose around the JSON object.
+        ok: Optional[bool] = None
+        reason = verdict_raw[:200]
+        try:
+            # Try to extract the first {...} block in case the model
+            # decided to add commentary outside it anyway.
+            match = re.search(r"\{[\s\S]*\}", verdict_raw)
+            data = json.loads(match.group(0)) if match else json.loads(verdict_raw)
+            v = str(data.get("verdict", "")).strip().upper()
+            if v == "PASS":
+                ok, reason = True,  data.get("reason") or "OK"
+            elif v == "FAIL":
+                ok, reason = False, data.get("reason") or "Did not match goal"
+        except Exception:  # noqa: BLE001
+            # JSON parse failed — fall back to keyword heuristics on
+            # raw text. Better lenient than false-positive on a flaky
+            # judge that just happens to disagree with our format.
+            lower = verdict_raw.lower()
+            fail_keywords = ("non-functional", "skeleton", "placeholder",
+                              "describes", "report", "outline", "no actual",
+                              "not implemented", "pseudocode", "no real")
+            pass_keywords = ("complete", "functional", "fully implemented",
+                              "working")
+            if any(k in lower for k in fail_keywords):
+                ok, reason = False, "verdict text suggests not a real artifact"
+            elif any(k in lower for k in pass_keywords):
+                ok, reason = True, "verdict text suggests artifact is real"
+
+        if ok is None:
+            # Genuinely couldn't tell — be lenient, treat as PASS so we
+            # don't false-positive trip on a flaky judge.
+            return None
+        logger.info(
+            "Deliverable verifier: %s (file=%s, reason=%s)",
+            "PASS" if ok else "FAIL", os.path.basename(path), reason[:120],
+        )
+        return (f"[deliverable-judge] {os.path.basename(path)}: {reason}", ok)
 
     async def _verify_subtask(self, st: SubTask) -> Optional[Tuple[str, bool]]:
         """根據子任務類型執行驗證指令。

@@ -204,7 +204,12 @@
     .session-item-actions {
       display: flex;
       gap: 2px;
-      opacity: 0;
+      /* Always visible (was opacity 0 → users couldn't find the
+         delete/rename buttons). Subdued by default, brightens on
+         hover / when this is the active session. flex-shrink:0 so a
+         long session title can't overflow and hide them. */
+      opacity: 0.55;
+      flex-shrink: 0;
       transition: opacity 0.12s;
     }
     .session-item:hover .session-item-actions,
@@ -1878,6 +1883,8 @@
       font-size: 0.82rem;
       color: var(--text-primary);
       text-decoration: none;
+      font-family: inherit;
+      cursor: pointer;
       transition: background 0.12s, border-color 0.12s;
     }
     .artifact-chip:hover {
@@ -1908,6 +1915,8 @@
       font-size: 0.82rem;
       color: var(--text-secondary);
       text-decoration: none;
+      font-family: inherit;
+      cursor: pointer;
       transition: background 0.12s, color 0.12s;
     }
     .artifact-preview:hover {
@@ -3237,6 +3246,7 @@
           if (data.type  === 'chat.stream.delta') handleStreamDelta(data);
           if (data.type  === 'chat.stream.end')   handleStreamEnd(data);
           if (data.type  === 'update.progress')   handleUpdateProgress(data);
+          if (data.type  === 'context.compressed') handleContextCompressed(data);
         } catch (e) { /* ignore */ }
       };
     }
@@ -3528,11 +3538,15 @@
         const onKey = (e) => {
           if (e.key === 'Escape') { e.preventDefault(); cleanup(null); }
         };
-        okBtn.onclick = () => cleanup(input.value.trim() || null);
+        // OK returns the trimmed string (empty string = "OK with no
+        // input"); only Cancel / Esc / backdrop returns null. This
+        // distinction matters for callers like the "Let Claude fix"
+        // flow where empty hint is still a valid choice.
+        okBtn.onclick = () => cleanup(input.value.trim());
         cancelBtn.onclick = () => cleanup(null);
         modal.onclick = (e) => { if (e.target === modal) cleanup(null); };
         input.onkeydown = (e) => {
-          if (e.key === 'Enter') { e.preventDefault(); cleanup(input.value.trim() || null); }
+          if (e.key === 'Enter') { e.preventDefault(); cleanup(input.value.trim()); }
         };
         document.addEventListener('keydown', onKey, true);
         setTimeout(() => input.focus(), 30);
@@ -3950,7 +3964,17 @@
     }
 
     async function deleteSession(id) {
-      if (!confirm(t('confirm_delete_session'))) return;
+      // Native confirm() is silently blocked inside Tauri's WebKit
+      // webview, which is why the ✕ button looked dead on desktop.
+      // Use the in-app showConfirm() modal so it works everywhere.
+      const ok = await showConfirm({
+        title:    t('confirm_delete_session'),
+        body:     '',
+        okLabel:  t('btn_delete'),
+        cancelLabel: t('btn_cancel'),
+        danger:   true,
+      });
+      if (!ok) return;
       try {
         const res = await fetch(`${API}/sessions/${id}`, { method: 'DELETE' });
         if (!res.ok) throw new Error(res.statusText);
@@ -4361,6 +4385,60 @@
     // Previously the single chip used inline disposition and just opened
     // the page — the user complained that clicking the chip didn't
     // actually save the file, so the primary action is now download.
+    // Open `url` in the user's default browser. Works in both:
+    //   • Plain browser  → `window.open` opens a new tab
+    //   • Tauri webview  → postMessage to the parent main.js, which
+    //                      calls Rust `open_external` (anchors and
+    //                      window.open are blocked inside Tauri's
+    //                      sandboxed iframe).
+    function openInBrowser(url) {
+      try {
+        if (window.parent && window.parent !== window) {
+          window.parent.postMessage({ type: 'teddy.open_external', url }, '*');
+        }
+      } catch (_) { /* ignore */ }
+      try { window.open(url, '_blank', 'noopener'); } catch (_) {}
+    }
+
+    // Download `url` as a file by fetching → Blob → simulated anchor
+    // click. Works inside Tauri (where `<a download>` is silently
+    // blocked) and gives plain browsers the same UX they had before.
+    async function downloadArtifact(url, filename) {
+      try {
+        const res = await fetch(url);
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const blob = await res.blob();
+        const blobUrl = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = blobUrl;
+        a.download = filename || 'download';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(blobUrl), 5_000);
+      } catch (e) {
+        toast('Download failed: ' + e.message, true);
+      }
+    }
+
+    // One delegated listener handles every chip's click. We use
+    // data-* attributes to carry URLs (instead of inline onclick) so
+    // we don't have to escape complex query strings into JS string
+    // literals — the encode happens once in renderArtifactList below.
+    document.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-teddy-artifact]');
+      if (!btn) return;
+      e.preventDefault();
+      const action = btn.dataset.teddyArtifact;
+      const url    = btn.dataset.url;
+      if (!url) return;
+      if (action === 'download') {
+        downloadArtifact(url, btn.dataset.name || '');
+      } else if (action === 'preview') {
+        openInBrowser(url);
+      }
+    });
+
     function renderArtifactList(artifacts) {
       if (!artifacts || !artifacts.length) return '';
       const sessionQS = _currentSessionId
@@ -4372,17 +4450,20 @@
         const size     = a.size ? ` · ${formatBytes(a.size)}` : '';
         const ext      = (a.name.split('.').pop() || '').toLowerCase();
         const previewable = ['html','htm','txt','md','json','csv','log','png','jpg','jpeg','gif','svg','pdf'].includes(ext);
-        const previewLink = previewable
-          ? `<a class="artifact-preview" href="${escHtml(base)}" target="_blank" rel="noopener"
-                title="在新分頁預覽">👁</a>`
+        const previewBtn = previewable
+          ? `<button type="button" class="artifact-preview"
+                     data-teddy-artifact="preview" data-url="${escHtml(base)}"
+                     title="在新分頁預覽">👁</button>`
           : '';
         return `<span class="artifact-chip-wrap">
-                  <a class="artifact-chip" href="${escHtml(dlHref)}"
-                     download="${escHtml(a.name)}"
-                     title="下載 ${escHtml(a.path)}">
+                  <button type="button" class="artifact-chip"
+                          data-teddy-artifact="download"
+                          data-url="${escHtml(dlHref)}"
+                          data-name="${escHtml(a.name)}"
+                          title="下載 ${escHtml(a.path)}">
                     📎 ${escHtml(a.name)}${escHtml(size)}
-                  </a>
-                  ${previewLink}
+                  </button>
+                  ${previewBtn}
                 </span>`;
       }).join('');
       return `<div class="artifact-row">${chips}</div>`;
@@ -4654,8 +4735,10 @@
 
       // Privacy disclosure + optional hint, combined into a single
       // dialog so the user sees WHAT gets sent before deciding.
-      const hint = prompt(
-        '🛠️ Let Claude fix — 請注意資料流向\n\n' +
+      // Native prompt() is blocked inside Tauri's WebKit — use the
+      // in-app showFsPrompt() modal so it works in both desktop +
+      // browser. (Empty input is allowed; null = cancelled.)
+      const body =
         '按下「確定」後會送到 Anthropic Claude API：\n' +
         '  • 任務目標（你打的那句話）\n' +
         '  • 所有子任務的描述 + 執行結果 + 錯誤訊息\n' +
@@ -4663,11 +4746,14 @@
         '  • 你填的 hint（下面這欄）\n\n' +
         '注意：上傳的檔案本身不會被送，但若 Qwen 之前有 cat / head / pandas 印出過\n' +
         '檔案內容，那段 output 會包在 tool_result 裡一起送。\n\n' +
-        '如果這是機敏資料，建議改切到 🔒 本地端模式（聊天標題右側的 pill）。\n\n' +
-        '─────────────────────────────────\n' +
-        '提示（可選，留空也 OK）：',
-        '',
-      );
+        '如果這是機敏資料，建議改切到 🔒 本地端模式（聊天標題右側的 pill）。';
+      const hint = await showFsPrompt({
+        title:       '🛠️ Let Claude fix — 請注意資料流向',
+        body:        body,
+        okLabel:     '確定送出',
+        cancelLabel: '取消',
+        placeholder: '提示（可選，留空也 OK）',
+      });
       if (hint === null) return;  // cancelled
 
       if (btn) {
@@ -4826,6 +4912,19 @@
       if (el) el.classList.remove('streaming');
       // Note: we DON'T detach yet — loadTaskStatus is about to swap in
       // the final summary + elapsed footer. detach happens there.
+    }
+
+    // Context watchdog (#4) — backend compressed N earlier rounds to
+    // avoid blowing num_ctx. Drop a tiny system-style chip so the user
+    // sees the agent actively kept its memory under control rather than
+    // silently forgetting things.
+    function handleContextCompressed(data) {
+      const dropped = data.dropped ?? 0;
+      const recap   = data.recap_chars ?? 0;
+      const chip = document.createElement('div');
+      chip.className = 'msg-system';
+      chip.textContent = `🪶 ${t('context_compressed', { n: dropped }) || `Compressed ${dropped} earlier rounds`} (${recap} chars)`;
+      appendToChat(chip);
     }
 
     async function runTask() {
@@ -5296,7 +5395,16 @@
     }
 
     async function confirmClearMemory() {
-      if (!confirm(t('confirm_delete_all_memory'))) return;
+      // Native confirm() is silently blocked in Tauri's WebKit — use
+      // the in-app modal so this works in both desktop + browser.
+      const ok = await showConfirm({
+        title:    t('confirm_delete_all_memory'),
+        body:     '',
+        okLabel:  t('btn_clear_all'),
+        cancelLabel: t('btn_cancel'),
+        danger:   true,
+      });
+      if (!ok) return;
       try {
         const res  = await fetch(`${API}/memory`, { method: 'DELETE' });
         const data = await res.json();
@@ -5755,7 +5863,15 @@
     }
 
     async function deleteModel(name) {
-      if (!confirm(t('confirm_delete_model', { name }))) return;
+      // Native confirm() is silently blocked in Tauri's WebKit.
+      const ok = await showConfirm({
+        title:    t('confirm_delete_model', { name }),
+        body:     '',
+        okLabel:  t('btn_delete'),
+        cancelLabel: t('btn_cancel'),
+        danger:   true,
+      });
+      if (!ok) return;
       try {
         const res  = await fetch(`${API}/settings/ollama/models/${encodeURIComponent(name)}`, { method: 'DELETE' });
         const data = await res.json();
