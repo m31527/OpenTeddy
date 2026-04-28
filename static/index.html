@@ -238,6 +238,10 @@
       gap: 1px;
       margin-bottom: 0.35rem;
     }
+    /* Honour the `hidden` HTML attribute — class-level display:flex
+       below would otherwise override the UA-stylesheet's display:none.
+       Same gotcha as .sidebar-login-btn[hidden] below. */
+    .sidebar-nav-btn[hidden] { display: none !important; }
     .sidebar-nav-btn {
       display: flex;
       align-items: center;
@@ -2761,7 +2765,13 @@
                deep-links / history entries still resolve cleanly. -->
           <button class="sidebar-nav-btn" data-tab="tools"    onclick="switchTab('tools')"    data-i18n-title="nav_tools"    title="Tools"><span class="nav-icon">🔧</span><span class="nav-label" data-i18n="nav_tools">Tools</span></button>
           <button class="sidebar-nav-btn" data-tab="memory"   onclick="switchTab('memory')"   data-i18n-title="nav_memory"   title="Memory"><span class="nav-icon">🧠</span><span class="nav-label" data-i18n="nav_memory">Memory</span></button>
-          <button class="sidebar-nav-btn" data-tab="usage"    onclick="switchTab('usage')"    data-i18n-title="nav_usage"    title="Usage"><span class="nav-icon">📊</span><span class="nav-label" data-i18n="nav_usage">Usage</span></button>
+          <!-- Usage nav button hidden — the savings pill at the bottom
+               of the sidebar already shows the live "saved vs. GPT-4"
+               number, and clicking the pill routes here. Two entry
+               points doing the same thing was redundant. The tab
+               panel + switchTab('usage') routing stay alive so the
+               pill click + any old deep-links still work. -->
+          <button class="sidebar-nav-btn" data-tab="usage"    onclick="switchTab('usage')"    data-i18n-title="nav_usage"    title="Usage" hidden><span class="nav-icon">📊</span><span class="nav-label" data-i18n="nav_usage">Usage</span></button>
           <button class="sidebar-nav-btn" data-tab="settings" onclick="switchTab('settings')" data-i18n-title="nav_settings" title="Settings"><span class="nav-icon">⚙️</span><span class="nav-label" data-i18n="nav_settings">Settings</span></button>
           <!-- Language switcher styled as a nav button so it lines up
                flush under Settings. Icon slot shows the active locale's

@@ -1431,6 +1431,14 @@ class Orchestrator:
                     return result
 
         # ── Strategy 5: fallback — at least let Qwen run something ───────────
+        # The subtask description is passed verbatim into the executor's
+        # user message. Earlier this was prefixed with "執行用戶的原始請求:"
+        # which read to small chat-mode models as a verb instruction
+        # ("execute the original request") and made them produce
+        # past-tense action reports — e.g. user says "早安", executor
+        # replies "已完成用戶的問候回應 / 已回覆用戶問候" instead of just
+        # saying "早安！👋". Pass `goal` raw so the model treats it as
+        # the actual question to answer.
         logger.warning(
             "Could not parse Gemma plan JSON (raw length=%d); "
             "falling back to single subtask from goal.",
@@ -1440,7 +1448,7 @@ class Orchestrator:
             return [
                 SubTask(
                     parent_task_id=task_id,
-                    description=f"執行用戶的原始請求: {goal}",
+                    description=goal,
                     skill_hint=None,
                     agent=AgentRole.EXECUTOR,
                     order=0,
