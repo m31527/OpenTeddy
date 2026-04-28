@@ -296,21 +296,59 @@ async def websocket_endpoint(ws: WebSocket) -> None:
 _NO_CACHE_HEADERS = {
     # Browser MUST hit the server every load — without this, hot-fixes
     # to /static/index.html get masked behind a 24h disk cache and the
-    # user thinks "the new feature didn't ship". Static asset files
-    # under /static/* still get the FastAPI defaults (long cache OK
-    # because their URL changes on disk → cache-bust by file path).
+    # user thinks "the new feature didn't ship".
     "Cache-Control": "no-cache, no-store, must-revalidate",
     "Pragma":        "no-cache",
     "Expires":       "0",
 }
 
 
+# Cache for the cache-busted index.html, keyed by build hash. We re-read
+# and re-rewrite at most once per commit (and once per process restart)
+# so the per-request cost is one dict lookup.
+_INDEX_HTML_CACHE: dict[str, str] = {}
+
+# Static assets whose content changes ship-to-ship — we need to force
+# the browser to re-fetch them when the build hash flips. Anything not
+# listed here keeps the StaticFiles default cache behaviour.
+_CACHE_BUST_TARGETS = ("/static/i18n.js", "/static/styles.css")
+
+
+def _rewrite_index_html(commit: str) -> str:
+    """Read static/index.html and append ?v=<commit> to known-volatile
+    asset references so each new build invalidates the browser cache.
+    Without this, the browser's disk cache happily reuses a stale
+    i18n.js or stylesheet across deploys — observable as new keys
+    rendering as their literal name (e.g. "sidebar_login" instead of
+    "Sign in") because the dict from old cached JS lacks them."""
+    index_path = os.path.join(_static_dir, "index.html")
+    with open(index_path, "r", encoding="utf-8") as f:
+        html = f.read()
+    if not commit:
+        return html
+    for target in _CACHE_BUST_TARGETS:
+        # Match both `src="/static/i18n.js"` and `href="/static/...css"`
+        # — replace_all is safe because target paths are full and unique
+        # within the document.
+        html = html.replace(target, f"{target}?v={commit}")
+    return html
+
+
 @app.get("/", include_in_schema=False)
-async def root() -> FileResponse:
-    index = os.path.join(_static_dir, "index.html")
-    if os.path.exists(index):
-        return FileResponse(index, headers=_NO_CACHE_HEADERS)
-    return FileResponse(__file__)
+async def root():
+    index_path = os.path.join(_static_dir, "index.html")
+    if not os.path.exists(index_path):
+        return FileResponse(__file__)
+    # Best-effort commit lookup — empty string is fine, we just skip
+    # the rewrite and serve the file as-is (legacy behaviour).
+    commit = _git_info().get("commit") or ""
+    if commit not in _INDEX_HTML_CACHE:
+        _INDEX_HTML_CACHE[commit] = _rewrite_index_html(commit)
+    from fastapi.responses import HTMLResponse
+    return HTMLResponse(
+        content=_INDEX_HTML_CACHE[commit],
+        headers=_NO_CACHE_HEADERS,
+    )
 
 
 @app.get("/favicon.ico", include_in_schema=False)
