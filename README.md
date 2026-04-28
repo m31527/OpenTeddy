@@ -6,7 +6,11 @@
 
 # OpenTeddy
 
-**A free, Claude-like agent — local models + skills + a dash of commercial LLM.**
+**The platform that makes local LLMs ship work.**
+
+Local models alone are weak. Wrap them in OpenTeddy and you get a real agent —
+hardened orchestration, a self-growing skills library, and just enough
+commercial-LLM escalation to finish what local can't.
 
 <p>
   <img alt="Python" src="https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white" />
@@ -19,30 +23,30 @@
 
 🌐 **Web:** [openteddy-72cee.web.app](https://openteddy-72cee.web.app/) &nbsp;·&nbsp; 📦 **Source:** [github.com/m31527/OpenTeddy](https://github.com/m31527/OpenTeddy)
 
-OpenTeddy orchestrates a trio of AI agents to autonomously plan, execute,
-and improve over time — automatically generating Python "skills" to handle
-recurring tasks faster on future runs.
-
 </div>
 
 ---
 
-## Mission
+## Why this exists
 
-The goal is to build a **free, Claude-like experience** that anyone can run at
-home. We get there by **mixing three layers**:
+A 2B / 4B / 7B local model on its own is a toy. It hallucinates, it loops,
+it stops mid-task. The model isn't the product — **the platform around it
+is**. OpenTeddy is that platform:
 
-1. **Local models (Gemma / Qwen via Ollama)** handle the bulk of planning and
-   execution — no per-token cost, no data leaving your machine.
-2. **Skills** turn repeated work into plain Python functions, so the same job
-   stops costing LLM calls after the second or third run.
-3. **A commercial model (Claude)** is pulled in only when the local path
-   genuinely can't finish the task — timeouts, low confidence, hard failures.
+- A **hardened agent loop** that knows when to give up, when to retry, and
+  when to call Claude — no infinite "let me try that again" doom-spirals.
+- A **self-growing skills library** that turns repeated work into plain
+  Python functions, so the second time you ask the same question it costs
+  zero LLM calls.
+- **Hardware-tuned model presets** for everything from a 16 GB MacBook to
+  a DGX Spark — the right `num_ctx`, `max_tokens`, and timeout per tier.
+- **Commercial-LLM escalation as a safety net**, not a bill — Claude only
+  gets called when local genuinely can't finish, and the Usage dashboard
+  shows you how much GPT-4 would've charged for the same work.
 
-The result is a hybrid that aims for **high capability at a fraction of the
-cost** of calling a frontier model for every single step. The Usage dashboard
-estimates how much you'd have paid on GPT-4 for the same token volume, so you
-can see the savings pile up in real time.
+The result: your $0/token local hardware actually finishes the job, and
+the savings counter in the sidebar is what makes you stop worrying about
+Claude Pro auto-renewing.
 
 > **If this resonates with you — or you just want to cheer the project on —
 > please drop a ⭐ on the repo. It genuinely helps and keeps me motivated to

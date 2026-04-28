@@ -319,16 +319,40 @@ FINAL OUTPUT FORMAT (emit exactly one JSON object, no prose, no markdown):
 
 
 _SYSTEM_PROMPT_CHAT = """\
-You are Teddy-Exec in **Chat mode**. The user wants pure text reasoning —
-summarize, translate, explain, answer, write. No tools are available in
-this mode and none are needed.
+You are Teddy-Exec in **Chat mode**. The user wants conversational text —
+summaries, translations, explanations, answers, writing.
 
 Just read the sub-task, think, and reply with the answer. Write in the same
 language the user used. Format with markdown (headings, lists, bold) when it
 improves readability — especially for summaries and structured explanations.
 
-DO NOT mention tools, shell commands, files, or "I would need to…". Just
-answer the question or produce the requested text.
+— Knowledge cutoff awareness ————————————————————————————————————
+Your training data has a cutoff. For questions that depend on **current**
+information — recent news, today's prices, sports scores, weather, version
+numbers of fast-moving libraries / products, schedules, anything dated
+later than your training data — you MUST call the `web_search` tool
+instead of guessing. Then quote the sources back to the user with their
+URLs so the answer is verifiable.
+
+When you DO use search, follow this pattern:
+  1. Call web_search with a clean keyword query (not a full sentence).
+     Add the year for time-sensitive topics ("react 19 release notes 2026").
+  2. Read the top results.
+  3. Compose a markdown answer that cites at least 1 URL inline.
+  4. End with a short "Sources" list of the URLs you used.
+
+When you do NOT need search:
+  - General explanations ("explain async/await")
+  - Math, logic, code reasoning
+  - Well-known historical facts
+  - Translations, summaries of text the user provided
+Search adds latency — only call it when freshness genuinely matters.
+
+— What NOT to do ————————————————————————————————————————————
+- Do NOT mention shell commands, files, or "I would need to…" — those
+  tools are not available in chat mode.
+- Do NOT fabricate a URL. If you didn't search, don't pretend you did.
+- Do NOT call web_search for every message — only when freshness matters.
 
 FINAL OUTPUT FORMAT (emit exactly one JSON object, no prose outside it):
   {
@@ -502,9 +526,19 @@ class Executor:
             }
         ]
 
-        # Chat mode deliberately hides tools from the model so it can't
-        # accidentally write files / run shell commands while summarizing.
-        tools = [] if mode == "chat" else self.registry.get_schemas()
+        # Chat mode hides almost all tools — it's text reasoning only —
+        # but exposes web_search so the local model can ground answers
+        # in current data when its training cutoff would otherwise force
+        # it to hallucinate (recent events, new versions, today's prices).
+        # Without web_search a 2B/4B local model invents plausible-
+        # looking facts; with it, the model can say "let me look that up"
+        # and quote real sources. The other tools (shell, file, db, etc.)
+        # stay hidden so chat can't accidentally write files or run
+        # commands while answering a casual question.
+        if mode == "chat":
+            tools = self.registry.get_schemas_by_names(["web_search"])
+        else:
+            tools = self.registry.get_schemas()
         objective_failure_seen = False
 
         # Duplicate-call tracker. Small local models (Qwen 2.5 3B) routinely

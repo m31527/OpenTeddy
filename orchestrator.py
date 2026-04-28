@@ -405,8 +405,18 @@ class Orchestrator:
             )
             results_texts = [st.result or "" for st in subtasks if st.result]
 
-            # 5. Generate summary: Claude if escalated, Gemma otherwise
-            if had_escalation or not results_texts:
+            # 5. Generate summary: Claude if escalated, Gemma otherwise.
+            #
+            # Chat mode is a special case — there's no "task" to summarise,
+            # the user said "你好" and the executor said "你好！👋". Running
+            # the summariser produces an awkward "任務已完成：你好" wrapper
+            # (or worse, the raw tool_log fallback when Gemma returns
+            # empty). For chat we just hand back the executor's raw text.
+            if session_mode == "chat" and not had_escalation and results_texts:
+                # Concatenate any subtask results — usually 1 in chat mode,
+                # but defensive in case the planner emitted more.
+                summary = "\n\n".join(t.strip() for t in results_texts if t.strip())
+            elif had_escalation or not results_texts:
                 # 只有真的升級過才用 Claude 做 summary
                 summary = await self.escalation.synthesize_summary(
                     req.goal, results_texts, task_id=req.id

@@ -44,6 +44,16 @@ SETTINGS_META: dict[str, dict[str, Any]] = {
                         "Get one at console.anthropic.com → Settings → API Keys.",
         "type":        "secret",
     },
+    "brave_search_api_key": {
+        "label":       "Brave Search API Key",
+        "description": "Powers the web_search tool used in Chat mode so "
+                        "the local model can ground answers in current "
+                        "data instead of hallucinating recent events / "
+                        "version numbers. Free tier: 2,000 queries/month. "
+                        "Get one at api-dashboard.search.brave.com. "
+                        "Leave empty to disable web search.",
+        "type":        "secret",
+    },
     "escalation_enabled": {
         "label":       "Allow Claude escalation",
         "description": "When OFF, low-confidence / timeout / failure-signal "
@@ -224,6 +234,7 @@ def _defaults_from_config() -> dict[str, str]:
         "executor_model":           config.qwen_model,
         "claude_model":             config.claude_model,
         "anthropic_api_key":        config.anthropic_api_key,
+        "brave_search_api_key":     getattr(config, "brave_search_api_key", ""),
         "escalation_enabled":       "true" if config.escalation_enabled else "false",
         "streaming_enabled":        "true" if config.streaming_enabled else "false",
         "verification_enabled":     "true" if getattr(config, "verification_enabled", True) else "false",
@@ -415,6 +426,9 @@ class SettingsStore:
             # Empty string ⇒ keep the env-var fallback. Only overwrite
             # when the user actually saved a key in the UI.
             config.anthropic_api_key = settings["anthropic_api_key"]
+        if settings.get("brave_search_api_key"):
+            # Same pattern as Anthropic — empty in UI = keep env-var.
+            config.brave_search_api_key = settings["brave_search_api_key"]
         if "escalation_enabled" in settings:
             config.escalation_enabled = (
                 str(settings["escalation_enabled"]).strip().lower()

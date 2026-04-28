@@ -113,6 +113,14 @@ class Config:
     claude_model: str = field(
         default_factory=lambda: os.getenv("CLAUDE_MODEL", "claude-opus-4-6")
     )
+    # Brave Search API key — powers the web_search tool, which is the
+    # only tool exposed in chat mode. Without it the tool is registered
+    # but returns an explanatory error so chat mode degrades gracefully
+    # (model answers from training data, warns about staleness). Free
+    # tier covers 2K queries/month. https://brave.com/search/api/
+    brave_search_api_key: str = field(
+        default_factory=lambda: os.getenv("BRAVE_SEARCH_API_KEY", "")
+    )
     # Master kill-switch for Claude escalation. When False, low-confidence
     # / timeout / failure-signal triggers do NOT call Claude — the agent
     # marks the subtask FAILED and surfaces the local error to the user.
@@ -334,6 +342,12 @@ class Config:
         # in the UI. Empty string keeps the env-var fallback.
         if settings.get("anthropic_api_key"):
             self.anthropic_api_key = settings["anthropic_api_key"]
+
+        # Brave Search API key — same pattern as Anthropic; empty string
+        # leaves the env-var fallback alone so removing the row in the
+        # DB doesn't accidentally wipe a key set via .env.
+        if settings.get("brave_search_api_key"):
+            self.brave_search_api_key = settings["brave_search_api_key"]
 
         # Boolean toggles. We treat anything other than the explicit
         # "off" tokens as truthy so an accidentally-stored "True" / "yes"

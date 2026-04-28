@@ -97,6 +97,20 @@ class ToolRegistry:
         """Return all tool schemas in Ollama tools format."""
         return [t["schema"] for t in self._tools.values()]
 
+    def get_schemas_by_names(self, names: List[str]) -> List[Dict[str, Any]]:
+        """Return only the schemas for tools whose names match. Used by
+        chat mode to expose a *specific* allow-list (just web_search,
+        not the full toolbox) instead of all-or-nothing. Unknown names
+        are silently dropped — the caller is usually a hardcoded list,
+        and missing tools mean a feature wasn't built yet (e.g. the
+        search API key wasn't registered), not a programming error."""
+        out: List[Dict[str, Any]] = []
+        for n in names:
+            tool = self._tools.get(n)
+            if tool:
+                out.append(tool["schema"])
+        return out
+
     def list_tools(self) -> List[Dict[str, Any]]:
         """Return tool info including risk level (for /tools endpoint)."""
         return [
@@ -177,11 +191,13 @@ class ToolRegistry:
         from tools.notify_tool import NOTIFY_TOOLS
         from tools.report_tool import REPORT_TOOLS
         from tools.analytic_tool import ANALYTIC_TOOLS
+        from tools.search_tool import SEARCH_TOOLS
 
         for fn, schema, risk in (
             SHELL_TOOLS + FILE_TOOLS + HTTP_TOOLS
             + PACKAGE_TOOLS + DB_TOOLS + GCP_TOOLS + DEPLOY_TOOLS
             + NOTIFY_TOOLS + REPORT_TOOLS + ANALYTIC_TOOLS
+            + SEARCH_TOOLS
         ):
             self.register(fn, schema, risk)
 

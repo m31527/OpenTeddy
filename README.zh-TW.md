@@ -6,9 +6,9 @@
 
 # OpenTeddy
 
-**一個免費、類 Claude 的本機 AI 代理人**
+**讓本機 LLM 真正能交付工作的平台。**
 
-本機模型 + 技能（Skills）+ 少量商業模型的混搭方案。
+本機模型自己跑不太動。OpenTeddy 在它外面包一層 — 強化過的 agent loop、會自動長出來的技能庫，以及恰到好處的商業模型補位 — 把它變成真的能完成任務的代理人。
 
 🌐 **官網：** [openteddy-72cee.web.app](https://openteddy-72cee.web.app/) &nbsp;·&nbsp; 📦 **原始碼：** [github.com/m31527/OpenTeddy](https://github.com/m31527/OpenTeddy)
 
@@ -16,15 +16,16 @@
 
 ---
 
-## 這是什麼？
+## 為什麼存在這個專案
 
-OpenTeddy 的目標是做出一個**免費、可以在自己電腦上跑**的類 Claude 體驗，方法是把三層能力疊在一起：
+2B / 4B / 7B 級的本機模型，自己單打獨鬥就是個玩具：會幻覺、會跳針、做到一半放棄。**模型本身不是產品，外面那層平台才是**。OpenTeddy 就是那一層：
 
-1. **本機模型（Gemma / Qwen，透過 Ollama）** — 負責大部分的規劃與執行，不用花錢、資料也不出你的電腦。
-2. **技能（Skills）** — 重複做過的事情會被自動寫成 Python 函式，之後同樣的任務就不用再呼叫 LLM。
-3. **商業模型（Claude）** — 只有在本機模型撐不住的時候才會被叫進來（逾時、信心不足、硬錯誤等）。
+- **強化過的 agent loop** — 知道何時該放棄、何時該重試、何時該叫 Claude，不會無限「讓我再試一次」鬼打牆。
+- **自我成長的技能庫** — 重複的工作會被寫成 Python 函式，下次再問同樣的事情完全不用呼叫 LLM。
+- **依硬體分級的模型預設組合** — 從 16 GB MacBook 到 DGX Spark，每個 tier 都有調好的 `num_ctx` / `max_tokens` / timeout。
+- **商業模型作為安全網而非帳單** — Claude 只在地端真的卡住才被叫，Usage 頁面會告訴你 GPT-4 跑同樣工作要花多少。
 
-結果是一個**效能接近前沿模型、花費卻非常低**的混搭方案。Usage 頁面會用 GPT-4 API 的價格換算你目前為止省了多少錢，越用越有感。
+結果：你的 $0 token 本機硬體真的把工作做完，sidebar 裡那個累積的 savings 數字，是讓你不再擔心 Claude Pro 自動續訂的真正原因。
 
 > **如果你喜歡這個方向、或想給我一點鼓勵，請到 GitHub 幫忙點一顆 ⭐️，這對我來說是最大的動力！**
 > → [github.com/m31527/OpenTeddy](https://github.com/m31527/OpenTeddy)
