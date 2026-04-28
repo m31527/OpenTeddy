@@ -267,6 +267,43 @@
       color: var(--sidebar-muted);
     }
 
+    /* Sign-in / restart-onboarding button. Visually similar to the
+       nav buttons above (so it lines up flush) but a touch quieter
+       — it's an escape hatch, not a primary action. Hidden when the
+       sidebar is collapsed since the label is the whole point. */
+    .sidebar-login-btn {
+      display: flex;
+      align-items: center;
+      gap: 0.55rem;
+      width: calc(100% - 0.6rem);
+      margin: 0.25rem 0.3rem 0.1rem;
+      padding: 0.45rem 0.65rem;
+      background: transparent;
+      border: 1px dashed var(--sidebar-border, rgba(255,255,255,0.12));
+      border-radius: 8px;
+      color: var(--sidebar-muted);
+      font-size: 0.78rem;
+      font-family: inherit;
+      cursor: pointer;
+      transition: background 0.12s, color 0.12s, border-color 0.12s;
+    }
+    .sidebar-login-btn:hover {
+      background: var(--sidebar-active);
+      color: var(--sidebar-text);
+      border-color: var(--sidebar-text);
+    }
+    .sidebar-login-btn .login-icon {
+      font-size: 0.95rem;
+      width: 18px;
+      text-align: center;
+    }
+    .sidebar.collapsed .sidebar-login-btn {
+      justify-content: center;
+      padding: 0.5rem 0;
+      gap: 0;
+    }
+    .sidebar.collapsed .sidebar-login-btn .login-label { display: none; }
+
     /* ── Collapsed sidebar (icon-only, ~56px) ────────────────────────────── */
     .sidebar.collapsed { width: 56px; min-width: 56px; }
     .sidebar.collapsed .sidebar-header { padding: 0.6rem 0.3rem 0.4rem; }
@@ -2585,6 +2622,19 @@
             <span class="nav-label" id="langBtnLabel" data-i18n="lang_switcher_title">Language</span>
           </button>
         </nav>
+        <!-- Sign-in / "back to splash" affordance — desktop-only.
+             Hidden by default; shown via JS once we detect we're running
+             inside the Tauri shell (window.parent !== window). Clicking
+             it asks the parent main.js to flip the splash window back
+             to the Get Started screen. In a plain browser this row
+             stays hidden because there's no splash to return to. -->
+        <button class="sidebar-login-btn" id="sidebarLoginBtn"
+                onclick="returnToSplash()" hidden
+                data-i18n-title="sidebar_login_title"
+                title="Sign in / restart onboarding">
+          <span class="login-icon">↩</span>
+          <span class="login-label" data-i18n="sidebar_login">Sign in</span>
+        </button>
         <div class="sidebar-status">
           <span id="wsBadge" class="ws-badge" data-i18n-title="ws_badge_title" title="WebSocket connection"></span>
           <span id="wsLabel" data-i18n="ws_connecting">Connecting…</span>
@@ -4637,6 +4687,74 @@
       } catch (_) { /* ignore */ }
       try { window.open(url, '_blank', 'noopener'); } catch (_) {}
     }
+
+    // Detect whether we're running inside the Tauri desktop shell. When
+    // we are, ANY external `<a href>` click — including markdown-rendered
+    // links inside chat bubbles, the GitHub footer link, and m31527's
+    // dev-credit link — has to go through openInBrowser, otherwise WebKit
+    // silently blocks the navigation and the user sees nothing happen.
+    // In a plain browser these clicks should fall through to default
+    // behaviour (open in new tab).
+    const _IN_TAURI = (() => {
+      try {
+        // Cross-origin parent ref — `window.parent !== window` is the
+        // cheapest reliable iframe check, and we're only iframed by the
+        // Tauri main window, never by an arbitrary site.
+        return window.parent && window.parent !== window;
+      } catch (_) { return false; }
+    })();
+
+    // Reveal the sidebar Sign-in button only inside the desktop shell —
+    // in a plain browser there's no splash to return to. Run this on
+    // DOMContentLoaded so the button DOM exists by the time we toggle it.
+    document.addEventListener('DOMContentLoaded', () => {
+      if (!_IN_TAURI) return;
+      const btn = document.getElementById('sidebarLoginBtn');
+      if (btn) btn.hidden = false;
+    });
+
+    // Send the user back to the Get Started splash. Tauri shell receives
+    // the postMessage in main.js, calls Rust `return_to_splash` which
+    // clears the onboarding-completed flag, reloads splash, shows it
+    // and hides the main window.
+    async function returnToSplash() {
+      const ok = await showConfirm({
+        title: t('sidebar_login_confirm_title') || 'Return to sign-in screen?',
+        body:  t('sidebar_login_confirm_body') ||
+               'You\'ll go back to the Get Started screen and walk through the onboarding flow again. Your tasks, sessions, and settings stay where they are.',
+        okLabel:     t('sidebar_login_confirm_ok')     || 'Sign out',
+        cancelLabel: t('sidebar_login_confirm_cancel') || 'Cancel',
+      });
+      if (!ok) return;
+      try {
+        if (window.parent && window.parent !== window) {
+          window.parent.postMessage({ type: 'teddy.return_to_splash' }, '*');
+        }
+      } catch (e) {
+        toast('Could not signal desktop shell: ' + e.message, true);
+      }
+    }
+
+    // Global delegated click handler — runs once and catches every
+    // anchor in the page (including ones added later by markdown
+    // rendering, which is why we need delegation, not per-anchor
+    // listeners).
+    document.addEventListener('click', (e) => {
+      if (!_IN_TAURI) return;   // plain browser: let the default happen
+      const a = e.target.closest('a[href]');
+      if (!a) return;
+      const href = a.getAttribute('href') || '';
+      // Ignore in-page anchors, mailto:, javascript:, data:, blob:,
+      // and same-origin links (those should just navigate the iframe).
+      if (!/^https?:\/\//i.test(href)) return;
+      try {
+        const u = new URL(href, location.href);
+        if (u.origin === location.origin) return;   // same-origin → let it go
+      } catch (_) { /* malformed URL, fall through to openInBrowser */ }
+      // External http(s) link — intercept and route to the system browser.
+      e.preventDefault();
+      openInBrowser(href);
+    }, /* useCapture = */ true);   // capture so we beat any other handlers
 
     // Download `url` as a file by fetching → Blob → simulated anchor
     // click. Works inside Tauri (where `<a download>` is silently

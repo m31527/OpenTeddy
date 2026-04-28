@@ -31,12 +31,20 @@ OpenTeddy 的目標是做出一個**免費、可以在自己電腦上跑**的類
 
 ## 主要特色
 
-- **本機優先** — 規劃與執行都跑在你的機器上，Claude 只在必要時介入。
-- **自動升級到 Claude** — 逾時、信心低、連續失敗、工具錯誤訊號都會自動觸發。
+- **本機優先** — 規劃（Gemma）與執行（Qwen）都跑在你的機器上；Claude 只在地端撐不住時才被叫進來。
+- **自動升級到 Claude** — 逾時、信心低、連續失敗、deliverable verifier 判 FAIL、工具錯誤訊號都會自動觸發。可用 `ESCALATION_ENABLED=false` 整個關掉。
+- **Token 串流 UI** — orchestrator 規劃 + executor 回答都透過 WebSocket token-by-token 流出來，不再呆呆看著 spinner。
+- **逐步交付物驗證** — 每個成功 subtask 結束會用 LLM-as-judge 確認產出的檔案真的是 deliverable（不是「描述 deliverable 的報告」），可在大模型上關掉。
+- **小模型 loop 強化** — 自適應 prompt、低風險工具並行、重複呼叫上限、circuit breaker、發現 memo、context watchdog 自動壓縮舊輪次。
+- **斷線可恢復的 WS** — 600 筆 ring buffer + `?since=` 重播，網路抖一下、刷新分頁都不會卡 UI。
 - **技能會自己長出來** — 重複的任務會被升級成可重用的 Python 技能，越用越快。
-- **Web 儀表板** — 提交任務、即時看工具呼叫、審核敏感指令、管理記憶。
+- **Web 儀表板** — 提交任務、即時看工具呼叫、審核敏感指令、管理記憶、看 GFM 表格與 Chart.js 數值標籤的 HTML 報表。
+- **macOS 原生客戶端** — Tauri 2.x 殼，引導精靈（Ollama 一鍵安裝 + 機器分級拉模型）、語言切換器、模式鎖定、自動更新。詳見 [`desktop/`](desktop/)。
+- **資料分析模式** — 內建 `csv_describe` + `python_exec` 與會嵌 Chart.js 的 HTML 報表生成器。
 - **人類確認關卡** — `rm`、`sudo`、`mv` 等高風險指令會停下來等你同意。
 - **長期記憶** — ChromaDB 記住過去的脈絡，下次規劃時自動帶進來。
+- **22 種語言介面** — UI 字串集中在 `static/i18n.js`，build hash 自動觸發前端重整。
+- **設定熱載入** — 模型、threshold、效能開關（streaming / verification / escalation）、API key 都能在 UI 改完即時生效。
 
 ## 快速開始（原生安裝，推薦）
 
@@ -126,9 +134,25 @@ docker compose up -d
 
 然後讓代理人只在容器內的 `/workspace` 裡面活動。只有你明確掛進去的資料夾會被看到，其餘仍然隔離。
 
+## 跑大模型（DGX Spark / 35B 等級）的人請注意
+
+預設啟用的「逐步交付物驗證」是一個額外的 LLM-as-judge call，每個成功 subtask 都會跑一次。在小模型上幾秒就結束沒感覺；但在 DGX Spark + qwen3.5:35b 之類的設定下，每次 5–60 秒，多步驟的報表任務會明顯變慢甚至卡住。
+
+兩種關法：
+
+```bash
+# 啟動時 env var
+VERIFICATION_ENABLED=false uvicorn main:app --reload
+
+# 或在跑起來之後從 UI 設定面板關掉
+# Settings → Per-step deliverable verification → OFF
+```
+
+`STREAMING_ENABLED`、`ESCALATION_ENABLED`、`QWEN_NUM_CTX`、`CONTEXT_COMPRESS_AT` 也都是相同模式的熱開關。
+
 ## 更完整的文件
 
-更多架構圖、API 列表、環境變數說明、自我成長機制與 Claude 介入條件表，請看 **[英文版 README](README.md)**，本檔只是精簡入門。
+更多架構圖、API 列表、環境變數說明、自我成長機制、Claude 介入條件表與 Loop Hardening 機制細節，請看 **[英文版 README](README.md)**，本檔只是精簡入門。
 
 ## 支持這個專案
 
