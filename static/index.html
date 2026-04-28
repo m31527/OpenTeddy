@@ -333,6 +333,13 @@
        nav buttons above (so it lines up flush) but a touch quieter
        — it's an escape hatch, not a primary action. Hidden when the
        sidebar is collapsed since the label is the whole point. */
+    /* `display: flex` on the class beats the user-agent's
+       `[hidden] { display: none }` because class selectors have higher
+       specificity than attribute selectors. We have to re-honour the
+       hidden attribute explicitly, otherwise `<button hidden>` still
+       renders. !important to make sure no future class-level styling
+       can override it again. */
+    .sidebar-login-btn[hidden] { display: none !important; }
     .sidebar-login-btn {
       display: flex;
       align-items: center;
