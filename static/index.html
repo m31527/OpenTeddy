@@ -271,6 +271,51 @@
       color: var(--sidebar-muted);
     }
 
+    /* Cloud-sync pill — desktop-only Firebase-auth status indicator.
+       Sits above the savings pill in the sidebar bottom stack. Quiet
+       neutral colors when anonymous; subtle accent tint when signed
+       in. Hidden entirely outside Tauri (the iframe in a plain
+       browser has no shell to postMessage to). */
+    .cloud-pill {
+      display: flex;
+      align-items: center;
+      gap: 0.55rem;
+      width: calc(100% - 0.6rem);
+      margin: 0.25rem 0.3rem 0.1rem;
+      padding: 0.45rem 0.7rem;
+      background: var(--bg-secondary, rgba(255,255,255,0.04));
+      border: 1px solid var(--border, rgba(0,0,0,0.06));
+      border-radius: 9px;
+      color: var(--sidebar-muted);
+      font-family: inherit;
+      font-size: 0.76rem;
+      cursor: pointer;
+      text-align: left;
+      transition: background 0.12s, border-color 0.12s, color 0.12s;
+    }
+    .cloud-pill[hidden] { display: none !important; }
+    .cloud-pill:hover {
+      background: var(--surface, #ffffff);
+      border-color: rgba(0, 0, 0, 0.18);
+      color: var(--sidebar-text);
+    }
+    .cloud-pill.signed-in {
+      background: rgba(47, 156, 94, 0.08);
+      border-color: rgba(47, 156, 94, 0.24);
+      color: #2f9c5e;
+    }
+    .cloud-pill-icon { flex-shrink: 0; font-size: 0.95rem; }
+    .cloud-pill-label {
+      flex: 1; min-width: 0;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .sidebar.collapsed .cloud-pill {
+      justify-content: center;
+      padding: 0.55rem 0;
+      gap: 0;
+    }
+    .sidebar.collapsed .cloud-pill-label { display: none; }
+
     /* Savings pill — sits at the very bottom of the sidebar, above the
        Sign-in row. Subtle gold gradient + green amount so the number
        looks rewarding without screaming "ad". Pulses gently the first
@@ -2782,6 +2827,23 @@
             <span class="nav-label" id="langBtnLabel" data-i18n="lang_switcher_title">Language</span>
           </button>
         </nav>
+        <!-- Cloud-sync pill — desktop-only. Lit when running inside the
+             Tauri shell (which owns the Firebase Auth state). Three
+             visual states:
+               • anonymous (default): muted "☁️ Sign in for cloud sync"
+               • signed-in: shows the user's email/displayName
+               • Firebase not configured: stays hidden entirely
+             Click → postMessage to parent → main.js opens the sign-in
+             dialog. We never call Firebase from inside the iframe —
+             the OSS web UI must stay Firebase-free. -->
+        <button class="cloud-pill" id="cloudPill" hidden
+                onclick="onCloudPillClick()"
+                data-i18n-title="cloud_pill_title"
+                title="Cloud sync state">
+          <span class="cloud-pill-icon" id="cloudPillIcon">☁️</span>
+          <span class="cloud-pill-label" id="cloudPillLabel" data-i18n="cloud_pill_anon">Sign in for cloud sync</span>
+        </button>
+
         <!-- Savings pill — what the user has avoided paying GPT-4 for the
              same token volume, computed server-side from /usage/summary.
              Sits at the bottom of the sidebar so it's seen at every
@@ -4898,6 +4960,64 @@
     //   const btn = document.getElementById('sidebarLoginBtn');
     //   if (btn) btn.hidden = false;
     // });
+
+    // ── Cloud-sync pill (desktop-only) ─────────────────────────────────
+    // The iframe never talks to Firebase directly — it asks the Tauri
+    // shell (parent window) for current auth state via postMessage and
+    // re-renders. This keeps Firebase-related code out of the OSS web
+    // UI entirely; users running the open-source backend in a plain
+    // browser see no Firebase imports, no auth pill, nothing.
+    let _cloudAuthState = { ready: false, signedIn: false, anonymous: true };
+    function renderCloudPill() {
+      const pill  = document.getElementById('cloudPill');
+      const label = document.getElementById('cloudPillLabel');
+      const icon  = document.getElementById('cloudPillIcon');
+      if (!pill || !label || !icon) return;
+
+      // Hidden in plain browsers — there's no shell to talk to.
+      if (!_IN_TAURI) { pill.hidden = true; return; }
+      pill.hidden = false;
+
+      if (_cloudAuthState.signedIn && !_cloudAuthState.anonymous) {
+        const who = _cloudAuthState.email || _cloudAuthState.displayName || 'Signed in';
+        pill.classList.add('signed-in');
+        icon.textContent  = '✓';
+        label.textContent = who;
+        pill.title = (t('cloud_pill_signed_in_title') || 'Signed in') + ' — ' + who;
+      } else {
+        pill.classList.remove('signed-in');
+        icon.textContent  = '☁️';
+        label.textContent = t('cloud_pill_anon') || 'Sign in for cloud sync';
+        pill.title = t('cloud_pill_title') || 'Cloud sync state';
+      }
+    }
+    function onCloudPillClick() {
+      if (!_IN_TAURI) return;
+      // Already signed in → clicking is a no-op for now (Phase B will
+      // open an account-management menu).
+      if (_cloudAuthState.signedIn && !_cloudAuthState.anonymous) return;
+      try {
+        window.parent.postMessage({ type: 'teddy.auth.signin_request' }, '*');
+      } catch (e) {
+        toast(e.message, true);
+      }
+    }
+    // Listen for auth-state broadcasts from the Tauri shell. Also fire
+    // an initial query in case the iframe loaded after the shell
+    // already settled its first onAuthStateChanged tick.
+    window.addEventListener('message', (e) => {
+      const data = e.data || {};
+      if (data.type !== 'teddy.auth.state') return;
+      if (data.state) _cloudAuthState = data.state;
+      renderCloudPill();
+    });
+    document.addEventListener('DOMContentLoaded', () => {
+      if (!_IN_TAURI) return;
+      try {
+        window.parent.postMessage({ type: 'teddy.auth.query' }, '*');
+      } catch {}
+      renderCloudPill();
+    });
 
     // ── Savings pill ───────────────────────────────────────────────────
     // Polls /usage/summary on a slow interval and renders the running
