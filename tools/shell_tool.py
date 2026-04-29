@@ -71,15 +71,92 @@ def _is_high_risk(command: str) -> bool:
 
 
 def _sanitize_command(cmd: str) -> str:
-    """Rewrite known problematic commands to be safe for non-interactive execution.
+    """Rewrite (or refuse) commands that would otherwise run forever.
 
-    - ``docker compose logs`` without ``--tail`` → add ``--tail=50 --no-color``
-      (prevents infinite blocking when a container is still running)
+    Real-world background: an ad-pilot container in a restart-crash loop
+    spams stderr non-stop. Naive `docker compose up` (no `-d`) is then
+    attached to that stream and never exits. Silence-timeout never trips
+    because output keeps flowing. The agent's tool call shows "Running…"
+    until subtask_timeout finally kills the whole subtask, wasting
+    minutes per round and giving the model nothing useful to act on.
+
+    What we defend against here, in order of nastiness:
+
+      - ``docker compose up`` *without* ``-d`` → auto-add ``-d``. The
+        user wanted containers up, not a foreground log tail. If they
+        actually want logs they can run a second `docker compose logs`
+        (sanitised below).
+      - ``docker compose logs`` / ``docker logs`` with ``-f`` /
+        ``--follow`` → strip the follow flag, keep ``--tail`` so
+        the agent still gets the recent context.
+      - ``docker compose logs`` without ``--tail`` → add
+        ``--tail=50 --no-color`` (the original protection).
+      - ``tail -f`` / ``tail -F`` → refuse with a clear hint.
+      - ``journalctl -f`` / ``watch ...`` → refuse, same reason.
+
+    Refusals raise ``ValueError`` which the caller turns into a
+    structured error result the model can read and correct.
     """
+    raw = cmd
+
+    # ── Refuse the truly-infinite ones ────────────────────────────────
+    # Word-boundary matched so paths containing "tail" or "watch" don't
+    # get falsely refused.
+    if re.search(r"\btail\s+-[a-zA-Z]*[fF]", cmd):
+        raise ValueError(
+            "Refused: `tail -f` / `tail -F` runs forever and would block "
+            "the agent. Use `tail -n 200 <file>` instead, or omit -f."
+        )
+    if re.search(r"\bjournalctl\s+(?:[^|]*\s)?-f\b", cmd):
+        raise ValueError(
+            "Refused: `journalctl -f` follows forever. Use "
+            "`journalctl --no-pager -n 200` instead."
+        )
+    if re.search(r"^\s*watch\b", cmd):
+        raise ValueError(
+            "Refused: `watch` runs forever. Run the inner command once "
+            "instead, e.g. `docker compose ps` (no `watch` wrapper)."
+        )
+
+    # ── Auto-fix `docker compose up` without -d ───────────────────────
+    # Match `docker compose up` (or docker-compose up) where `-d` /
+    # `--detach` is NOT present anywhere on the line. Inserting it
+    # right after `up` keeps any other flags the user wrote (--build,
+    # --force-recreate, etc.) working as expected.
+    up_re = re.compile(r"\b(docker(?:\s+|-)compose\s+up)\b(?!\s+(?:-d|--detach)\b)")
+    if up_re.search(cmd) and not re.search(r"\s(-d|--detach)\b", cmd):
+        new_cmd = up_re.sub(r"\1 -d", cmd, count=1)
+        if new_cmd != cmd:
+            logger.info(
+                "_sanitize_command: auto-added `-d` to docker compose up "
+                "(was: %r → %r) to prevent foreground attach", cmd, new_cmd,
+            )
+            cmd = new_cmd
+
+    # ── Strip -f / --follow from docker logs ──────────────────────────
+    # Two passes — long form then short form — so we don't leave a
+    # dangling space if the flag was the last thing on the line.
+    logs_pat = re.compile(
+        r"\b(docker(?:\s+compose|-compose)?\s+logs)\b([^|;&]*)",
+    )
+    def _strip_follow(m: re.Match) -> str:
+        head, tail = m.group(1), m.group(2)
+        tail = re.sub(r"\s+--follow\b", "", tail)
+        tail = re.sub(r"\s+-f\b", "", tail)
+        # Also collapse a "-fT" combo (rare but possible) → just "-T".
+        tail = re.sub(r"(\s+-)f([a-zA-Z]+)", r"\1\2", tail)
+        return head + tail
+    cmd = logs_pat.sub(_strip_follow, cmd)
+    if cmd != raw:
+        logger.info("_sanitize_command: stripped follow flag from logs cmd "
+                    "(was: %r → %r)", raw, cmd)
+
+    # ── Original protection: docker logs without --tail ───────────────
     if ("docker compose logs" in cmd or "docker-compose logs" in cmd):
         if "--tail" not in cmd:
             cmd = cmd.replace("docker compose logs", "docker compose logs --tail=50 --no-color")
             cmd = cmd.replace("docker-compose logs", "docker-compose logs --tail=50 --no-color")
+
     return cmd
 
 
@@ -519,7 +596,15 @@ async def execute_shell(
     a clean exit — including when our caller cancels us via asyncio.CancelledError.
     No more zombie `docker build` processes chewing CPU in the background.
     """
-    command = _sanitize_command(command)
+    # Sanitiser may rewrite (auto-add -d, strip -f) OR refuse outright
+    # (tail -f, journalctl -f, watch) — all cases bubble up the same
+    # `error` field so the model sees a structured failure with a clean
+    # hint instead of a hung tool call.
+    try:
+        command = _sanitize_command(command)
+    except ValueError as exc:
+        logger.warning("execute_shell refused: %s", exc)
+        return make_result(False, error=str(exc))
 
     effective_dir = _resolve_working_dir(working_dir)
     if not working_dir:

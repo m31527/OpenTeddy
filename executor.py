@@ -292,6 +292,20 @@ ABSOLUTE RULES — violating these is a task failure:
    instead. The system will refuse a 3rd duplicate and force you to
    stop. Repeated identical calls waste GPU and produce no new information.
 
+4a. NEVER use commands that run forever. Specifically:
+     • `docker compose up` — ALWAYS include `-d` (the shell tool will
+       auto-add it but be explicit anyway).
+     • `docker logs` / `docker compose logs` — NEVER use `-f` /
+       `--follow`. Use `--tail=N` instead. The shell tool strips `-f`
+       automatically; do not rely on that, write it correctly.
+     • `tail -f` / `tail -F`, `journalctl -f`, `watch` — REFUSED by
+       the shell tool. Use `tail -n 200`, `journalctl -n 200`, or
+       run the inner command once.
+   These patterns hang on a container that is in a restart-crash loop
+   (logs flow forever, silence-timeout never trips), wasting an entire
+   subtask. If you need to confirm a container is up, use
+   `docker compose ps` — instant, single-shot, exits cleanly.
+
 5. Only emit the final JSON (below) AFTER all tool work is done, or when the
    task is genuinely a pure-reasoning question that needs no tools.
 
