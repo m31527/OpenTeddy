@@ -533,13 +533,31 @@ async def execute_shell(
     # flat out — running `docker compose up` or `rm` there would break
     # the live uvicorn, clobber openteddy.db, overwrite skills/. Only
     # agent-workspace/ under the project root is allowed.
+    #
+    # Refusal messages embed the CORRECT path (the active session
+    # workspace) so the next round the model can copy-paste it instead
+    # of re-guessing. Earlier the message just said "use a path under
+    # the workspace" — too generic; the model would re-emit the same
+    # bad path and waste rounds in a refusal loop.
+    from config import effective_workspace_dir as _ws_for_msg
+    try:
+        active_ws = _ws_for_msg() or ""
+    except Exception:  # noqa: BLE001
+        active_ws = ""
+    suggestion = (
+        f"\n\nThis session's workspace is: {active_ws}\n"
+        f"Retry with working_dir='{active_ws}' (or omit working_dir to "
+        f"use it as the default). If the project lives in a subdir of "
+        f"WORKSPACE, use a relative path like working_dir='subdir-name'."
+    ) if active_ws else (
+        "\n\nSet a session-specific workspace via the 📂 icon in the chat "
+        "header, then retry."
+    )
     if _is_openteddy_source_path(effective_dir):
         msg = (
             f"Refused: working_dir '{effective_dir}' is inside OpenTeddy's "
-            f"own source tree. This would conflict with the running agent. "
-            f"Use a path under the agent workspace, or set this session's "
-            f"workspace via the 📂 icon in the chat header to point at the "
-            f"project you actually want to work on."
+            f"own source tree. This would conflict with the running agent."
+            + suggestion
         )
         logger.warning("execute_shell blocked: %s", msg)
         return make_result(False, error=msg)
@@ -554,8 +572,8 @@ async def execute_shell(
             msg = (
                 f"Refused: command tried to `cd` into '{cd_abs}', which is "
                 f"inside OpenTeddy's own source tree. Only agent-workspace/ "
-                f"and its subdirs are allowed. Fix the plan or set a "
-                f"session-specific workspace via 📂."
+                f"and its subdirs are allowed."
+                + suggestion
             )
             logger.warning("execute_shell blocked: %s", msg)
             return make_result(False, error=msg)

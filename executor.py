@@ -257,12 +257,18 @@ AVAILABLE TOOLS (you MUST call these via function calling, not describe them):
 
 ABSOLUTE RULES — violating these is a task failure:
 
-0. NEVER set `working_dir` to an absolute path outside the current session's
-   workspace (e.g. NEVER pass working_dir="/home/user/OpenTeddy" — that is
-   the agent's OWN source tree and will be HARD-BLOCKED by the shell tool,
-   returning an error). Prefer relative subdir names like
-   working_dir="worldmonitor" or omit working_dir to use the session default.
-   Same rule for `cd` — never `cd` into OpenTeddy's own project directory.
+0. The user message contains a `WORKSPACE: <absolute-path>` line — that is
+   the ONLY place you may operate. Treat it like your project root.
+     • Default behaviour: omit `working_dir` (the shell tool defaults to
+       WORKSPACE).
+     • If the project lives in a subdir, use a RELATIVE name like
+       working_dir="ads-agent". Never reach for an absolute path.
+     • NEVER set working_dir or `cd` to a sibling/parent of WORKSPACE
+       (e.g. /home/user/OpenTeddy when WORKSPACE is
+       /home/user/OpenTeddy/agent-workspace/<project>). That is the
+       agent's OWN source tree and will be HARD-BLOCKED — wasting a
+       round and producing nothing useful. The refusal message tells
+       you the exact path to use; copy it.
 
 1. NEVER refuse with "I'm just a language model", "I can't run shell commands",
    "please run these commands yourself", or any equivalent. You CAN run them.
@@ -516,11 +522,37 @@ class Executor:
             model_tier(config.qwen_model), mode, config.qwen_model,
         )
 
+        # Pin the active session workspace at the top of EVERY round's
+        # user message. Without this, small/mid models drift after a few
+        # tool rounds — they remember the project name ("OpenTeddy") but
+        # not the exact directory ("/.../agent-workspace/ads-agent"), so
+        # they reach for `cd /home/user/OpenTeddy && docker compose up`
+        # which the shell guard then has to refuse round after round,
+        # burning GPU each time. Surfacing the path positively (here is
+        # WHERE you work) is more reliable than the system prompt's
+        # negative rule (don't go HERE). The shell tool also reads this
+        # path from config so refusals are guaranteed-consistent with
+        # what the model sees.
+        from config import effective_workspace_dir as _ws
+        try:
+            workspace_path = _ws() or ""
+        except Exception:  # noqa: BLE001
+            workspace_path = ""
+        workspace_block = ""
+        if workspace_path:
+            workspace_block = (
+                f"WORKSPACE: {workspace_path}\n"
+                "All shell commands and `working_dir` arguments MUST stay "
+                "inside this directory. If you need to `cd`, only `cd` to "
+                "subdirectories of WORKSPACE — never to a sibling or parent. "
+                "Omit `working_dir` to default to WORKSPACE.\n\n"
+            )
         messages: List[Dict[str, Any]] = [
             {
                 "role": "user",
                 "content": (
-                    f"Task: {description}\n\n"
+                    workspace_block
+                    + f"Task: {description}\n\n"
                     f"Context: {json.dumps(context, ensure_ascii=False)[:2000]}"
                 ),
             }
