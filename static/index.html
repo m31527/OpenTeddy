@@ -271,6 +271,62 @@
       color: var(--sidebar-muted);
     }
 
+    /* Upgrade pill — sidebar bottom, above the cloud-sync pill. The
+       gold-leaning gradient is intentionally warmer + brighter than
+       the savings pill (which uses a similar palette but muted) so
+       the upgrade CTA is the most visually-prominent thing on the
+       sidebar when it's eligible to show. Hidden by default; JS
+       reveals it only when:
+         - running inside Tauri,
+         - signed in with a real (non-anonymous) account,
+         - subscription.status === 'free'. */
+    .upgrade-pill {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      width: calc(100% - 0.6rem);
+      margin: 0.4rem 0.3rem 0.2rem;
+      padding: 0.55rem 0.75rem;
+      background: linear-gradient(135deg, #f4b860 0%, #c46d4f 100%);
+      border: 1px solid rgba(196, 109, 79, 0.35);
+      border-radius: 9px;
+      color: #ffffff;
+      font-family: inherit;
+      cursor: pointer;
+      text-align: left;
+      box-shadow: 0 1px 2px rgba(196, 109, 79, 0.18);
+      transition: transform 0.08s, box-shadow 0.15s, filter 0.12s;
+    }
+    .upgrade-pill[hidden] { display: none !important; }
+    .upgrade-pill:hover   { filter: brightness(1.06); box-shadow: 0 2px 6px rgba(196, 109, 79, 0.28); }
+    .upgrade-pill:active  { transform: scale(0.98); }
+    .upgrade-pill-icon {
+      flex-shrink: 0;
+      font-size: 1rem;
+      filter: drop-shadow(0 0 4px rgba(255, 230, 180, 0.7));
+    }
+    .upgrade-pill-body {
+      flex: 1; min-width: 0;
+      display: flex; align-items: baseline; gap: 0.4rem;
+    }
+    .upgrade-pill-cta {
+      font-size: 0.8rem;
+      font-weight: 600;
+      letter-spacing: 0.01em;
+    }
+    .upgrade-pill-price {
+      font-size: 0.74rem;
+      font-weight: 500;
+      opacity: 0.92;
+      font-variant-numeric: tabular-nums;
+    }
+    .sidebar.collapsed .upgrade-pill {
+      justify-content: center;
+      padding: 0.55rem 0;
+      gap: 0;
+    }
+    .sidebar.collapsed .upgrade-pill-body { display: none; }
+
     /* Cloud-sync pill — desktop-only Firebase-auth status indicator.
        Sits above the savings pill in the sidebar bottom stack. Quiet
        neutral colors when anonymous; subtle accent tint when signed
@@ -2827,6 +2883,26 @@
             <span class="nav-label" id="langBtnLabel" data-i18n="lang_switcher_title">Language</span>
           </button>
         </nav>
+        <!-- Upgrade pill — desktop-only, signed-in-non-anon-only,
+             subscription.status === 'free' only. Once the user is on
+             a real Google account but not yet paying, this is the
+             primary monetisation surface. Click → desktop shell
+             builds a Lemon Squeezy checkout URL with the user's
+             email + uid (so the Phase C-2 webhook can link payment
+             back to Firebase) and opens it in the system browser.
+             Hidden in plain browser, hidden for anon users, hidden
+             once subscription.status flips to 'active'. -->
+        <button class="upgrade-pill" id="upgradePill" hidden
+                onclick="onUpgradePillClick()"
+                data-i18n-title="upgrade_pill_title"
+                title="Get OpenTeddy Lifetime">
+          <span class="upgrade-pill-icon">✨</span>
+          <span class="upgrade-pill-body">
+            <span class="upgrade-pill-cta" data-i18n="upgrade_pill_cta">Get Lifetime</span>
+            <span class="upgrade-pill-price">$49</span>
+          </span>
+        </button>
+
         <!-- Cloud-sync pill — desktop-only. Lit when running inside the
              Tauri shell (which owns the Firebase Auth state). Three
              visual states:
@@ -4967,7 +5043,36 @@
     // re-renders. This keeps Firebase-related code out of the OSS web
     // UI entirely; users running the open-source backend in a plain
     // browser see no Firebase imports, no auth pill, nothing.
-    let _cloudAuthState = { ready: false, signedIn: false, anonymous: true };
+    //
+    // Same broadcast carries `subscription` so the upgrade pill below
+    // can react in real time when the Phase C-2 webhook flips the user
+    // from free → active.
+    let _cloudAuthState = {
+      ready: false, signedIn: false, anonymous: true,
+      subscription: { status: 'free', plan: 'free' },
+    };
+    function renderUpgradePill() {
+      const pill = document.getElementById('upgradePill');
+      if (!pill) return;
+      // Hidden in plain browsers (no shell → no checkout flow), hidden
+      // for anonymous users (we'd have nothing to link payment to),
+      // hidden once they're on a paid plan (no point selling them
+      // again — Phase D will add a "Manage subscription" entry point).
+      const eligible =
+        _IN_TAURI &&
+        _cloudAuthState.signedIn &&
+        !_cloudAuthState.anonymous &&
+        (_cloudAuthState.subscription?.status || 'free') === 'free';
+      pill.hidden = !eligible;
+    }
+    function onUpgradePillClick() {
+      if (!_IN_TAURI) return;
+      try {
+        window.parent.postMessage({ type: 'teddy.upgrade.checkout_request' }, '*');
+      } catch (e) {
+        toast(e.message, true);
+      }
+    }
     function renderCloudPill() {
       const pill  = document.getElementById('cloudPill');
       const label = document.getElementById('cloudPillLabel');
@@ -5010,6 +5115,7 @@
       if (data.type !== 'teddy.auth.state') return;
       if (data.state) _cloudAuthState = data.state;
       renderCloudPill();
+      renderUpgradePill();
     });
     document.addEventListener('DOMContentLoaded', () => {
       if (!_IN_TAURI) return;
@@ -5017,6 +5123,7 @@
         window.parent.postMessage({ type: 'teddy.auth.query' }, '*');
       } catch {}
       renderCloudPill();
+      renderUpgradePill();
     });
 
     // ── Savings pill ───────────────────────────────────────────────────
