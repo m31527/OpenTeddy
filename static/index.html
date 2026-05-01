@@ -5096,11 +5096,34 @@
         pill.title = t('cloud_pill_title') || 'Cloud sync state';
       }
     }
-    function onCloudPillClick() {
+    async function onCloudPillClick() {
       if (!_IN_TAURI) return;
-      // Already signed in → clicking is a no-op for now (Phase B will
-      // open an account-management menu).
-      if (_cloudAuthState.signedIn && !_cloudAuthState.anonymous) return;
+      const signedIn = _cloudAuthState.signedIn && !_cloudAuthState.anonymous;
+      if (signedIn) {
+        // Click while signed in → ask before signing out. Anonymous
+        // mode is the natural "logged out" state for OpenTeddy
+        // (auth.js auto-calls signInAnonymously after sign-out), so
+        // we frame it that way in the body copy. Sign-out preserves
+        // the user-doc on their Google uid so signing back in
+        // restores everything.
+        const who = _cloudAuthState.email || _cloudAuthState.displayName || 'this account';
+        const ok = await showConfirm({
+          title:   t('cloud_pill_signout_title') || 'Sign out?',
+          body:    (t('cloud_pill_signout_body') || "You'll go back to anonymous mode. Your synced skills and memory stay safe — sign back in any time to restore them.")
+                   + '\n\n' + (t('cloud_pill_signout_account') || 'Account') + ': ' + who,
+          okLabel:     t('cloud_pill_signout_ok')     || 'Sign out',
+          cancelLabel: t('cloud_pill_signout_cancel') || 'Cancel',
+          danger:      false,
+        });
+        if (!ok) return;
+        try {
+          window.parent.postMessage({ type: 'teddy.auth.signout_request' }, '*');
+        } catch (e) {
+          toast(e.message, true);
+        }
+        return;
+      }
+      // Not signed in → kick off the sign-in dialog flow.
       try {
         window.parent.postMessage({ type: 'teddy.auth.signin_request' }, '*');
       } catch (e) {
