@@ -5000,12 +5000,29 @@
     //                      window.open are blocked inside Tauri's
     //                      sandboxed iframe).
     function openInBrowser(url) {
+      // Inside Tauri the iframe is sandboxed — `window.open` is silently
+      // blocked. We have to relay the request to the Tauri shell,
+      // which calls Rust `open_external` to launch the system browser.
+      // Outside Tauri (plain browser at localhost:8000) the postMessage
+      // is a no-op because there's no parent frame, so the window.open
+      // fallback below handles it.
+      let bridged = false;
       try {
         if (window.parent && window.parent !== window) {
           window.parent.postMessage({ type: 'teddy.open_external', url }, '*');
+          bridged = true;
+          console.info('[openInBrowser] postMessage to parent (Tauri shell): %s', url);
         }
-      } catch (_) { /* ignore */ }
-      try { window.open(url, '_blank', 'noopener'); } catch (_) {}
+      } catch (e) {
+        console.warn('[openInBrowser] postMessage threw:', e);
+      }
+      try {
+        const w = window.open(url, '_blank', 'noopener');
+        if (w) console.info('[openInBrowser] window.open succeeded: %s', url);
+        else if (!bridged) console.warn('[openInBrowser] window.open returned null AND no parent bridge — link will not open: %s', url);
+      } catch (e) {
+        console.warn('[openInBrowser] window.open threw:', e);
+      }
     }
 
     // Detect whether we're running inside the Tauri desktop shell. When
@@ -5261,7 +5278,25 @@
     // Download `url` as a file by fetching → Blob → simulated anchor
     // click. Works inside Tauri (where `<a download>` is silently
     // blocked) and gives plain browsers the same UX they had before.
-    async function downloadArtifact(url, filename) {
+    //
+    // UX: toasts at both ends so the user sees "I clicked → something
+    // is happening → it succeeded". Without this, large files looked
+    // unresponsive and users would click 3-4 times in panic, kicking
+    // off a parallel fetch storm. The button itself is disabled +
+    // dimmed for 1.2 s right after a click to make double-click a
+    // no-op visually.
+    async function downloadArtifact(url, filename, btn) {
+      const niceName = filename || 'file';
+      // Disable the chip so a stress-clicker doesn't queue 5 fetches
+      // for the same artifact. Re-enabled below in finally.
+      const originalOpacity = btn ? btn.style.opacity : '';
+      if (btn) {
+        btn.style.opacity = '0.55';
+        btn.style.pointerEvents = 'none';
+      }
+      const start = Date.now();
+      console.info('[artifact] download start: %s', niceName);
+      toast(`⬇ ${t('artifact_downloading') || 'Downloading'}: ${niceName}…`);
       try {
         const res = await fetch(url);
         if (!res.ok) throw new Error('HTTP ' + res.status);
@@ -5274,8 +5309,22 @@
         a.click();
         a.remove();
         setTimeout(() => URL.revokeObjectURL(blobUrl), 5_000);
+        const ms = Date.now() - start;
+        console.info('[artifact] download done in %dms (size=%d): %s',
+                     ms, blob.size, niceName);
+        toast(`✓ ${t('artifact_downloaded') || 'Saved to Downloads'}: ${niceName}`);
       } catch (e) {
-        toast('Download failed: ' + e.message, true);
+        console.error('[artifact] download failed:', e);
+        toast(`${t('artifact_download_failed') || 'Download failed'}: ${e.message}`, true);
+      } finally {
+        // Re-enable the button after a short cooldown so clicks
+        // immediately after the toast disappears feel snappy.
+        setTimeout(() => {
+          if (btn) {
+            btn.style.opacity = originalOpacity;
+            btn.style.pointerEvents = '';
+          }
+        }, 1200);
       }
     }
 
@@ -5283,6 +5332,14 @@
     // data-* attributes to carry URLs (instead of inline onclick) so
     // we don't have to escape complex query strings into JS string
     // literals — the encode happens once in renderArtifactList below.
+    //
+    // Both download AND preview now surface a toast immediately so
+    // the user has feedback during the latency between click and the
+    // browser opening / Save dialog appearing. Inside Tauri the
+    // browser-open path goes via openInBrowser → postMessage →
+    // Rust open_external; if any of those steps silently fail, the
+    // toast at least tells the user "something started" and the
+    // console.* logs below show where the chain broke.
     document.addEventListener('click', (e) => {
       const btn = e.target.closest('[data-teddy-artifact]');
       if (!btn) return;
@@ -5291,8 +5348,20 @@
       const url    = btn.dataset.url;
       if (!url) return;
       if (action === 'download') {
-        downloadArtifact(url, btn.dataset.name || '');
+        downloadArtifact(url, btn.dataset.name || '', btn);
       } else if (action === 'preview') {
+        const niceName = btn.dataset.name || 'file';
+        console.info('[artifact] preview request: %s (url=%s)', niceName, url);
+        // Brief click-cooldown so the eye icon doesn't fire 3 times
+        // when WebKit decides to be slow about postMessage delivery.
+        const orig = btn.style.opacity;
+        btn.style.opacity = '0.55';
+        btn.style.pointerEvents = 'none';
+        setTimeout(() => {
+          btn.style.opacity = orig;
+          btn.style.pointerEvents = '';
+        }, 1200);
+        toast(`👁 ${t('artifact_opening') || 'Opening in browser'}: ${niceName}…`);
         openInBrowser(url);
       }
     });
@@ -5311,6 +5380,7 @@
         const previewBtn = previewable
           ? `<button type="button" class="artifact-preview"
                      data-teddy-artifact="preview" data-url="${escHtml(base)}"
+                     data-name="${escHtml(a.name)}"
                      title="在新分頁預覽">👁</button>`
           : '';
         return `<span class="artifact-chip-wrap">
