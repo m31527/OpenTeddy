@@ -328,10 +328,15 @@
     .sidebar.collapsed .upgrade-pill-body { display: none; }
 
     /* Cloud-sync pill — desktop-only Firebase-auth status indicator.
-       Sits above the savings pill in the sidebar bottom stack. Quiet
-       neutral colors when anonymous; subtle accent tint when signed
-       in. Hidden entirely outside Tauri (the iframe in a plain
-       browser has no shell to postMessage to). */
+       Sits above the savings pill in the sidebar bottom stack.
+       Sidebar uses light-on-dark tokens, so the pill must too — the
+       earlier version used --bg-secondary which is light-on-light
+       (a global token meant for the main panels) and rendered as a
+       white blob with invisible muted text against the dark sidebar.
+       Now uses the same rgba(255,255,255,…) overlay pattern as
+       .new-chat-btn / .session-item so it visually matches its
+       neighbours. Hidden entirely outside Tauri (the iframe in a
+       plain browser has no shell to postMessage to). */
     .cloud-pill {
       display: flex;
       align-items: center;
@@ -339,10 +344,10 @@
       width: calc(100% - 0.6rem);
       margin: 0.25rem 0.3rem 0.1rem;
       padding: 0.45rem 0.7rem;
-      background: var(--bg-secondary, rgba(255,255,255,0.04));
-      border: 1px solid var(--border, rgba(0,0,0,0.06));
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid var(--sidebar-border);
       border-radius: 9px;
-      color: var(--sidebar-muted);
+      color: var(--sidebar-text);
       font-family: inherit;
       font-size: 0.76rem;
       cursor: pointer;
@@ -351,26 +356,58 @@
     }
     .cloud-pill[hidden] { display: none !important; }
     .cloud-pill:hover {
-      background: var(--surface, #ffffff);
-      border-color: rgba(0, 0, 0, 0.18);
-      color: var(--sidebar-text);
+      background: rgba(255, 255, 255, 0.10);
+      border-color: rgba(255, 255, 255, 0.20);
     }
+    /* Signed-in state: muted-green accent so the user sees at a
+       glance "the cloud-sync indicator is in its happy state". The
+       green is the same hue as --success but tinted into the dark
+       sidebar palette so it doesn't clash. */
     .cloud-pill.signed-in {
-      background: rgba(47, 156, 94, 0.08);
-      border-color: rgba(47, 156, 94, 0.24);
-      color: #2f9c5e;
+      background: rgba(47, 156, 94, 0.16);
+      border-color: rgba(47, 156, 94, 0.42);
+      color: #b3e5c4;   /* light green that reads on dark sidebar */
+    }
+    .cloud-pill.signed-in:hover {
+      background: rgba(47, 156, 94, 0.24);
+      border-color: rgba(47, 156, 94, 0.55);
     }
     .cloud-pill-icon { flex-shrink: 0; font-size: 0.95rem; }
     .cloud-pill-label {
       flex: 1; min-width: 0;
       overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     }
+    /* "Sign out" affordance shown only when the user is signed in.
+       Without this, the email-as-button is ambiguous — users don't
+       discover that clicking it opens a sign-out dialog. The little
+       pill on the right makes the action explicit AT A GLANCE while
+       still leaving the whole row clickable (clicking the email
+       still triggers sign-out, which feels right for a "tap to log
+       out" pattern). */
+    .cloud-pill-action {
+      display: none;
+      flex-shrink: 0;
+      padding: 2px 7px;
+      font-size: 0.62rem;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      background: rgba(255, 255, 255, 0.14);
+      border-radius: 4px;
+      color: #d8f0e0;
+    }
+    .cloud-pill.signed-in .cloud-pill-action { display: inline-block; }
+    .cloud-pill.signed-in:hover .cloud-pill-action {
+      background: rgba(255, 255, 255, 0.22);
+      color: #ffffff;
+    }
     .sidebar.collapsed .cloud-pill {
       justify-content: center;
       padding: 0.55rem 0;
       gap: 0;
     }
-    .sidebar.collapsed .cloud-pill-label { display: none; }
+    .sidebar.collapsed .cloud-pill-label,
+    .sidebar.collapsed .cloud-pill-action { display: none; }
 
     /* Savings pill — sits at the very bottom of the sidebar, above the
        Sign-in row. Subtle gold gradient + green amount so the number
@@ -2918,6 +2955,12 @@
                 title="Cloud sync state">
           <span class="cloud-pill-icon" id="cloudPillIcon">☁️</span>
           <span class="cloud-pill-label" id="cloudPillLabel" data-i18n="cloud_pill_anon">Sign in for cloud sync</span>
+          <!-- Visible only when signed-in (CSS-gated by .signed-in
+               on the parent). Clicking anywhere on the pill still
+               triggers sign-out via onCloudPillClick, but this label
+               removes the discoverability problem of "user doesn't
+               know clicking the email signs them out". -->
+          <span class="cloud-pill-action" data-i18n="cloud_pill_signout_short">Sign out</span>
         </button>
 
         <!-- Savings pill — what the user has avoided paying GPT-4 for the
