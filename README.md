@@ -59,15 +59,20 @@ Claude Pro auto-renewing.
 - **Self-growing skills** — repeated tasks are promoted into reusable Python skills, cutting LLM calls over time.
 - **Streaming UI** — both the orchestrator's planning and the executor's answer stream token-by-token via WebSocket — no more staring at a spinner while the model thinks.
 - **Per-step deliverable verification** — LLM-as-judge confirms each produced file actually matches the goal, catching the "wrote a report *about* the game instead of the game" failure mode. Toggleable for big-model setups where extra calls are too costly.
-- **Loop hardening for small models** — adaptive prompts, a parallel low-risk tool fan-out, per-tool-name caps, a circuit breaker, discovery memos, and a context watchdog that compresses old turns before busting `num_ctx`.
+- **Loop hardening for small models** — adaptive prompts, a parallel low-risk tool fan-out, per-tool-name caps, a circuit breaker, discovery memos, a context watchdog that compresses old turns before busting `num_ctx`, and pinned session-workspace context that prevents "model wanders to the wrong directory" drift.
+- **Forever-command guard** — shell tool refuses `tail -f`, `journalctl -f`, `watch …`, and auto-adds `-d` to `docker compose up` so a runaway log stream can't hang an entire subtask.
+- **Web search built in** — Chat mode exposes the `web_search` tool (Brave Search API) so the local model can ground answers in current data instead of hallucinating recent events / version numbers / today's prices.
 - **Reconnect-safe streaming** — the WebSocket carries a 600-event ring buffer so a flaky network or a tab refresh replays the missed events instead of leaving the UI stuck.
-- **Web dashboard** — submit tasks, watch tool calls stream live, review pending approvals, manage memory, render Markdown/GFM tables, embed Chart.js datalabels in HTML reports, and tune settings.
-- **Native macOS desktop client** — Tauri 2.x shell with onboarding wizard (Ollama install + tier-based model pull), language picker, mode-locked sessions, auto-update against GitHub Releases, and one-click diagnostics download. See [`desktop/`](desktop/).
+- **Web dashboard** — submit tasks, watch tool calls stream live, review pending approvals, manage memory, render Markdown/GFM tables, embed Chart.js datalabels in HTML reports, see live "Saved $X vs GPT-4" in the sidebar, and tune settings.
+- **Capabilities tab** — built-in Tools and learned Skills merged into one filterable list with type badges, so users see "what can my agent do?" in one place. Skills graduate from `TESTING` to `ACTIVE` automatically; the count grows as the install matures.
+- **Native macOS desktop client** — Tauri 2.x shell with onboarding wizard (Ollama install + tier-based model pull), language picker, mode-locked sessions, full window-drag regions, auto-update against GitHub Releases, and one-click diagnostics download. See [`desktop/`](desktop/).
+- **Optional cloud account** — sign in with Google to enable cross-device sync (skills, memory, settings) and licence-gated premium content. Anonymous Firebase auth runs from day one; the upgrade is opt-in. The OSS web UI stays Firebase-free — auth lives only in the desktop shell.
+- **Lifetime licensing via Lemon Squeezy** — one-time $99 unlocks the polished signed desktop, cloud sync, and (future) premium skill packs. Open-source core stays free forever for everyone. Webhook-driven licence activation: the sidebar pill flips from "Get Lifetime" to your account email within ~1 sec of payment clearing.
 - **Analytic / report mode** — first-class `csv_describe` + `python_exec` tools and an HTML report generator that renders charts with value labels.
 - **Human-in-the-loop** — high-risk shell commands (rm, sudo, mv, …) pause for approval before running.
 - **Persistent memory** — ChromaDB-backed long-term memory feeds relevant context back into future plans.
-- **22-locale i18n** — UI strings live in `static/i18n.js`; build-hash check auto-reloads when the dashboard is updated.
-- **Hot-reloadable settings** — change models, thresholds, performance toggles, and endpoints from the UI without restarting the server.
+- **22-locale i18n** — UI strings live in `static/i18n.js`; build-hash check + per-commit cache-buster auto-reload when the dashboard is updated.
+- **Hot-reloadable settings** — change models, thresholds, performance toggles, API keys (Anthropic, Brave Search, Lemon Squeezy), and endpoints from the UI without restarting the server.
 
 ## Architecture
 
@@ -135,6 +140,9 @@ not just fast enough to look impressive on a single tool call:
 | **Circuit breaker** | After 5 cumulative tool failures the loop is forced to commit to a final answer instead of looping forever. |
 | **Common error hints** | Twelve frequent stack-trace patterns (`ModuleNotFoundError`, `KeyError`, `PermissionError`, …) are matched against tool stderr and converted into one-line hints so the model corrects itself instead of repeating the same mistake. |
 | **WS reconnect + replay** | The dashboard WebSocket carries a 600-event ring buffer keyed by sequence number — a refreshed tab or a wifi blip replays missed events on reconnect. |
+| **Pinned workspace context** | Every executor round prepends `WORKSPACE: <abs-path>` to the user message, and shell-tool refusals embed the correct path — small models stop drifting to "their idea of the project root" and re-emitting `working_dir=/home/.../OpenTeddy` round after round. |
+| **Forever-command guard** | `_sanitize_command` auto-adds `-d` to `docker compose up`, strips `-f`/`--follow` from `docker logs` / `docker compose logs`, and refuses `tail -f`, `journalctl -f`, `watch …` outright. Stops a container in a restart-crash loop from holding a subtask hostage forever. |
+| **Web-search grounding** | Chat mode exposes the `web_search` tool (Brave Search) so the local model can ground answers in current data instead of hallucinating events / version numbers / prices past its training cutoff. |
 
 ## File Structure
 
@@ -260,6 +268,55 @@ This keeps cost low for everyday work while still guaranteeing you get a real an
 4. The skill starts in **TESTING** status. After `SKILL_PROMOTION_THRESHOLD` successful invocations it is promoted to **ACTIVE**.
 5. Future tasks automatically match and invoke active skills — no LLM call needed.
 
+## Pricing & licensing
+
+OpenTeddy ships under an **open-core** model — the OSS backend stays MIT-
+licensed and free forever. The paid tier is the polished native desktop
+experience plus a few cloud-backed conveniences:
+
+| | **Free** (this repo) | **Lifetime — $99 once** |
+|---|---|---|
+| Backend (FastAPI + orchestrator + executor + tools) | ✅ | ✅ |
+| Local models via Ollama | ✅ | ✅ |
+| Loop hardening (verifier, watchdog, circuit breaker, parallel fan-out) | ✅ | ✅ |
+| Self-growing skills | ✅ | ✅ |
+| 22-locale i18n web dashboard | ✅ | ✅ |
+| Self-build the desktop from source | ✅ | ✅ |
+| Signed `.dmg` + auto-updates against GitHub Releases | ❌ | ✅ |
+| Cross-device cloud sync (skills, memory, settings) | ❌ | ✅ |
+| Premium skill packs (planned: Analytics / Marketing / Memory Pro) | ❌ | ✅ |
+| Priority bug-fix queue + private support channel | ❌ | ✅ |
+| Includes Claude API credits to get started | ❌ | ✅ (planned) |
+
+The whole identity + billing stack is built in stages, all visible in this
+codebase:
+
+- **Phase A** — Anonymous Firebase Auth on app start; `users/{uid}` doc tracks
+  device id, platform, app version, last-seen.
+- **Phase B** — Real Google sign-in via system-browser pairing (Tauri WebKit
+  can't do `signInWithPopup`, so we open the system browser, run the popup
+  there, and pass a custom token back via Firestore + a Cloud Function).
+  Account-merge carries the anonymous user's `deviceId` + `createdAt` onto
+  the new Google identity.
+- **Phase C** — Lemon Squeezy checkout flow. The desktop builds a buy URL with
+  `checkout[email]` and `checkout[custom][uid]` prefilled; the
+  `lemonSqueezyWebhook` Cloud Function verifies HMAC, looks up the buyer
+  (by `custom_data.uid` or email fallback), and writes
+  `users/{uid}.subscription = { status: 'active', plan: 'lifetime' }` plus
+  a canonical `licenses/{uid}` record. The desktop's Firestore listener
+  flips the upgrade pill off within ~1 sec of payment clearing.
+
+All Cloud Function code, Firestore Security Rules, and the auth bridge HTML
+live in [`desktop/`](desktop/) (functions/) and [`landing-page/`](https://openteddy-72cee.web.app/auth)
+respectively. Stripe-style webhook signatures are verified against
+HMAC-SHA256 of the raw body using a per-endpoint secret stored in Google
+Secret Manager (`firebase functions:secrets:set LEMONSQUEEZY_WEBHOOK_SECRET`).
+
+Anyone running the OSS backend in a plain browser sees **none of this** —
+the cloud-sync pill, upgrade pill, and sign-in dialog are gated on
+`window.parent !== window` (i.e. running inside the Tauri shell), so the
+Firebase JS bundle never loads on a self-hosted install.
+
 ## Configuration Reference
 
 Most of these can also be edited live from the dashboard's **Settings** panel —
@@ -276,6 +333,7 @@ without a server restart.
 | `GEMMA_MODEL` | `gemma3:4b` | Orchestrator model tag. |
 | `QWEN_BASE_URL` | `http://localhost:11434` | Ollama base URL for the executor. |
 | `QWEN_MODEL` | `qwen2.5:3b` | Executor model tag. |
+| `BRAVE_SEARCH_API_KEY` | — | Optional. Powers the Chat-mode `web_search` tool. Free tier covers 2,000 queries/month at [api-dashboard.search.brave.com](https://api-dashboard.search.brave.com/). Without it, the local model answers from training data and warns the user about staleness. |
 | `DB_PATH` | `openteddy.db` | SQLite database path. |
 | `MEMORY_DB_PATH` | `./memory_db` | ChromaDB directory. |
 | `SKILLS_DIR` | `skills` | Directory for skill files. |
@@ -318,6 +376,18 @@ What you get on top of the web UI:
   for that conversation.
 - **Custom dialogs** — replaces native `confirm` / `alert` / `prompt` (which
   Tauri blocks) with in-app modals that match the chrome.
+- **Anonymous-by-default Firebase Auth** — every install gets a stable Firebase
+  uid + Firestore `users/{uid}` doc on first launch. Google sign-in is
+  optional and unlocks cross-device cloud sync.
+- **Sign-in dialog with system-browser pairing** — Google OAuth runs in real
+  Safari/Chrome (Tauri's WebKit user-agent is blocked by Google's policy),
+  the resulting Firebase customToken comes back to the desktop via a one-shot
+  `pairings/{pairId}` Firestore doc with HMAC-style nonce verification.
+- **Sidebar pills** — live "Saved $X vs GPT-4" running total, ☁️ cloud-sync /
+  account email, and ✨ Get Lifetime $99 upgrade CTA (hidden once paid).
+- **Lemon Squeezy checkout** — click ✨ Get Lifetime → opens checkout in the
+  system browser with email + Firebase uid prefilled → webhook flips
+  `subscription.status` to `active` → upgrade pill auto-disappears.
 - **Auto-update against GitHub Releases** — periodic poll, in-app changelog,
   one-click apply.
 - **Diagnostics download** — single-click `app.log` + tasks/usage/settings

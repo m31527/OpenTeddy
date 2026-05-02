@@ -36,16 +36,21 @@
 - **自動升級到 Claude** — 逾時、信心低、連續失敗、deliverable verifier 判 FAIL、工具錯誤訊號都會自動觸發。可用 `ESCALATION_ENABLED=false` 整個關掉。
 - **Token 串流 UI** — orchestrator 規劃 + executor 回答都透過 WebSocket token-by-token 流出來，不再呆呆看著 spinner。
 - **逐步交付物驗證** — 每個成功 subtask 結束會用 LLM-as-judge 確認產出的檔案真的是 deliverable（不是「描述 deliverable 的報告」），可在大模型上關掉。
-- **小模型 loop 強化** — 自適應 prompt、低風險工具並行、重複呼叫上限、circuit breaker、發現 memo、context watchdog 自動壓縮舊輪次。
+- **小模型 loop 強化** — 自適應 prompt、低風險工具並行、重複呼叫上限、circuit breaker、發現 memo、context watchdog 自動壓縮舊輪次、釘住 session workspace 防路徑 drift。
+- **永跑指令防呆** — shell tool 自動拒絕 `tail -f`、`journalctl -f`、`watch …`，並把 `docker compose up` 自動加上 `-d`，restart-crash 容器的 log 串流不會把 subtask 卡死。
+- **內建 web search** — Chat mode 開啟 `web_search` 工具（Brave Search API），地端模型可以查最新資料而不是亂編訓練 cutoff 後的事件。
 - **斷線可恢復的 WS** — 600 筆 ring buffer + `?since=` 重播，網路抖一下、刷新分頁都不會卡 UI。
 - **技能會自己長出來** — 重複的任務會被升級成可重用的 Python 技能，越用越快。
-- **Web 儀表板** — 提交任務、即時看工具呼叫、審核敏感指令、管理記憶、看 GFM 表格與 Chart.js 數值標籤的 HTML 報表。
-- **macOS 原生客戶端** — Tauri 2.x 殼，引導精靈（Ollama 一鍵安裝 + 機器分級拉模型）、語言切換器、模式鎖定、自動更新。詳見 [`desktop/`](desktop/)。
+- **Web 儀表板** — 提交任務、即時看工具呼叫、審核敏感指令、管理記憶、即時顯示「已省 $X vs GPT-4」，還有 GFM 表格 + Chart.js 數值標籤 HTML 報表。
+- **Capabilities tab** — 內建 Tools 跟自動長出來的 Skills 合併在同一個可篩選列表，type badge 標明來源；技能用越多自動從 TESTING 升 ACTIVE。
+- **macOS 原生客戶端** — Tauri 2.x 殼，引導精靈（Ollama 一鍵安裝 + 機器分級拉模型）、語言切換器、模式鎖定、可自由拖動的視窗、自動更新、診斷下載。詳見 [`desktop/`](desktop/)。
+- **可選的雲端帳號** — 用 Google 登入即可跨裝置同步技能、記憶、設定。匿名 Firebase Auth 每個 install 從第一次開機就有；登入是 opt-in。OSS web UI 完全不含 Firebase code，雲端只在 desktop 殼裡跑。
+- **Lemon Squeezy 終身授權** — 一次性 $99 解鎖簽名版桌面、雲端同步、未來的 premium 技能包。Open-source 核心永遠免費。Webhook 驅動的 license 啟動：付完款 1 秒內 sidebar 自動切換顯示帳號 email，不用重啟。
 - **資料分析模式** — 內建 `csv_describe` + `python_exec` 與會嵌 Chart.js 的 HTML 報表生成器。
 - **人類確認關卡** — `rm`、`sudo`、`mv` 等高風險指令會停下來等你同意。
 - **長期記憶** — ChromaDB 記住過去的脈絡，下次規劃時自動帶進來。
-- **22 種語言介面** — UI 字串集中在 `static/i18n.js`，build hash 自動觸發前端重整。
-- **設定熱載入** — 模型、threshold、效能開關（streaming / verification / escalation）、API key 都能在 UI 改完即時生效。
+- **22 種語言介面** — UI 字串集中在 `static/i18n.js`，build hash + 每 commit cache buster 自動觸發前端重整。
+- **設定熱載入** — 模型、threshold、效能開關（streaming / verification / escalation）、API key（Anthropic / Brave Search / Lemon Squeezy）都能在 UI 改完即時生效。
 
 ## 快速開始（原生安裝，推薦）
 
@@ -134,6 +139,29 @@ docker compose up -d
 ```
 
 然後讓代理人只在容器內的 `/workspace` 裡面活動。只有你明確掛進去的資料夾會被看到，其餘仍然隔離。
+
+## 定價（Open-Core 模式）
+
+OpenTeddy 採用**開放核心**：OSS backend 永遠 MIT 免費，付費的是**polished
+desktop 體驗 + 雲端便利功能**：
+
+| | **Free**（這個 repo） | **Lifetime — $99 一次** |
+|---|---|---|
+| 完整 backend / 工具 / 強化 loop | ✅ | ✅ |
+| 自動成長技能 | ✅ | ✅ |
+| 22 語系 web 儀表板 | ✅ | ✅ |
+| 自己 build desktop | ✅ | ✅ |
+| 簽名 .dmg + 自動更新 | ❌ | ✅ |
+| 多裝置雲端同步（記憶 / 技能 / 設定）| ❌ | ✅ |
+| Premium 技能包（規劃中：Analytics / Marketing / Memory Pro）| ❌ | ✅ |
+| 優先 bug 修復 + 私密支援 | ❌ | ✅ |
+
+身分驗證 + 計費完整實作分三階段，code 都在這個 repo：
+- **Phase A**：app 啟動匿名 Firebase Auth、寫 `users/{uid}` 紀錄裝置 id
+- **Phase B**：Google 登入透過系統瀏覽器 pairing flow（Tauri WebKit 不能直接 popup），用 Cloud Function 簽 customToken 回來、merge 匿名身份
+- **Phase C**：Lemon Squeezy webhook → CF 驗 HMAC → 寫 `licenses/{uid}` 跟 `users/{uid}.subscription`，desktop 的 Firestore listener 1 秒內 reflect
+
+OSS user 在 plain browser 跑 — `cloud-sync pill` / `upgrade pill` / `sign-in dialog` 都會自動隱藏，Firebase JS bundle 完全不會載。
 
 ## 跑大模型（DGX Spark / 35B 等級）的人請注意
 
