@@ -5203,6 +5203,19 @@
         toast(e.message, true);
       }
     }
+    // Receive mirrored logs from the Tauri shell (main.js). Tauri's
+    // shell + iframe have separate consoles; the shell side mirrors
+    // its console.info/warn/error here so the user can open just the
+    // iframe console and see logs from BOTH contexts in chronological
+    // order. Prints with a "[shell]" prefix to make the source obvious.
+    window.addEventListener('message', (e) => {
+      const data = e.data || {};
+      if (data.type !== 'teddy.shell_log') return;
+      const level = ['info', 'warn', 'error'].includes(data.level) ? data.level : 'info';
+      // eslint-disable-next-line no-console
+      console[level]('[shell]', data.text || '');
+    });
+
     // Listen for auth-state broadcasts from the Tauri shell. Also fire
     // an initial query in case the iframe loaded after the shell
     // already settled its first onAuthStateChanged tick.
