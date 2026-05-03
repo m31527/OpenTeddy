@@ -23,6 +23,11 @@ env/
 
 # Skills (generated at runtime — keep the .gitkeep)
 skills/*.py
+# Helper modules that *aren't* auto-generated skills DO belong in git —
+# whitelist them back so the gitignore rule above only catches the
+# Claude-generated runtime skill files.
+!skills/_premium.py
+!skills/__init__.py
 
 # Logs
 *.log
