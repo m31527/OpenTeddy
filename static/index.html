@@ -5126,10 +5126,23 @@
       pill.hidden = !eligible;
     }
     function onUpgradePillClick() {
-      if (!_IN_TAURI) return;
+      // Heavy logging on the upgrade-pill click path so we can trace
+      // the chain from iframe → Tauri shell → Lemon Squeezy URL when
+      // anything misbehaves. The chain has six hops and silent
+      // failure at any one of them looks identical from the user's
+      // chair ("I clicked, nothing happened"), so each step shouts
+      // its progress to console.
+      console.info('[upgrade-pill] click — _IN_TAURI=%s, authState=%o',
+                   _IN_TAURI, _cloudAuthState);
+      if (!_IN_TAURI) {
+        console.warn('[upgrade-pill] not running in Tauri shell — pill should be hidden, ignoring');
+        return;
+      }
       try {
         window.parent.postMessage({ type: 'teddy.upgrade.checkout_request' }, '*');
+        console.info('[upgrade-pill] postMessage(teddy.upgrade.checkout_request) sent to parent');
       } catch (e) {
+        console.error('[upgrade-pill] postMessage threw:', e);
         toast(e.message, true);
       }
     }
