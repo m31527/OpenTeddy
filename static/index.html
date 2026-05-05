@@ -574,6 +574,160 @@
     }
     .sidebar.collapsed .sidebar-credit { display: none; }
 
+    /* ── Profile avatar (bottom-right of sidebar) ─────────────────────── */
+    /* Replaces the old cloud-pill (signed-in email + SIGN OUT row). One
+       circular button on the bottom-right; click opens a popover with
+       account info + sign-out, OR triggers the sign-in dialog when the
+       user is anonymous. Hidden in plain-browser mode (no Tauri shell
+       to drive the auth flow against). */
+    .sidebar-bottom-row {
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+      gap: 0.5rem;
+      padding-right: 0.55rem;
+    }
+    .sidebar-bottom-text {
+      flex: 1;
+      min-width: 0;
+    }
+    .sidebar.collapsed .sidebar-bottom-text { display: none; }
+
+    .profile-avatar-wrap {
+      position: relative;
+      flex-shrink: 0;
+      margin-bottom: 0.35rem;   /* visually align with the credit line */
+    }
+    .profile-avatar {
+      width: 32px;
+      height: 32px;
+      padding: 0;
+      border: 1.5px solid var(--sidebar-border, rgba(255,255,255,0.16));
+      border-radius: 50%;
+      background: var(--sidebar-bg, rgba(255,255,255,0.04));
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: visible;        /* badge can spill out of the circle */
+      position: relative;
+      transition: transform 0.08s, border-color 0.12s, box-shadow 0.12s;
+    }
+    .profile-avatar:hover {
+      border-color: var(--accent, #c46d4f);
+      box-shadow: 0 0 0 3px rgba(196, 109, 79, 0.18);
+    }
+    .profile-avatar:active { transform: scale(0.95); }
+    .profile-avatar.signed-in { border-color: rgba(47, 156, 94, 0.5); }
+    .profile-avatar-img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      border-radius: 50%;
+      display: block;
+    }
+    .profile-avatar-default {
+      font-size: 1.05rem;
+      line-height: 1;
+      filter: drop-shadow(0 0 2px rgba(0,0,0,0.2));
+    }
+    .profile-avatar-badge {
+      position: absolute;
+      right: -2px;
+      bottom: -2px;
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: var(--success, #2f9c5e);
+      color: #fff;
+      font-size: 0.55rem;
+      font-weight: 700;
+      line-height: 14px;
+      text-align: center;
+      border: 2px solid var(--sidebar-bg, #0e0e0e);
+      box-sizing: content-box;
+    }
+
+    /* Popover that opens above the avatar when clicked (signed-in
+       state). Anchored bottom-right of the avatar's wrap so it doesn't
+       overflow the sidebar edge. */
+    .profile-popover {
+      position: absolute;
+      right: 0;
+      bottom: calc(100% + 8px);
+      width: 240px;
+      background: var(--surface, #1a1a1a);
+      color: var(--text-primary, #fafafa);
+      border: 1px solid var(--border, rgba(255,255,255,0.12));
+      border-radius: 10px;
+      box-shadow:
+        0 1px 2px rgba(0, 0, 0, 0.18),
+        0 12px 28px rgba(0, 0, 0, 0.32);
+      padding: 6px;
+      z-index: 100;
+      font-size: 0.82rem;
+      animation: profilePopoverIn 140ms cubic-bezier(0.2, 0.8, 0.2, 1);
+    }
+    .profile-popover[hidden] { display: none !important; }
+    @keyframes profilePopoverIn {
+      from { opacity: 0; transform: translateY(4px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    .profile-popover-header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px;
+    }
+    .profile-popover-avatar {
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      object-fit: cover;
+      flex-shrink: 0;
+    }
+    .profile-popover-text {
+      min-width: 0;
+      flex: 1;
+    }
+    .profile-popover-name {
+      font-size: 0.86rem;
+      font-weight: 600;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .profile-popover-email {
+      font-size: 0.74rem;
+      color: var(--text-muted, #999);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      margin-top: 1px;
+    }
+    .profile-popover-divider {
+      height: 1px;
+      background: var(--border, rgba(255,255,255,0.12));
+      margin: 2px 0;
+    }
+    .profile-popover-item {
+      display: block;
+      width: 100%;
+      text-align: left;
+      padding: 9px 12px;
+      background: transparent;
+      border: none;
+      color: inherit;
+      font-family: inherit;
+      font-size: inherit;
+      cursor: pointer;
+      border-radius: 6px;
+      transition: background 0.1s;
+    }
+    .profile-popover-item:hover {
+      background: var(--bg-secondary, rgba(255,255,255,0.06));
+    }
+
     /* ── Update pill (sidebar footer) + modal ─────────────────────────── */
     .update-pill {
       display: inline-flex; align-items: center; gap: 6px;
@@ -2949,18 +3103,17 @@
              Click → postMessage to parent → main.js opens the sign-in
              dialog. We never call Firebase from inside the iframe —
              the OSS web UI must stay Firebase-free. -->
-        <button class="cloud-pill" id="cloudPill" hidden
+        <!-- Cloud-pill superseded by the profile avatar at the bottom
+             row. Keeping the element around with hidden+display:none
+             so any deep-linked event handler / postMessage still has
+             a target node, but visually it's gone. The avatar is the
+             one and only auth-state surface from here on. -->
+        <button class="cloud-pill" id="cloudPill" hidden style="display:none"
                 onclick="onCloudPillClick()"
-                data-i18n-title="cloud_pill_title"
-                title="Cloud sync state">
-          <span class="cloud-pill-icon" id="cloudPillIcon">☁️</span>
-          <span class="cloud-pill-label" id="cloudPillLabel" data-i18n="cloud_pill_anon">Sign in for cloud sync</span>
-          <!-- Visible only when signed-in (CSS-gated by .signed-in
-               on the parent). Clicking anywhere on the pill still
-               triggers sign-out via onCloudPillClick, but this label
-               removes the discoverability problem of "user doesn't
-               know clicking the email signs them out". -->
-          <span class="cloud-pill-action" data-i18n="cloud_pill_signout_short">Sign out</span>
+                aria-hidden="true">
+          <span class="cloud-pill-icon" id="cloudPillIcon"></span>
+          <span class="cloud-pill-label" id="cloudPillLabel"></span>
+          <span class="cloud-pill-action"></span>
         </button>
 
         <!-- Savings pill — what the user has avoided paying GPT-4 for the
@@ -2997,18 +3150,72 @@
           <span class="login-icon">↩</span>
           <span class="login-label" data-i18n="sidebar_login">Sign in</span>
         </button>
-        <div class="sidebar-status">
-          <span id="wsBadge" class="ws-badge" data-i18n-title="ws_badge_title" title="WebSocket connection"></span>
-          <span id="wsLabel" data-i18n="ws_connecting">Connecting…</span>
-        </div>
-        <!-- Author credit. Click the handle → opens GitHub profile in
-             default browser (via openInBrowser bridge so Tauri webview
-             routes it through Rust open_external instead of being
-             silently blocked). Hidden when sidebar is collapsed. -->
-        <div class="sidebar-credit">
-          Developed by
-          <a href="https://github.com/m31527"
-             onclick="event.preventDefault(); openInBrowser('https://github.com/m31527')">m31527</a>
+        <!-- Bottom-row group: WS status + author credit on the left,
+             profile avatar on the right. The avatar replaces the old
+             cloud-pill (signed-in email + SIGN OUT row) — clicking it
+             opens a popover with sign-out + future account options;
+             when anonymous, clicking it triggers the sign-in flow. -->
+        <div class="sidebar-bottom-row">
+          <div class="sidebar-bottom-text">
+            <div class="sidebar-status">
+              <span id="wsBadge" class="ws-badge" data-i18n-title="ws_badge_title" title="WebSocket connection"></span>
+              <span id="wsLabel" data-i18n="ws_connecting">Connecting…</span>
+            </div>
+            <!-- Author credit. Click → GitHub profile in default
+                 browser (Tauri's openInBrowser routes via Rust
+                 open_external so the link doesn't get silently
+                 blocked). Hidden when sidebar is collapsed. -->
+            <div class="sidebar-credit">
+              Developed by
+              <a href="https://github.com/m31527"
+                 onclick="event.preventDefault(); openInBrowser('https://github.com/m31527')">m31527</a>
+            </div>
+          </div>
+
+          <!-- Profile avatar — single auth-state surface for the whole
+               sidebar. Three visual states:
+                 • signed-in (Google):  user's photoURL in the circle
+                 • anonymous:           default OpenTeddy bear glyph
+                 • plain browser (no Tauri shell): hidden entirely
+                                                   (no auth flow available)
+               Click → opens .profile-popover for signed-in users
+               (Profile / Sign out) or fires the sign-in dialog for
+               anonymous users. -->
+          <div class="profile-avatar-wrap">
+            <button class="profile-avatar" id="profileAvatar"
+                    onclick="onProfileAvatarClick(event)"
+                    data-i18n-title="profile_avatar_anon_title"
+                    title="Sign in / account menu">
+              <img class="profile-avatar-img" id="profileAvatarImg"
+                   src="" alt="" hidden />
+              <span class="profile-avatar-default" id="profileAvatarDefault">🐻</span>
+              <!-- Tiny "✓" badge that overlays the avatar once the user
+                   is signed in. Reuses the same green as the cloud-pill
+                   so the visual language stays consistent. -->
+              <span class="profile-avatar-badge" id="profileAvatarBadge" hidden>✓</span>
+            </button>
+
+            <!-- Popover. Anchored to the avatar via CSS bottom-right.
+                 Hidden by default; toggled by onProfileAvatarClick
+                 + closed by an outside-click listener installed on
+                 first open. -->
+            <div class="profile-popover" id="profilePopover" hidden role="menu">
+              <div class="profile-popover-header">
+                <img class="profile-popover-avatar" id="profilePopoverAvatar"
+                     src="" alt="" hidden />
+                <div class="profile-popover-text">
+                  <div class="profile-popover-name" id="profilePopoverName"></div>
+                  <div class="profile-popover-email" id="profilePopoverEmail"></div>
+                </div>
+              </div>
+              <div class="profile-popover-divider"></div>
+              <button class="profile-popover-item" id="profilePopoverSignOut"
+                      onclick="onProfilePopoverSignOut()"
+                      data-i18n="profile_menu_signout">
+                Sign out
+              </button>
+            </div>
+          </div>
         </div>
         <!-- Update pill — populated by checkForUpdate() if /update/check
              reports a newer GitHub release. Hidden by default so the
@@ -5146,59 +5353,136 @@
         toast(e.message, true);
       }
     }
-    function renderCloudPill() {
-      const pill  = document.getElementById('cloudPill');
-      const label = document.getElementById('cloudPillLabel');
-      const icon  = document.getElementById('cloudPillIcon');
-      if (!pill || !label || !icon) return;
+    // Legacy cloud-pill render kept as no-op so any stale call sites
+    // don't throw — the element itself is hidden via CSS+inline style.
+    // The avatar below is the new auth surface.
+    function renderCloudPill() { /* superseded by renderProfileAvatar */ }
+    function onCloudPillClick() { /* superseded by onProfileAvatarClick */ }
 
-      // Hidden in plain browsers — there's no shell to talk to.
-      if (!_IN_TAURI) { pill.hidden = true; return; }
-      pill.hidden = false;
+    // ── Profile avatar (replaces cloud-pill) ────────────────────────────
+    // Single auth-state surface in the bottom-right of the sidebar.
+    // Anonymous → bear glyph + click opens sign-in dialog.
+    // Signed-in → user's Google photoURL + click opens a popover with
+    //             account info and Sign out.
+    function renderProfileAvatar() {
+      const wrap     = document.querySelector('.profile-avatar-wrap');
+      const btn      = document.getElementById('profileAvatar');
+      const img      = document.getElementById('profileAvatarImg');
+      const fallback = document.getElementById('profileAvatarDefault');
+      const badge    = document.getElementById('profileAvatarBadge');
+      if (!wrap || !btn || !img || !fallback || !badge) return;
 
-      if (_cloudAuthState.signedIn && !_cloudAuthState.anonymous) {
-        const who = _cloudAuthState.email || _cloudAuthState.displayName || 'Signed in';
-        pill.classList.add('signed-in');
-        icon.textContent  = '✓';
-        label.textContent = who;
-        pill.title = (t('cloud_pill_signed_in_title') || 'Signed in') + ' — ' + who;
-      } else {
-        pill.classList.remove('signed-in');
-        icon.textContent  = '☁️';
-        label.textContent = t('cloud_pill_anon') || 'Sign in for cloud sync';
-        pill.title = t('cloud_pill_title') || 'Cloud sync state';
-      }
-    }
-    async function onCloudPillClick() {
-      if (!_IN_TAURI) return;
+      // Plain browser (no Tauri shell) → no auth flow available, hide
+      // the whole thing. (Same gate logic as the upgrade pill.)
+      if (!_IN_TAURI) { wrap.style.display = 'none'; return; }
+      wrap.style.display = '';
+
       const signedIn = _cloudAuthState.signedIn && !_cloudAuthState.anonymous;
       if (signedIn) {
-        // Click while signed in → ask before signing out. Anonymous
-        // mode is the natural "logged out" state for OpenTeddy
-        // (auth.js auto-calls signInAnonymously after sign-out), so
-        // we frame it that way in the body copy. Sign-out preserves
-        // the user-doc on their Google uid so signing back in
-        // restores everything.
-        const who = _cloudAuthState.email || _cloudAuthState.displayName || 'this account';
-        const ok = await showConfirm({
-          title:   t('cloud_pill_signout_title') || 'Sign out?',
-          body:    (t('cloud_pill_signout_body') || "You'll go back to anonymous mode. Your synced skills and memory stay safe — sign back in any time to restore them.")
-                   + '\n\n' + (t('cloud_pill_signout_account') || 'Account') + ': ' + who,
-          okLabel:     t('cloud_pill_signout_ok')     || 'Sign out',
-          cancelLabel: t('cloud_pill_signout_cancel') || 'Cancel',
-          danger:      false,
-        });
-        if (!ok) return;
-        try {
-          window.parent.postMessage({ type: 'teddy.auth.signout_request' }, '*');
-        } catch (e) {
-          toast(e.message, true);
+        const who = _cloudAuthState.displayName || _cloudAuthState.email || 'Account';
+        btn.classList.add('signed-in');
+        btn.title = (t('profile_avatar_signed_in_title') || 'Signed in') + ' — ' + who;
+        badge.hidden = false;
+        if (_cloudAuthState.photoURL) {
+          img.src    = _cloudAuthState.photoURL;
+          img.alt    = who;
+          img.hidden = false;
+          fallback.style.display = 'none';
+        } else {
+          // Signed in but no photo (rare — Google account without an
+          // avatar). Show first letter of name/email instead of the
+          // bear, so it visually reads as "an account" not "anonymous".
+          img.hidden = true;
+          fallback.style.display = '';
+          fallback.textContent = (who[0] || '?').toUpperCase();
         }
+      } else {
+        btn.classList.remove('signed-in');
+        btn.title = t('profile_avatar_anon_title') || 'Sign in to sync your account';
+        badge.hidden = true;
+        img.hidden = true;
+        img.src = '';   // free up cached image so quick toggling doesn't flicker
+        fallback.style.display = '';
+        fallback.textContent = '🐻';
+      }
+    }
+
+    function _outsideClickClose(e) {
+      const popover = document.getElementById('profilePopover');
+      const wrap    = document.querySelector('.profile-avatar-wrap');
+      if (!popover || !wrap) return;
+      if (popover.hidden) return;
+      if (!wrap.contains(e.target)) closeProfilePopover();
+    }
+
+    function openProfilePopover() {
+      const popover = document.getElementById('profilePopover');
+      const pName   = document.getElementById('profilePopoverName');
+      const pEmail  = document.getElementById('profilePopoverEmail');
+      const pAvatar = document.getElementById('profilePopoverAvatar');
+      if (!popover) return;
+      // Refresh popover content from the latest auth state — avoids
+      // showing a stale email if the user re-signed in mid-session.
+      pName.textContent  = _cloudAuthState.displayName || '—';
+      pEmail.textContent = _cloudAuthState.email || '';
+      if (_cloudAuthState.photoURL) {
+        pAvatar.src    = _cloudAuthState.photoURL;
+        pAvatar.alt    = _cloudAuthState.displayName || '';
+        pAvatar.hidden = false;
+      } else {
+        pAvatar.hidden = true;
+      }
+      popover.hidden = false;
+      // Defer so this same click doesn't immediately fire the
+      // outside-click handler we just attached.
+      setTimeout(() => {
+        document.addEventListener('click', _outsideClickClose, true);
+      }, 0);
+    }
+
+    function closeProfilePopover() {
+      const popover = document.getElementById('profilePopover');
+      if (popover) popover.hidden = true;
+      document.removeEventListener('click', _outsideClickClose, true);
+    }
+
+    async function onProfileAvatarClick(event) {
+      if (event) { event.stopPropagation(); event.preventDefault(); }
+      if (!_IN_TAURI) return;
+
+      const signedIn = _cloudAuthState.signedIn && !_cloudAuthState.anonymous;
+      if (signedIn) {
+        const popover = document.getElementById('profilePopover');
+        if (popover && !popover.hidden) closeProfilePopover();
+        else                            openProfilePopover();
         return;
       }
-      // Not signed in → kick off the sign-in dialog flow.
+      // Anonymous → kick off sign-in. Same postMessage the old
+      // cloud-pill used; main.js shows the dialog modal.
       try {
         window.parent.postMessage({ type: 'teddy.auth.signin_request' }, '*');
+      } catch (e) {
+        toast(e.message, true);
+      }
+    }
+
+    async function onProfilePopoverSignOut() {
+      closeProfilePopover();
+      // Confirm before signing out — same UX promise the old cloud-pill
+      // had (user's worked accumulated skills/memory, we don't want
+      // accidental clicks to lose continuity).
+      const who = _cloudAuthState.email || _cloudAuthState.displayName || 'this account';
+      const ok = await showConfirm({
+        title:       t('profile_signout_title') || 'Sign out?',
+        body:        (t('profile_signout_body') || "You'll return to anonymous mode. Your synced skills and memory stay safe — sign back in any time to restore them.")
+                     + '\n\n' + (t('profile_signout_account') || 'Account') + ': ' + who,
+        okLabel:     t('profile_signout_ok')     || 'Sign out',
+        cancelLabel: t('profile_signout_cancel') || 'Cancel',
+        danger:      false,
+      });
+      if (!ok) return;
+      try {
+        window.parent.postMessage({ type: 'teddy.auth.signout_request' }, '*');
       } catch (e) {
         toast(e.message, true);
       }
@@ -5223,7 +5507,7 @@
       const data = e.data || {};
       if (data.type !== 'teddy.auth.state') return;
       if (data.state) _cloudAuthState = data.state;
-      renderCloudPill();
+      renderProfileAvatar();
       renderUpgradePill();
     });
     document.addEventListener('DOMContentLoaded', () => {
@@ -5231,7 +5515,7 @@
       try {
         window.parent.postMessage({ type: 'teddy.auth.query' }, '*');
       } catch {}
-      renderCloudPill();
+      renderProfileAvatar();
       renderUpgradePill();
     });
 
