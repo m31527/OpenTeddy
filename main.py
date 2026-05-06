@@ -603,37 +603,44 @@ async def optimize_prompt(body: dict) -> dict:
     mode = (body.get("mode") or "code").strip()
     if not raw:
         return {"success": False, "data": None, "error": "prompt is required"}
-    if not (config.anthropic_api_key or "").strip():
+
+    # Route through the LLM provider abstraction so this endpoint
+    # benefits automatically when a non-Anthropic provider is wired
+    # (OpenRouter / Gemini / etc.). Today this is always Anthropic.
+    from llm_provider import get_default_provider, LLMProviderError
+    provider = get_default_provider()
+    if not provider.is_configured():
         return {
             "success": False,
             "data":    None,
-            "error":   "Claude API key is not configured. Set it in Settings → Model Settings → Claude API Key.",
+            "error":   provider.get_unconfigured_message(),
         }
 
     try:
-        import anthropic
-        client = anthropic.AsyncAnthropic(api_key=config.anthropic_api_key)
-        msg = await client.messages.create(
-            model=config.claude_model,
-            max_tokens=512,
+        response = await provider.complete_text(
+            user_message=f"[Mode: {mode}]\n\n{raw}",
             system=_PROMPT_OPTIMISER_SYSTEM,
-            messages=[{
-                "role": "user",
-                "content": f"[Mode: {mode}]\n\n{raw}",
-            }],
+            max_tokens=512,
         )
-        optimized = (msg.content[0].text or "").strip() if msg.content else ""
+        optimized = response.text
         if not optimized:
-            return {"success": False, "data": None, "error": "Claude returned empty text"}
+            return {
+                "success": False,
+                "data":    None,
+                "error":   f"{provider.provider_name} returned empty text",
+            }
         return {
             "success": True,
             "data": {
-                "optimized": optimized,
-                "tokens_in":  getattr(msg.usage, "input_tokens", 0),
-                "tokens_out": getattr(msg.usage, "output_tokens", 0),
+                "optimized":  optimized,
+                "tokens_in":  response.usage.input_tokens,
+                "tokens_out": response.usage.output_tokens,
             },
             "error": None,
         }
+    except LLMProviderError as exc:
+        logger.error("optimize_prompt provider error: %s", exc)
+        return {"success": False, "data": None, "error": str(exc)}
     except Exception as exc:  # noqa: BLE001
         logger.error("optimize_prompt failed: %s", exc)
         return {"success": False, "data": None, "error": str(exc)}
