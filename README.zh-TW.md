@@ -10,7 +10,7 @@
 
 本機模型自己跑不太動。OpenTeddy 在它外面包一層 — 強化過的 agent loop、會自動長出來的技能庫，以及恰到好處的商業模型補位 — 把它變成真的能完成任務的代理人。
 
-🌐 **官網：** [openteddy-72cee.web.app](https://openteddy-72cee.web.app/) &nbsp;·&nbsp; 📦 **原始碼：** [github.com/m31527/OpenTeddy](https://github.com/m31527/OpenTeddy)
+🌐 **官網：** [openteddy.net](https://openteddy.net/) &nbsp;·&nbsp; 📦 **原始碼：** [github.com/m31527/OpenTeddy](https://github.com/m31527/OpenTeddy)
 
 </div>
 

@@ -21,7 +21,7 @@ commercial-LLM escalation to finish what local can't.
   <a href="https://github.com/m31527/OpenTeddy/stargazers"><img alt="Stars" src="https://img.shields.io/github/stars/m31527/OpenTeddy?style=social" /></a>
 </p>
 
-🌐 **Web:** [openteddy-72cee.web.app](https://openteddy-72cee.web.app/) &nbsp;·&nbsp; 📦 **Source:** [github.com/m31527/OpenTeddy](https://github.com/m31527/OpenTeddy)
+🌐 **Web:** [https://openteddy.net/](https://openteddy.net/) &nbsp;·&nbsp; 📦 **Source:** [github.com/m31527/OpenTeddy](https://github.com/m31527/OpenTeddy)
 
 </div>
 
@@ -307,7 +307,7 @@ codebase:
   flips the upgrade pill off within ~1 sec of payment clearing.
 
 All Cloud Function code, Firestore Security Rules, and the auth bridge HTML
-live in [`desktop/`](desktop/) (functions/) and [`landing-page/`](https://openteddy-72cee.web.app/auth)
+live in [`desktop/`](desktop/) (functions/) and [`landing-page/`](https://openteddy.net/auth)
 respectively. Stripe-style webhook signatures are verified against
 HMAC-SHA256 of the raw body using a per-endpoint secret stored in Google
 Secret Manager (`firebase functions:secrets:set LEMONSQUEEZY_WEBHOOK_SECRET`).
