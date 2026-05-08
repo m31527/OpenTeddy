@@ -79,12 +79,27 @@ OPENTEDDY_MODULES = (
 )
 
 
+# ── Bundled data dirs ────────────────────────────────────────────────────
+# main.py resolves `static/` via os.path.dirname(__file__). In a
+# PyInstaller-frozen binary, __file__ points inside the _MEIxxxxx temp
+# dir that gets unpacked at launch. So we must explicitly copy the
+# OpenTeddy data dirs there at build time, otherwise:
+#   - GET / returns 500 (index.html not found, _rewrite_index_html
+#     crashes on FileNotFoundError)
+#   - /static/* serves nothing (StaticFiles mount skipped because
+#     `os.path.isdir(_static_dir)` is False on a fresh _MEI dir)
+# Format: list of (source, destination_within_bundle) tuples.
+DATA_DIRS = [
+    ("static", "static"),  # web UI: index.html, i18n.js, styles.css, OpenTeddy-logo.svg, …
+]
+
+
 # ── Analysis ─────────────────────────────────────────────────────────────
 a = Analysis(
     ["sidecar_main.py"],
     pathex=[ROOT],
     binaries=EXTRAS_BINARIES,
-    datas=EXTRAS_DATAS,
+    datas=EXTRAS_DATAS + DATA_DIRS,
     hiddenimports=EXTRAS_HIDDEN + OPENTEDDY_MODULES,
     hookspath=[],
     hooksconfig={},
