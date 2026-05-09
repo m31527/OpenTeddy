@@ -237,6 +237,33 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:  # type: ignore[type-arg]
         len(tool_registry.list_tools()),
         "enabled" if memory_manager.is_available else "disabled",
     )
+
+    # Validate the orchestrator model. Verified across hundreds of test
+    # runs: non-Gemma orchestrators (Qwen, Llama, etc.) regularly flub
+    # the planning role, and users with no Claude key configured won't
+    # have the escalation safety net to recover. Loud warning at startup
+    # is the cheapest place to surface this — log lines from sidecar's
+    # stderr show up under launchd's diagnostic capture, and the UI
+    # surfaces the same warning under the Settings dropdown.
+    _orch = (config.gemma_model or "").lower()
+    if not _orch.startswith("gemma"):
+        logger.warning(
+            "─" * 70 + "\n"
+            "  ⚠ Orchestrator model is %r — NOT a Gemma family model.\n"
+            "    Orchestration may misbehave; gemma3:4b is the validated\n"
+            "    pick for this role. Adjust at: Settings → Model Settings\n"
+            "    → Orchestrator Model (Gemma).\n"
+            + "─" * 70,
+            config.gemma_model,
+        )
+        if not (config.anthropic_api_key or "").strip():
+            logger.warning(
+                "  No Claude API key set either — there is no safety net\n"
+                "  when the local orchestrator fails. Tasks will fail hard\n"
+                "  rather than escalate. Configure either:\n"
+                "    (a) Settings → Orchestrator Model: pick gemma3:4b\n"
+                "    (b) Settings → Claude API Key: paste an Anthropic key\n"
+            )
     yield
 
     await executor.close()
@@ -1372,8 +1399,64 @@ async def upload_file(
     }
 
 
+def _orchestrator_is_gemma() -> bool:
+    """Return True if the configured orchestrator model is in the
+    Gemma family — the only family the orchestrator prompt format is
+    validated against. See main.py startup-time warning + the inline
+    UI guard for the broader rationale."""
+    return (config.gemma_model or "").lower().startswith("gemma")
+
+
+def _orchestrator_safety_check() -> Optional[str]:
+    """Pre-flight gate for /run. Returns a friendly error string
+    (which the caller should turn into a 400) when the user's
+    configuration is in a known-broken combination, else None.
+
+    Triggers when ALL three are true:
+      - Orchestrator model isn't a Gemma family (planning misbehaves)
+      - escalation_enabled is on (user expects Claude to fix it)
+      - But no Anthropic API key configured (Claude can't actually run)
+
+    That combo guarantees the first task will fail with no fallback,
+    so we'd rather bounce the request loudly here than have the user
+    discover the problem after watching a bunch of tool calls fail.
+    The fix is one of:
+      a) Change orchestrator → gemma3:4b (preferred — local, free)
+      b) Paste an Anthropic key in Settings (escalation kicks in
+         when local fails)
+    """
+    if _orchestrator_is_gemma():
+        return None
+    if not config.escalation_enabled:
+        return None  # local-only mode; user's choice
+    if (config.anthropic_api_key or "").strip():
+        return None  # has Claude as safety net
+    return (
+        "Your orchestrator model is set to "
+        f"{config.gemma_model!r}, which isn't from the Gemma family. "
+        "Gemma is the validated planner; other model families regularly "
+        "misbehave in this role.\n\n"
+        "You also have no Claude API key configured, so there's no "
+        "fallback when local planning fails.\n\n"
+        "Fix one of:\n"
+        "  • Settings → Model Settings → Orchestrator Model → pick "
+        "    a gemma3:* model (recommended — local + free)\n"
+        "  • Settings → Model Settings → Claude API Key → paste an "
+        "    Anthropic key (Claude takes over when local fails)"
+    )
+
+
 @app.post("/run", response_model=RunResponse, status_code=202)
 async def run_task(body: RunRequest) -> RunResponse:
+    # Pre-flight: refuse to start a task we can already see is going
+    # to fail. See _orchestrator_safety_check() for the rationale.
+    block_msg = _orchestrator_safety_check()
+    if block_msg:
+        # 400 (not 422) so generic FastAPI validation error handlers
+        # don't mangle the body — the UI displays our message verbatim.
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail=block_msg)
+
     # Use a client-supplied task_id when present so the UI can call
     # POST /tasks/{id}/cancel (Stop button) on the *same* id it sent.
     task_id = body.task_id or str(uuid.uuid4())

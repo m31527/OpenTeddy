@@ -3556,7 +3556,21 @@
               <div class="row" style="margin-bottom:0.85rem">
                 <div class="field">
                   <label data-i18n="orchestrator_label">Orchestrator Model (Gemma)</label>
-                  <select id="sel_orchestrator_model"><option value="" data-i18n="ollama_offline">⚠️ Ollama offline</option></select>
+                  <select id="sel_orchestrator_model" onchange="checkOrchestratorRecommended()"><option value="" data-i18n="ollama_offline">⚠️ Ollama offline</option></select>
+                  <!-- Inline guard. Toggled by checkOrchestratorRecommended()
+                       whenever the dropdown changes. Rationale: a non-Gemma
+                       orchestrator (Qwen, Llama, etc.) regularly flubs the
+                       planning role — verified across hundreds of test
+                       runs — and users with no Anthropic key in Settings
+                       don't even have a Claude fallback to paper over the
+                       failures. The warning is in-place rather than a
+                       toast so users notice at the moment of the change,
+                       not 5 minutes later when their first task fails. -->
+                  <div id="orch_warning" hidden
+                       style="margin-top:0.4rem;padding:0.45rem 0.6rem;background:rgba(220, 53, 69, 0.08);border-left:2px solid #c0392b;color:#c0392b;font-size:0.74rem;line-height:1.45;border-radius:4px"
+                       data-i18n="orchestrator_not_recommended">
+                    ⚠ Orchestration relies on Gemma's planning style. Qwen / Llama / etc. as orchestrator misbehave often — pick a gemma3:* model unless you really know what you're doing.
+                  </div>
                 </div>
                 <div class="field">
                   <label data-i18n="executor_label">Executor Model (Qwen)</label>
@@ -7451,13 +7465,26 @@
             <button class="model-chip-del" title="Delete" onclick="deleteModel('${escHtml(m.name)}')">✕</button>
           </div>
         `).join('');
-        const opts = _ollamaModels.map(m =>
+        // Build the options. Mark gemma* entries as "(Recommended)"
+        // for the orchestrator dropdown ONLY — qwen / llama / etc. are
+        // fine for the executor (where they actually outperform Gemma
+        // on tool-calling), but bad for orchestration. Two distinct
+        // option lists so the recommendation doesn't bleed across.
+        const orchOpts = _ollamaModels.map(m => {
+          const isGemma = m.name.toLowerCase().startsWith('gemma');
+          const sizeStr = m.size != null ? ' ('+m.size+' GB)' : '';
+          const tag     = isGemma ? ' ⭐ ' + (t('orchestrator_recommended_tag') || 'Recommended') : '';
+          return `<option value="${escHtml(m.name)}">${escHtml(m.name)}${sizeStr}${tag}</option>`;
+        }).join('');
+        const execOpts = _ollamaModels.map(m =>
           `<option value="${escHtml(m.name)}">${escHtml(m.name)}${m.size!=null?' ('+m.size+' GB)':''}</option>`
         ).join('');
-        selOrch.innerHTML = opts; selExec.innerHTML = opts;
+        selOrch.innerHTML = orchOpts; selExec.innerHTML = execOpts;
         selOrch.disabled  = false; selExec.disabled = false;
         if (selectedOrch && [...selOrch.options].some(o => o.value === selectedOrch)) selOrch.value = selectedOrch;
         if (selectedExec && [...selExec.options].some(o => o.value === selectedExec)) selExec.value = selectedExec;
+        // Sync the inline warning with the now-restored selection.
+        checkOrchestratorRecommended();
       } catch (e) {
         list.innerHTML = `<div style="color:var(--error);font-size:0.82rem">Failed to load: ${escHtml(e.message)}</div>`;
         _setOfflineDropdowns(selOrch, selExec);
@@ -7470,6 +7497,21 @@
         s.innerHTML = '<option value="">⚠️ Ollama offline</option>';
         s.disabled  = true;
       });
+    }
+
+    // Show / hide the "non-Gemma orchestrator" warning under the
+    // dropdown. Called on dropdown change AND after settings load.
+    // Anything starting with "gemma" (gemma3:4b, gemma2:9b, gemma3n:e2b,
+    // …) is fine; everything else surfaces the warning.
+    function checkOrchestratorRecommended() {
+      const sel  = document.getElementById('sel_orchestrator_model');
+      const warn = document.getElementById('orch_warning');
+      if (!sel || !warn) return;
+      const v = (sel.value || '').toLowerCase();
+      const isGemma = v.startsWith('gemma');
+      // Empty value = Ollama offline placeholder; don't warn (the
+      // offline state has its own messaging).
+      warn.hidden = !v || isGemma;
     }
 
     async function deleteModel(name) {
