@@ -139,13 +139,26 @@ class MemoryManager:
                 }],
                 ids=[memory_id],
             )
-            logger.debug(
+            logger.info(
                 "Memory stored id=%s type=%s task=%s",
                 memory_id[:8], memory_type, task_id,
             )
             return memory_id
         except Exception as exc:  # noqa: BLE001
-            logger.error("add_memory failed: %s", exc)
+            # Loud failure — earlier this was a one-line `logger.error`
+            # which (a) defaulted to a level log shows didn't capture
+            # well in production, and (b) gave no stack trace, which
+            # made the "Memory tab empty even though tasks complete"
+            # bug invisible. The actual error here was 'No module named
+            # onnxruntime' from ChromaDB's default embedder lazy-loading
+            # in a frozen binary that didn't bundle it. We need the
+            # exc_info=True so the next time something like this slips
+            # in we see it within seconds, not after a 4-script diag.
+            logger.exception(
+                "add_memory failed (memory will NOT be stored): "
+                "type=%s task=%s exc=%s",
+                memory_type, task_id, exc,
+            )
             return None
 
     # ── Read ──────────────────────────────────────────────────────────────────

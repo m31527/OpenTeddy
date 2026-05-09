@@ -43,8 +43,16 @@ EXTRAS_HIDDEN   = []
 
 for pkg in [
     "chromadb",          # hnswlib, parquet, sqlite — needs the works
+    "onnxruntime",       # ChromaDB's default embedder (ONNXMiniLM_L6_V2)
+                         # lazy-imports onnxruntime when collection.add()
+                         # first runs. Without it, every memory write
+                         # silently raises ImportError → swallowed by
+                         # add_memory's exception handler → embeddings
+                         # stay at 0 forever and the Memory tab is empty
+                         # despite tasks completing successfully.
+    "tokenizers",        # used transitively by anthropic + chromadb
+                         # default embedder (Rust ext for HF tokenisers)
     "pydantic_core",     # Rust core, easy to forget hidden imports
-    "tokenizers",        # used transitively by anthropic; Rust ext
     "anthropic",         # tokenizers + JSON schemas
     "fastapi",           # mostly fine but pulls starlette templates
     "uvicorn",           # multiple workers, websockets
