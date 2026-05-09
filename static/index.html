@@ -637,14 +637,22 @@
     .profile-avatar-img {
       width: 100%;
       height: 100%;
-      object-fit: cover;
+      object-fit: cover;     /* user photos crop-fill the circle */
       border-radius: 50%;
       display: block;
     }
+    /* OpenTeddy logo isn't a portrait — `cover` would crop it.
+       Use `contain` + padding so the brand mark sits nicely inside
+       the circle instead of being clipped at the edges. */
+    .profile-avatar-img.is-logo {
+      object-fit: contain;
+      padding: 4px;
+    }
     .profile-avatar-default {
-      font-size: 1.05rem;
+      font-size: 0.92rem;
+      font-weight: 600;
       line-height: 1;
-      filter: drop-shadow(0 0 2px rgba(0,0,0,0.2));
+      color: var(--text-primary);
     }
     .profile-avatar-badge {
       position: absolute;
@@ -3201,9 +3209,20 @@
                     onclick="onProfileAvatarClick(event)"
                     data-i18n-title="profile_avatar_anon_title"
                     title="Sign in / account menu">
-              <img class="profile-avatar-img" id="profileAvatarImg"
-                   src="" alt="" hidden />
-              <span class="profile-avatar-default" id="profileAvatarDefault">🐻</span>
+              <!-- Default to the OpenTeddy logo. JS swaps src to the
+                   user's Google photoURL when they sign in (and adds
+                   the .has-photo class so object-fit: cover crops
+                   their photo to fill the circle). On signOut JS
+                   resets back to the logo. We never show a third-
+                   party emoji here — the brand mark stays consistent
+                   for users who haven't connected an account. -->
+              <img class="profile-avatar-img is-logo" id="profileAvatarImg"
+                   src="/static/OpenTeddy-logo.svg" alt="OpenTeddy" />
+              <!-- Letter fallback for the rare case of signed-in
+                   users with no Google photoURL — first letter of
+                   name/email. Hidden by default; only shown when
+                   the user is signed in and has no photo. -->
+              <span class="profile-avatar-default" id="profileAvatarDefault" hidden></span>
               <!-- Tiny "✓" badge that overlays the avatar once the user
                    is signed in. Reuses the same green as the cloud-pill
                    so the visual language stays consistent. -->
@@ -5410,9 +5429,12 @@
 
     // ── Profile avatar (replaces cloud-pill) ────────────────────────────
     // Single auth-state surface in the bottom-right of the sidebar.
-    // Anonymous → bear glyph + click opens sign-in dialog.
+    // Anonymous → OpenTeddy logo + click opens sign-in dialog.
     // Signed-in → user's Google photoURL + click opens a popover with
     //             account info and Sign out.
+    // Signed-in without photo (rare) → first-letter glyph fallback.
+    const PROFILE_LOGO_SRC = '/static/OpenTeddy-logo.svg';
+
     function renderProfileAvatar() {
       const wrap     = document.querySelector('.profile-avatar-wrap');
       const btn      = document.getElementById('profileAvatar');
@@ -5433,26 +5455,34 @@
         btn.title = (t('profile_avatar_signed_in_title') || 'Signed in') + ' — ' + who;
         badge.hidden = false;
         if (_cloudAuthState.photoURL) {
+          // User photo — drop the is-logo class so object-fit: cover
+          // takes over and the photo crop-fills the circle.
+          img.classList.remove('is-logo');
           img.src    = _cloudAuthState.photoURL;
           img.alt    = who;
           img.hidden = false;
-          fallback.style.display = 'none';
+          fallback.hidden = true;
         } else {
           // Signed in but no photo (rare — Google account without an
-          // avatar). Show first letter of name/email instead of the
-          // bear, so it visually reads as "an account" not "anonymous".
+          // avatar). Show first letter of name/email so it visually
+          // reads as "an account" rather than "anonymous". Hide the
+          // img so the letter span gets the full circle.
           img.hidden = true;
-          fallback.style.display = '';
+          fallback.hidden = false;
           fallback.textContent = (who[0] || '?').toUpperCase();
         }
       } else {
+        // Anonymous → restore the OpenTeddy brand mark. is-logo class
+        // gives it object-fit: contain + 4px padding so it sits cleanly
+        // inside the circle border.
         btn.classList.remove('signed-in');
         btn.title = t('profile_avatar_anon_title') || 'Sign in to sync your account';
         badge.hidden = true;
-        img.hidden = true;
-        img.src = '';   // free up cached image so quick toggling doesn't flicker
-        fallback.style.display = '';
-        fallback.textContent = '🐻';
+        img.classList.add('is-logo');
+        img.src    = PROFILE_LOGO_SRC;
+        img.alt    = 'OpenTeddy';
+        img.hidden = false;
+        fallback.hidden = true;
       }
     }
 
