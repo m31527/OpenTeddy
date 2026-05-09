@@ -482,6 +482,21 @@
        renders. !important to make sure no future class-level styling
        can override it again. */
     .sidebar-login-btn[hidden] { display: none !important; }
+
+    /* ── Auth surface gating for plain-browser mode ──────────────────── */
+    /* Direct browser access (http://127.0.0.1:NNNNN, no Tauri shell)
+       has no postMessage bridge to Firebase, so every auth/upgrade
+       element is dead UI. Hide them all from first paint via a body
+       class flip in the early _IN_TAURI script — see the inline
+       script around line ~5300. CSS-level hide beats JS-level hide
+       because it doesn't flash visible while waiting for the render
+       functions to settle, which matters for screen-recording. */
+    body.in-browser .profile-avatar-wrap,
+    body.in-browser .upgrade-pill,
+    body.in-browser .cloud-pill,
+    body.in-browser .sidebar-login-btn {
+      display: none !important;
+    }
     .sidebar-login-btn {
       display: flex;
       align-items: center;
@@ -3772,6 +3787,25 @@
               </div>
             </div>
 
+            <!-- Danger zone — destructive operations on local state.
+                 Lives at the very bottom of the Settings tab below
+                 the regular form so users have to actively scroll
+                 past everything else to reach it (mild "are you sure"
+                 nudge). The actual confirmation goes through
+                 showConfirm() with explicit wording about what gets
+                 wiped. -->
+            <div class="settings-section collapsed" style="border-color: rgba(220, 53, 69, 0.18); margin-top: 1.4rem;">
+              <h3 onclick="toggleSettingsSection(this)" style="color: #c0392b" data-i18n="reset_heading">⚠ Danger Zone</h3>
+              <div class="settings-section-body">
+                <div style="font-size:0.78rem;color:var(--text-secondary);margin-bottom:0.9rem;line-height:1.5" data-i18n="reset_desc">
+                  Wipes every byte of local OpenTeddy state — task history, learned skills, long-term memory, agent workspace, and signed-in account. The app then drops back to the Get Started screen as if it were a fresh install. Cannot be undone.
+                </div>
+                <button class="btn-ghost" onclick="resetOpenTeddy()" id="resetOpenTeddyBtn"
+                        style="background: rgba(220, 53, 69, 0.08); color: #c0392b; border-color: rgba(220, 53, 69, 0.28);"
+                        data-i18n="btn_reset_openteddy">Reset OpenTeddy</button>
+              </div>
+            </div>
+
             <div class="settings-save-row">
               <button class="btn-primary" onclick="saveSettings()" id="saveSettingsBtn" data-i18n="btn_save_settings">Save Settings</button>
               <button class="btn-ghost" onclick="downloadDiagnostics()" id="diagBtn" data-i18n="btn_download_diagnostics" title="" data-i18n-title="diagnostics_hint">⬇ Download diagnostic logs</button>
@@ -5290,6 +5324,21 @@
         return window.parent && window.parent !== window;
       } catch (_) { return false; }
     })();
+
+    // Tag <body> with a class so CSS rules can hide every auth-related
+    // surface in plain-browser mode WITHOUT waiting for the per-element
+    // JS render functions to fire. Critical for screen-recording and
+    // for users who want to access OpenTeddy via a regular browser
+    // (http://127.0.0.1:NNNNN) — they should see ZERO sign-in / sign-out /
+    // upgrade UI, since none of those flows can complete without the
+    // Tauri shell's postMessage bridge to Firebase.
+    //
+    // The class flip happens BEFORE first paint (this script tag runs
+    // synchronously inline in <head>); paired CSS rules below use
+    // `body:not(.in-tauri) .auth-only-element { display: none }` so
+    // the elements never even flash visible.
+    if (_IN_TAURI) document.body.classList.add('in-tauri');
+    else           document.body.classList.add('in-browser');
 
     // Sidebar Sign-in button is currently hidden everywhere — Phase 4
     // auth (Firebase Google sign-in + Stripe) isn't wired up yet, so
@@ -7680,6 +7729,71 @@
       } catch (e) {
         toast((t('diagnostics_failed') || 'Download failed') + ': ' + e.message, true);
       } finally {
+        btn.textContent = original;
+        btn.disabled = false;
+      }
+    }
+
+    // ── Reset OpenTeddy ─────────────────────────────────────────────────
+    // Hard reset: wipe SQLite tasks/skills DB, ChromaDB long-term memory,
+    // skills directory, agent workspace. After the backend confirms the
+    // wipe, we ALSO need to clear the desktop's two pieces of WebView /
+    // Tauri state that the backend can't reach:
+    //   - splash's localStorage `teddy.onboarding.completedAt`
+    //   - the `real_signin.txt` sentinel under com.openteddy.desktop/
+    // We do that by postMessaging the Tauri shell, which invokes
+    // `clear_real_signin` then `return_to_splash` (the latter also
+    // eval's the localStorage clear in splash window's webview).
+    //
+    // In plain-browser mode there's no Tauri shell to bridge to, so
+    // we just reload the page after the backend wipes data.
+    async function resetOpenTeddy() {
+      const btn = document.getElementById('resetOpenTeddyBtn');
+      const ok = await showConfirm({
+        title:       t('reset_confirm_title')   || 'Reset OpenTeddy?',
+        body:        t('reset_confirm_body')    ||
+                     'This will permanently delete:\n' +
+                     '  • All task history and tracker records\n' +
+                     '  • Every learned skill in skills/\n' +
+                     '  • Long-term memory (ChromaDB)\n' +
+                     '  • Agent workspace files\n' +
+                     '  • Your signed-in account on this device\n\n' +
+                     'The app will return to the Get Started screen. ' +
+                     'This cannot be undone.',
+        okLabel:     t('reset_confirm_ok')      || 'Reset everything',
+        cancelLabel: t('reset_confirm_cancel')  || 'Cancel',
+        danger:      true,
+      });
+      if (!ok) return;
+
+      btn.disabled = true;
+      const original = btn.textContent;
+      btn.textContent = '⏳ ' + (t('reset_running') || 'Wiping…');
+      try {
+        const res = await fetch(`${API}/admin/reset`, { method: 'POST' });
+        if (!res.ok) {
+          const txt = await res.text().catch(() => '');
+          throw new Error('HTTP ' + res.status + (txt ? ' — ' + txt : ''));
+        }
+        toast(t('reset_done') || '✅ OpenTeddy reset — returning to Get Started');
+        // Defer the splash-routing postMessage so the toast has a beat
+        // to render before the iframe's parent flips windows.
+        setTimeout(() => {
+          if (_IN_TAURI) {
+            try {
+              window.parent.postMessage({ type: 'teddy.reset_complete' }, '*');
+            } catch (e) {
+              console.error('[reset] postMessage failed:', e);
+              location.reload();
+            }
+          } else {
+            // Plain browser — no shell to swap windows; just reload
+            // so the user sees a clean state.
+            location.reload();
+          }
+        }, 800);
+      } catch (e) {
+        toast((t('reset_failed') || 'Reset failed') + ': ' + e.message, true);
         btn.textContent = original;
         btn.disabled = false;
       }

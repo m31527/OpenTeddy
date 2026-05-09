@@ -15,7 +15,7 @@ import uuid
 import httpx
 from contextlib import asynccontextmanager
 from datetime import datetime
-from typing import AsyncGenerator, Optional
+from typing import Any, AsyncGenerator, Optional
 
 from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -644,6 +644,132 @@ async def optimize_prompt(body: dict) -> dict:
     except Exception as exc:  # noqa: BLE001
         logger.error("optimize_prompt failed: %s", exc)
         return {"success": False, "data": None, "error": str(exc)}
+
+
+@app.post("/admin/reset")
+async def admin_reset() -> dict:
+    """Factory-reset endpoint — wipe all local OpenTeddy state.
+
+    Surfaced via the Settings → Danger Zone → Reset OpenTeddy button.
+    Used both for "I want to start clean" UX and for sign-out flows
+    on desktop (the Tauri shell follows up by clearing its own
+    real_signin sentinel + return_to_splash).
+
+    What gets wiped (in order, so tracker + memory close cleanly
+    before the underlying files vanish):
+
+      1. tracker.db — every row from every user table via DELETE FROM,
+         enumerated through sqlite_master so we don't hardcode the
+         schema. We DON'T drop tables (would leave the schema dirty
+         for the next request) — just empty them.
+      2. memory_db (ChromaDB) — clear_all() drops + recreates the
+         collection so the on-disk hnswlib index is fresh.
+      3. skills/*.py — every auto-generated skill file. The bundled
+         _premium.py and __init__.py are protected by the gitignore
+         whitelist so they aren't part of the runtime wipeable set;
+         we rm only files matching the {name}.py pattern that the
+         factory writes.
+      4. agent-workspace/* — every clone, build, file the agent
+         created. rmdir + recreate so the path itself stays valid.
+
+    What we DON'T touch:
+      - The Tauri shell's localStorage `teddy.onboarding.completedAt`
+      - The com.openteddy.desktop/real_signin.txt sentinel
+      Both live OUTSIDE the OpenTeddy data dir and the backend can't
+      reach them; the iframe's resetOpenTeddy() in static/index.html
+      postMessages to the Tauri shell after this endpoint returns,
+      and the shell handles its own state. Plain-browser users just
+      reload the page (their backend state is reset, frontend state
+      is in memory only).
+
+    Returns a small JSON summary the UI uses to render the toast.
+    """
+    import shutil
+    summary: dict[str, Any] = {"success": True, "wiped": {}}
+
+    # 1. SQLite — tracker tables. Use sqlite_master to enumerate so
+    #    we never have to update this when the schema gains a new
+    #    table. PRAGMA writable_schema would let us nuke schemas too,
+    #    but DELETE FROM is enough for a logical reset and keeps the
+    #    schema intact for subsequent calls.
+    try:
+        async with tracker.db.execute(
+            "SELECT name FROM sqlite_master "
+            "WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+        ) as cursor:
+            rows = await cursor.fetchall()
+        table_names = [r[0] for r in rows]
+        for name in table_names:
+            await tracker.db.execute(f"DELETE FROM {name}")
+        await tracker.db.commit()
+        # VACUUM reclaims the disk space the deleted rows used to
+        # occupy — without this the .db file size doesn't shrink and
+        # the user's "clean install" still feels heavy on disk.
+        await tracker.db.execute("VACUUM")
+        await tracker.db.commit()
+        summary["wiped"]["tracker_tables"] = table_names
+    except Exception as exc:  # noqa: BLE001
+        logger.error("admin_reset: tracker wipe failed: %s", exc)
+        summary["success"] = False
+        summary["error"] = f"tracker: {exc}"
+        return summary
+
+    # 2. ChromaDB — memory_manager exposes clear_all() that drops +
+    #    recreates the collection, which is the cheapest way to fully
+    #    reset hnswlib state.
+    try:
+        deleted = await memory_manager.clear_all()
+        summary["wiped"]["memory_records"] = int(deleted)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("admin_reset: memory wipe failed (continuing): %s", exc)
+        summary["wiped"]["memory_records"] = "error"
+
+    # 3. Skills directory — every auto-generated *.py. Keep _premium.py
+    #    + __init__.py + .gitkeep (the OSS-shipped helpers).
+    skills_wiped = 0
+    try:
+        skills_dir = config.skills_dir
+        if os.path.isdir(skills_dir):
+            for name in os.listdir(skills_dir):
+                if name in {"__init__.py", "_premium.py", ".gitkeep"}:
+                    continue
+                path = os.path.join(skills_dir, name)
+                if os.path.isfile(path):
+                    os.remove(path)
+                    skills_wiped += 1
+                elif os.path.isdir(path):
+                    shutil.rmtree(path, ignore_errors=True)
+                    skills_wiped += 1
+        summary["wiped"]["skill_files"] = skills_wiped
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("admin_reset: skills wipe failed (continuing): %s", exc)
+        summary["wiped"]["skill_files"] = "error"
+
+    # 4. Agent workspace — wholesale rm + mkdir. We deliberately don't
+    #    iterate (workspace can have tens of thousands of files inside
+    #    .git directories from agent-cloned repos; rmtree + recreate
+    #    is orders of magnitude faster than per-file unlink).
+    try:
+        ws_dir = config.agent_workspace_dir
+        if os.path.isdir(ws_dir):
+            shutil.rmtree(ws_dir, ignore_errors=True)
+        os.makedirs(ws_dir, exist_ok=True)
+        summary["wiped"]["agent_workspace"] = ws_dir
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("admin_reset: workspace wipe failed (continuing): %s", exc)
+        summary["wiped"]["agent_workspace"] = "error"
+
+    # Reload settings into config so the in-memory copy reflects the
+    # post-wipe defaults instead of the pre-wipe overrides the user
+    # had set. Without this, Settings → Save would write the OLD
+    # values straight back to a fresh DB.
+    try:
+        await config.reload_from_store(settings_store)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("admin_reset: config reload failed: %s", exc)
+
+    logger.info("admin_reset: complete — %s", summary["wiped"])
+    return summary
 
 
 @app.get("/admin/diagnostics")
