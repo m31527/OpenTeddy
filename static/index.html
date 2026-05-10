@@ -3613,6 +3613,66 @@
                   <input type="text" id="inp_claude_model" data-i18n-placeholder="claude_model_placeholder" placeholder="claude-opus-4-6" />
                 </div>
               </div>
+
+              <!-- ── Cloud LLM Provider switcher (Phase: OpenRouter) ──
+                   Lets the user route cloud-side calls (escalation,
+                   skill generation, summary, prompt optimiser) through
+                   OpenRouter instead of direct Anthropic. The two
+                   OpenRouter fields below the dropdown auto-show /
+                   hide based on this selection — see syncProviderUI().
+                   This whole row stays compact when the user is on
+                   the default Anthropic path; only expands when they
+                   actively pick OpenRouter. -->
+              <div class="row" style="margin-bottom:0.85rem">
+                <div class="field">
+                  <label data-i18n="llm_provider_label">Cloud LLM Provider</label>
+                  <select id="sel_llm_provider" onchange="syncProviderUI()">
+                    <option value="anthropic" data-i18n="llm_provider_opt_anthropic">Anthropic (direct — recommended)</option>
+                    <option value="openrouter" data-i18n="llm_provider_opt_openrouter">OpenRouter (GPT-4o / Gemini / Llama / Claude-via-OR)</option>
+                  </select>
+                </div>
+              </div>
+              <!-- OpenRouter-specific fields. Hidden by default; shown
+                   only when sel_llm_provider === 'openrouter'. -->
+              <div class="row openrouter-row" id="row_openrouter" hidden style="margin-bottom:1.25rem">
+                <div class="field" style="flex:2">
+                  <label class="label-with-info">
+                    <span data-i18n="openrouter_api_key_label">OpenRouter API Key</span>
+                    <a class="info-dot" href="https://openrouter.ai/keys"
+                       target="_blank" rel="noopener noreferrer"
+                       data-i18n-title="openrouter_api_key_info"
+                       title="Get your key from openrouter.ai/keys">i</a>
+                  </label>
+                  <input type="password" id="inp_openrouter_api_key"
+                    data-i18n-placeholder="openrouter_api_key_placeholder"
+                    placeholder="sk-or-v1-…" autocomplete="off" />
+                </div>
+                <div class="field">
+                  <label class="label-with-info">
+                    <span data-i18n="openrouter_model_label">OpenRouter Model</span>
+                    <a class="info-dot" href="https://openrouter.ai/models"
+                       target="_blank" rel="noopener noreferrer"
+                       data-i18n-title="openrouter_model_info"
+                       title="Browse the full catalogue at openrouter.ai/models">i</a>
+                  </label>
+                  <!-- Datalist gives a searchable dropdown of curated
+                       picks while still allowing free-form entry for
+                       any of OpenRouter's 100+ catalogue ids. -->
+                  <input type="text" id="inp_openrouter_model"
+                         list="openrouter_model_suggestions"
+                         placeholder="anthropic/claude-sonnet-4" />
+                  <datalist id="openrouter_model_suggestions">
+                    <option value="anthropic/claude-sonnet-4">Claude Sonnet 4 — same tier as the Anthropic default</option>
+                    <option value="anthropic/claude-opus-4">Claude Opus 4 — strongest reasoning, more expensive</option>
+                    <option value="openai/gpt-4o">GPT-4o — fast, cheap, good tool use</option>
+                    <option value="openai/gpt-4-turbo">GPT-4 Turbo — older but stable</option>
+                    <option value="google/gemini-2.0-pro">Gemini 2.0 Pro — Google's tier-1</option>
+                    <option value="meta-llama/llama-3.3-70b-instruct">Llama 3.3 70B — open weights via OR</option>
+                    <option value="deepseek/deepseek-chat">DeepSeek Chat — very cheap, weaker tool use</option>
+                  </datalist>
+                </div>
+              </div>
+
               <div class="row" style="margin-bottom:1.25rem">
                 <div class="field">
                   <label data-i18n="gemma_url_label">Orchestrator Ollama URL</label>
@@ -7375,6 +7435,15 @@
         loadPerfStats().catch(() => {});
         _setInput('inp_claude_model',      s.claude_model?.value      ?? '');
         _setInput('inp_anthropic_api_key', s.anthropic_api_key?.value ?? '');
+        // OpenRouter trio. Provider select drives whether the OR
+        // fields are visible — sync after setting all three values.
+        const providerEl = document.getElementById('sel_llm_provider');
+        if (providerEl) {
+          providerEl.value = s.llm_provider?.value || 'anthropic';
+        }
+        _setInput('inp_openrouter_api_key', s.openrouter_api_key?.value ?? '');
+        _setInput('inp_openrouter_model',   s.openrouter_model?.value   ?? '');
+        syncProviderUI();
         const escEl = document.getElementById('chk_escalation_enabled');
         if (escEl) {
           const v = String(s.escalation_enabled?.value ?? 'true').toLowerCase();
@@ -7512,6 +7581,20 @@
       // Empty value = Ollama offline placeholder; don't warn (the
       // offline state has its own messaging).
       warn.hidden = !v || isGemma;
+    }
+
+    // Show / hide the OpenRouter key + model fields based on the
+    // Cloud LLM Provider selector. Called on selector change AND
+    // after settings load. Hiding the OR fields when Anthropic is
+    // selected stops the user from accidentally putting a Bearer
+    // token into the wrong place + keeps the Settings tab compact
+    // for the 90% of users who never touch this.
+    function syncProviderUI() {
+      const sel = document.getElementById('sel_llm_provider');
+      const row = document.getElementById('row_openrouter');
+      if (!sel || !row) return;
+      const isOpenRouter = sel.value === 'openrouter';
+      row.hidden = !isOpenRouter;
     }
 
     async function deleteModel(name) {
@@ -7880,6 +7963,9 @@
         executor_model:            document.getElementById('sel_executor_model').value,
         claude_model:              document.getElementById('inp_claude_model').value.trim(),
         anthropic_api_key:         document.getElementById('inp_anthropic_api_key').value.trim(),
+        llm_provider:              document.getElementById('sel_llm_provider')?.value || 'anthropic',
+        openrouter_api_key:        document.getElementById('inp_openrouter_api_key')?.value.trim() || '',
+        openrouter_model:          document.getElementById('inp_openrouter_model')?.value.trim() || '',
         escalation_enabled:        document.getElementById('chk_escalation_enabled').checked ? 'true' : 'false',
         streaming_enabled:         document.getElementById('chk_streaming_enabled').checked ? 'true' : 'false',
         gemma_base_url:            document.getElementById('inp_gemma_base_url').value.trim(),

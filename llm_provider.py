@@ -476,24 +476,371 @@ class AnthropicProvider(LLMProvider):
         return out
 
 
+# ── OpenRouter implementation ────────────────────────────────────────────────
+#
+# OpenRouter is an OpenAI-compatible aggregator. Same /chat/completions
+# endpoint shape as the official OpenAI API, but with an `Authorization:
+# Bearer <key>` header and the model id namespaced by upstream provider
+# (e.g. ``"anthropic/claude-sonnet-4"``, ``"openai/gpt-4o"``,
+# ``"google/gemini-2.0-pro"``).
+#
+# Why we don't reuse AnthropicProvider's history: OpenAI's tool-use
+# protocol is structurally different from Anthropic's. Where Anthropic
+# uses content blocks (assistant turns hold a list of {type:tool_use|
+# text} blocks; user turns can hold tool_result blocks), OpenAI uses
+# a flat ``tool_calls`` array on the assistant message + role:tool
+# messages for results. Two representations, two histories.
+#
+# We KEEP the public LLMToolTurnResponse / LLMToolUse / LLMToolResult
+# interface identical though — callers are agnostic, only the bytes
+# on the wire differ.
+
+
+class _OpenRouterHistory(LLMHistory):
+    """History stored in OpenAI's chat-completions message shape.
+
+    OpenAI format reminder:
+      * user:    ``{"role": "user", "content": "text"}``
+      * assistant (text only):
+          ``{"role": "assistant", "content": "text"}``
+      * assistant (with tool calls):
+          ``{"role": "assistant", "content": null,
+             "tool_calls": [{
+                 "id": "call_…",
+                 "type": "function",
+                 "function": {"name": "…", "arguments": "<JSON>"}
+             }]}``
+        Note that ``arguments`` is a **JSON-encoded string**, not an
+        object — that's an OpenAI quirk we have to honour exactly or
+        models 422 us at the API.
+      * tool result:
+          ``{"role": "tool", "tool_call_id": "call_…", "content": "…"}``
+        One message per tool call, NOT a content-block list like
+        Anthropic.
+    """
+
+    def __init__(self) -> None:
+        self.messages: List[Dict[str, Any]] = []
+
+    def add_user_message(self, text: str) -> None:
+        self.messages.append({"role": "user", "content": text})
+
+    def add_assistant_turn(self, response: LLMToolTurnResponse) -> None:
+        # Convert our normalised response back into OpenAI's split shape.
+        # Two cases:
+        #   * No tool calls → simple text-content assistant message.
+        #   * Tool calls present → `content: null` + `tool_calls` array.
+        #     Including a non-null content with tool_calls in the SAME
+        #     message is OpenAI-spec-legal but most models reject it
+        #     with 400, so we put any text into a SEPARATE preceding
+        #     assistant message when both are present.
+        text = response.text or ""
+        if not response.tool_uses:
+            # Pure text turn.
+            self.messages.append({"role": "assistant", "content": text})
+            return
+
+        # Tool-using turn. If the model also produced text alongside the
+        # tool_uses (Claude-via-OpenRouter does this often, raw GPT-4
+        # rarely), split into two assistant messages so neither rejects.
+        if text.strip():
+            self.messages.append({"role": "assistant", "content": text})
+
+        tool_calls = []
+        for tu in response.tool_uses:
+            tool_calls.append({
+                "id":   tu.id,
+                "type": "function",
+                "function": {
+                    "name":      tu.name,
+                    # OpenAI requires this as a JSON-encoded STRING, not
+                    # an object. Models 422 the request if we send the
+                    # raw dict.
+                    "arguments": json_dumps(tu.input),
+                },
+            })
+        self.messages.append({
+            "role":       "assistant",
+            "content":    None,
+            "tool_calls": tool_calls,
+        })
+
+    def add_tool_results(self, results: List[LLMToolResult]) -> None:
+        # OpenAI: one message per tool result, role:tool, tool_call_id
+        # binds it back to the originating call. is_error has no native
+        # representation in OpenAI's protocol — we stuff it as a prefix
+        # on the content string so the model still sees the signal.
+        for r in results:
+            content = r.content or "(no output)"
+            if r.is_error:
+                content = "[ERROR] " + content
+            self.messages.append({
+                "role":         "tool",
+                "tool_call_id": r.tool_use_id,
+                "content":      content,
+            })
+
+
+def json_dumps(obj: Any) -> str:
+    """Stable, compact JSON encoding for OpenAI's `arguments` field.
+    Module-level helper so the import can be lazy at the top of the
+    file (json is std-lib but we keep imports explicit per provider)."""
+    import json
+    return json.dumps(obj, ensure_ascii=False, separators=(",", ":"))
+
+
+class OpenRouterProvider(LLMProvider):
+    """LLMProvider that talks to OpenRouter's OpenAI-compat endpoint.
+
+    Configuration lives in ``config.openrouter_api_key`` +
+    ``config.openrouter_model``. Selecting OpenRouter over Anthropic is
+    a single ``config.llm_provider`` flip — see
+    :func:`get_default_provider`.
+
+    What's different from AnthropicProvider:
+      * Auth: ``Authorization: Bearer <key>`` header (not Anthropic's
+        ``x-api-key``).
+      * Endpoint: ``POST /chat/completions`` against
+        https://openrouter.ai/api/v1
+      * Message shape: flat OpenAI tool_calls (see _OpenRouterHistory)
+      * Tool-schema shape: OpenRouter accepts ``{type:"function",
+        function:{name, description, parameters}}`` directly — which is
+        the same shape ToolRegistry.get_schemas() already emits, so
+        no conversion needed.
+      * Optional headers ``HTTP-Referer`` + ``X-Title``: OpenRouter's
+        analytics ranks apps by these. We send them so OpenTeddy shows
+        up in OpenRouter's "popular apps" list (free marketing).
+
+    Uses httpx instead of an SDK because OpenRouter doesn't ship one
+    and the OpenAI Python SDK is overkill for this single endpoint.
+    """
+
+    BASE_URL = "https://openrouter.ai/api/v1"
+
+    def __init__(self) -> None:
+        self._client: Any = None  # lazy httpx.AsyncClient
+        self._cached_key: Optional[str] = None
+
+    # ── Identity ─────────────────────────────────────────────────────────────
+
+    @property
+    def model_name(self) -> str:
+        from config import config
+        # Default to Claude Sonnet via OpenRouter when nothing's
+        # configured — most consistent capability tier across the
+        # OpenRouter catalogue and matches the Anthropic baseline.
+        return getattr(config, "openrouter_model", None) or "anthropic/claude-sonnet-4"
+
+    @property
+    def provider_name(self) -> str:
+        return "openrouter"
+
+    def is_configured(self) -> bool:
+        from config import config
+        return bool((getattr(config, "openrouter_api_key", "") or "").strip())
+
+    def get_unconfigured_message(self) -> str:
+        return (
+            "OpenRouter API key is not configured. Open Settings → Model "
+            "Settings → LLM Provider → pick OpenRouter and paste a key "
+            "from openrouter.ai/keys, or switch back to Anthropic."
+        )
+
+    # ── Conversation factory ─────────────────────────────────────────────────
+
+    def new_history(self) -> LLMHistory:
+        return _OpenRouterHistory()
+
+    # ── Internals ────────────────────────────────────────────────────────────
+
+    def _get_client(self) -> Any:
+        """Lazy httpx.AsyncClient. Rebuilt whenever the key changes so
+        the Settings UI's hot-reload of credentials takes effect on
+        the next request without restarting uvicorn."""
+        from config import config
+        import httpx
+        key = (getattr(config, "openrouter_api_key", "") or "").strip()
+        if self._client is None or self._cached_key != key:
+            # Close the old client so we don't leak connections when
+            # the user rotates their key.
+            if self._client is not None:
+                # httpx clients close cleanly via aclose(), but we're
+                # in a sync getter so just drop the ref — the GC + the
+                # client's __del__ will tear sockets down.
+                self._client = None
+            self._client = httpx.AsyncClient(
+                base_url=self.BASE_URL,
+                # Generous timeout — OpenRouter routes to the actual
+                # upstream provider, so latency stacks. 90s covers
+                # Claude on a long-context tool-use turn.
+                timeout=httpx.Timeout(90.0, connect=10.0),
+                headers={
+                    "Authorization": f"Bearer {key}",
+                    # OpenRouter's app-leaderboard headers. Optional but
+                    # cheap visibility for OpenTeddy.
+                    "HTTP-Referer": "https://openteddy.net",
+                    "X-Title":      "OpenTeddy",
+                },
+            )
+            self._cached_key = key
+        return self._client
+
+    @staticmethod
+    def _parse_response(payload: Dict[str, Any]) -> LLMToolTurnResponse:
+        """Decode OpenRouter's chat-completion response into our
+        normalised LLMToolTurnResponse. Tolerates the various dialects
+        different upstreams use (Claude-via-OpenRouter sometimes
+        returns content as a list of blocks, GPT-4 returns a string)."""
+        choices = payload.get("choices") or []
+        if not choices:
+            return LLMToolTurnResponse(text="", tool_uses=[], usage=LLMUsage())
+        msg = choices[0].get("message") or {}
+
+        # Text content. Most upstreams: string. Some (Claude on OR):
+        # list of {type, text} dicts. Coalesce into one string.
+        text_val = msg.get("content")
+        if isinstance(text_val, list):
+            text = "\n\n".join(
+                p.get("text", "") for p in text_val
+                if isinstance(p, dict) and p.get("type") == "text"
+            )
+        else:
+            text = (text_val or "").strip()
+
+        # Tool calls. OpenAI shape: list of {id, type, function:{name,
+        # arguments}} where arguments is a JSON-encoded string.
+        tool_uses: List[LLMToolUse] = []
+        for tc in (msg.get("tool_calls") or []):
+            fn = tc.get("function") or {}
+            raw_args = fn.get("arguments") or "{}"
+            try:
+                import json
+                args = json.loads(raw_args) if isinstance(raw_args, str) else dict(raw_args)
+            except Exception:  # noqa: BLE001
+                # Some models occasionally produce malformed JSON; pass
+                # the raw string through as a single 'raw' arg so the
+                # tool can still try to recover.
+                args = {"_raw": raw_args}
+            tool_uses.append(LLMToolUse(
+                id=tc.get("id", ""),
+                name=fn.get("name", ""),
+                input=args if isinstance(args, dict) else {},
+            ))
+
+        # Usage. OpenAI uses prompt_tokens / completion_tokens; some
+        # OpenRouter responses also include them under .usage.
+        usage_raw = payload.get("usage") or {}
+        usage = LLMUsage(
+            input_tokens=int(usage_raw.get("prompt_tokens", 0) or 0),
+            output_tokens=int(usage_raw.get("completion_tokens", 0) or 0),
+        )
+
+        return LLMToolTurnResponse(text=text, tool_uses=tool_uses, usage=usage)
+
+    # ── Text completion ──────────────────────────────────────────────────────
+
+    async def complete_text(
+        self,
+        user_message: str,
+        system: Optional[str] = None,
+        max_tokens: int = 2048,
+    ) -> LLMTextResponse:
+        client = self._get_client()
+        messages: List[Dict[str, Any]] = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": user_message})
+
+        try:
+            resp = await client.post(
+                "/chat/completions",
+                json={
+                    "model":      self.model_name,
+                    "messages":   messages,
+                    "max_tokens": max_tokens,
+                },
+            )
+            resp.raise_for_status()
+            payload = resp.json()
+        except Exception as exc:  # noqa: BLE001
+            raise LLMProviderError(str(exc)) from exc
+
+        parsed = self._parse_response(payload)
+        return LLMTextResponse(text=parsed.text, usage=parsed.usage)
+
+    # ── Tool-use loop ────────────────────────────────────────────────────────
+
+    async def complete_with_tools(
+        self,
+        history: LLMHistory,
+        tools: List[Dict[str, Any]],
+        system: Optional[str] = None,
+        max_tokens: int = 4096,
+    ) -> LLMToolTurnResponse:
+        if not isinstance(history, _OpenRouterHistory):
+            raise LLMProviderError(
+                "OpenRouterProvider received non-OpenRouter history "
+                f"({type(history).__name__}); call provider.new_history() "
+                "to get a compatible instance."
+            )
+
+        client = self._get_client()
+        # ToolRegistry already emits the OpenAI shape — no conversion
+        # needed. (That's the whole reason we picked this shape for the
+        # interface; see LLMProvider.complete_with_tools docstring.)
+        messages = list(history.messages)
+        if system:
+            # OpenAI puts system as the FIRST message with role:system,
+            # not as a top-level kwarg the way Anthropic does.
+            messages = [{"role": "system", "content": system}] + messages
+
+        try:
+            resp = await client.post(
+                "/chat/completions",
+                json={
+                    "model":      self.model_name,
+                    "messages":   messages,
+                    "tools":      tools,
+                    "max_tokens": max_tokens,
+                },
+            )
+            resp.raise_for_status()
+            payload = resp.json()
+        except Exception as exc:  # noqa: BLE001
+            raise LLMProviderError(str(exc)) from exc
+
+        return self._parse_response(payload)
+
+
 # ── Default provider factory ─────────────────────────────────────────────────
 
 _DEFAULT_PROVIDER: Optional[LLMProvider] = None
+_DEFAULT_PROVIDER_NAME: Optional[str] = None
 
 
 def get_default_provider() -> LLMProvider:
-    """Return the configured default provider (today: always Anthropic).
+    """Return the configured default provider, switching on the
+    ``config.llm_provider`` setting:
 
-    This is the single integration point for adding OpenRouter / OpenAI:
-    swap on a future ``config.llm_provider`` setting and return a
-    different implementation. Every cloud-side call site already routes
-    through this function, so no other file needs to change.
+      * ``"anthropic"`` (default) → :class:`AnthropicProvider`
+      * ``"openrouter"``           → :class:`OpenRouterProvider`
 
-    Cached as a module-level singleton — the underlying SDK client
-    inside the provider already does its own key-change re-init, so a
-    long-lived provider instance is correct.
+    Cached as a module-level singleton, BUT we also remember which
+    provider name we cached — if the user flips the setting via
+    Settings UI, the next call rebuilds. (Plain key-rotation is
+    handled inside the provider's _get_client(), but a provider-name
+    flip needs a fresh instance.)
     """
-    global _DEFAULT_PROVIDER
-    if _DEFAULT_PROVIDER is None:
+    global _DEFAULT_PROVIDER, _DEFAULT_PROVIDER_NAME
+    from config import config
+    requested = (getattr(config, "llm_provider", None) or "anthropic").lower()
+    if _DEFAULT_PROVIDER is not None and _DEFAULT_PROVIDER_NAME == requested:
+        return _DEFAULT_PROVIDER
+    if requested == "openrouter":
+        _DEFAULT_PROVIDER = OpenRouterProvider()
+    else:
+        # Anything else (including unset / typo) falls back to
+        # Anthropic — the validated default.
         _DEFAULT_PROVIDER = AnthropicProvider()
+    _DEFAULT_PROVIDER_NAME = requested
     return _DEFAULT_PROVIDER

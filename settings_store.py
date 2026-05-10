@@ -44,6 +44,35 @@ SETTINGS_META: dict[str, dict[str, Any]] = {
                         "Get one at console.anthropic.com → Settings → API Keys.",
         "type":        "secret",
     },
+    # ── OpenRouter (alternative cloud LLM provider) ─────────────────────
+    "llm_provider": {
+        "label":       "Cloud LLM Provider",
+        "description": "Where to route cloud-side calls (escalation, "
+                        "skill generation, prompt optimiser). "
+                        "'anthropic' uses the Claude key above; 'openrouter' "
+                        "lets you pick GPT-4o / Gemini / Claude-via-OR / Llama "
+                        "with a single OpenRouter key — cheaper bulk pricing, "
+                        "and works in regions where Anthropic isn't reachable.",
+        "type":        "select",
+        "options":     ["anthropic", "openrouter"],
+    },
+    "openrouter_api_key": {
+        "label":       "OpenRouter API Key",
+        "description": "Get one at openrouter.ai/keys. Only used when "
+                        "Cloud LLM Provider is set to 'openrouter'. Stored "
+                        "in the settings DB; overrides OPENROUTER_API_KEY "
+                        "env var when set.",
+        "type":        "secret",
+    },
+    "openrouter_model": {
+        "label":       "OpenRouter Model",
+        "description": "Model id namespaced by upstream provider, e.g. "
+                        "'anthropic/claude-sonnet-4' (recommended), "
+                        "'openai/gpt-4o', 'google/gemini-2.0-pro'. Full "
+                        "catalogue: openrouter.ai/models. Only used when "
+                        "Cloud LLM Provider is 'openrouter'.",
+        "type":        "text",
+    },
     "brave_search_api_key": {
         "label":       "Brave Search API Key",
         "description": "Powers the web_search tool used in Chat mode so "
@@ -234,6 +263,9 @@ def _defaults_from_config() -> dict[str, str]:
         "executor_model":           config.qwen_model,
         "claude_model":             config.claude_model,
         "anthropic_api_key":        config.anthropic_api_key,
+        "llm_provider":             getattr(config, "llm_provider", "anthropic"),
+        "openrouter_api_key":       getattr(config, "openrouter_api_key", ""),
+        "openrouter_model":         getattr(config, "openrouter_model", "anthropic/claude-sonnet-4"),
         "brave_search_api_key":     getattr(config, "brave_search_api_key", ""),
         "escalation_enabled":       "true" if config.escalation_enabled else "false",
         "streaming_enabled":        "true" if config.streaming_enabled else "false",
@@ -426,6 +458,13 @@ class SettingsStore:
             # Empty string ⇒ keep the env-var fallback. Only overwrite
             # when the user actually saved a key in the UI.
             config.anthropic_api_key = settings["anthropic_api_key"]
+        # OpenRouter — same overwrite-only-on-truthy pattern as Anthropic.
+        if "llm_provider" in settings and settings["llm_provider"]:
+            config.llm_provider = settings["llm_provider"].lower()
+        if settings.get("openrouter_api_key"):
+            config.openrouter_api_key = settings["openrouter_api_key"]
+        if "openrouter_model" in settings and settings["openrouter_model"]:
+            config.openrouter_model = settings["openrouter_model"]
         if settings.get("brave_search_api_key"):
             # Same pattern as Anthropic — empty in UI = keep env-var.
             config.brave_search_api_key = settings["brave_search_api_key"]

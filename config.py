@@ -113,6 +113,32 @@ class Config:
     claude_model: str = field(
         default_factory=lambda: os.getenv("CLAUDE_MODEL", "claude-opus-4-6")
     )
+
+    # ── Cloud LLM provider switch (Phase: OpenRouter) ────────────────────────
+    # Which LLMProvider implementation handles cloud-side calls (escalation,
+    # skill generation, prompt optimiser, summary synthesis). See
+    # llm_provider.get_default_provider() for the dispatch.
+    #   "anthropic"  — direct Anthropic API (default; uses anthropic_api_key
+    #                  + claude_model above)
+    #   "openrouter" — OpenAI-compat aggregator at openrouter.ai (uses the
+    #                  two settings below; lets users pick GPT-4o / Gemini /
+    #                  Claude-via-OR / Llama / etc. with one key)
+    llm_provider: str = field(
+        default_factory=lambda: os.getenv("LLM_PROVIDER", "anthropic")
+    )
+    openrouter_api_key: str = field(
+        default_factory=lambda: os.getenv("OPENROUTER_API_KEY", "")
+    )
+    # OpenRouter model id, namespaced by upstream provider. Defaults to
+    # Claude Sonnet via OR — same capability tier as the Anthropic
+    # default, so behaviour is consistent when a user just switches
+    # provider without touching the model picker. Curated UI options
+    # (anthropic/claude-sonnet-4, openai/gpt-4o, google/gemini-2.0-pro)
+    # in static/index.html. Free-form so power users can paste any of
+    # OpenRouter's 100+ catalogue ids.
+    openrouter_model: str = field(
+        default_factory=lambda: os.getenv("OPENROUTER_MODEL", "anthropic/claude-sonnet-4")
+    )
     # Brave Search API key — powers the web_search tool, which is the
     # only tool exposed in chat mode. Without it the tool is registered
     # but returns an explanatory error so chat mode degrades gracefully
@@ -342,6 +368,18 @@ class Config:
         # in the UI. Empty string keeps the env-var fallback.
         if settings.get("anthropic_api_key"):
             self.anthropic_api_key = settings["anthropic_api_key"]
+
+        # ── OpenRouter (cloud LLM provider alternative) ────────────────────
+        # Provider switch ("anthropic" / "openrouter"). Drives which
+        # LLMProvider implementation get_default_provider() returns.
+        if _s("llm_provider"):
+            self.llm_provider = settings["llm_provider"].lower()
+        # API key + model — same "only overwrite on truthy" pattern as
+        # the Anthropic key so an empty DB row doesn't wipe an env var.
+        if settings.get("openrouter_api_key"):
+            self.openrouter_api_key = settings["openrouter_api_key"]
+        if _s("openrouter_model"):
+            self.openrouter_model = settings["openrouter_model"]
 
         # Brave Search API key — same pattern as Anthropic; empty string
         # leaves the env-var fallback alone so removing the row in the
