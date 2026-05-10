@@ -634,6 +634,19 @@ class _OpenAICompatProvider(LLMProvider):
     DEFAULT_MODEL: str     = ""   # used when config field is empty
     KEY_HELP_URL: str      = ""   # surfaced in the unconfigured message
 
+    # Output-token-cap parameter name. The legacy OpenAI / vendor-compat
+    # name is "max_tokens". OpenAI's newer models (o1, o3, gpt-5 family)
+    # rejected it in early 2025 and require "max_completion_tokens"
+    # instead — the new param distinguishes "tokens to emit" from
+    # "tokens to think with" for reasoning models.
+    #   * OpenAI direct      → must be "max_completion_tokens" because
+    #                          the user might pick any current model.
+    #   * OpenRouter         → accepts the legacy name (it normalises
+    #                          internally before forwarding).
+    #   * Gemini OpenAI-compat → accepts the legacy name.
+    #   * Deepseek           → accepts the legacy name.
+    MAX_TOKENS_PARAM: str = "max_tokens"
+
     def __init__(self) -> None:
         self._client: Any = None  # lazy httpx.AsyncClient
         self._cached_key: Optional[str] = None
@@ -840,9 +853,9 @@ class _OpenAICompatProvider(LLMProvider):
         messages.append({"role": "user", "content": user_message})
 
         payload = await self._post_chat_completions(client, {
-            "model":      self.model_name,
-            "messages":   messages,
-            "max_tokens": max_tokens,
+            "model":               self.model_name,
+            "messages":            messages,
+            self.MAX_TOKENS_PARAM: max_tokens,
         })
         parsed = self._parse_response(payload)
         return LLMTextResponse(text=parsed.text, usage=parsed.usage)
@@ -874,10 +887,10 @@ class _OpenAICompatProvider(LLMProvider):
             messages = [{"role": "system", "content": system}] + messages
 
         payload = await self._post_chat_completions(client, {
-            "model":      self.model_name,
-            "messages":   messages,
-            "tools":      tools,
-            "max_tokens": max_tokens,
+            "model":               self.model_name,
+            "messages":            messages,
+            "tools":               tools,
+            self.MAX_TOKENS_PARAM: max_tokens,
         })
         return self._parse_response(payload)
 
@@ -909,13 +922,19 @@ class OpenRouterProvider(_OpenAICompatProvider):
 
 class OpenAIProvider(_OpenAICompatProvider):
     """Direct ChatGPT API. For users who already pay for OpenAI and
-    want to consolidate billing instead of going through OpenRouter."""
-    BASE_URL      = "https://api.openai.com/v1"
-    PROVIDER_NAME = "openai"
-    API_KEY_FIELD = "openai_api_key"
-    MODEL_FIELD   = "openai_model"
-    DEFAULT_MODEL = "gpt-4o"
-    KEY_HELP_URL  = "platform.openai.com/api-keys"
+    want to consolidate billing instead of going through OpenRouter.
+
+    Uses ``max_completion_tokens`` instead of the legacy ``max_tokens``.
+    OpenAI's o1/o3/gpt-5 family rejects the old param outright — and
+    every current chat-completions model accepts the new one — so
+    sending the new param universally avoids a model-aware branch."""
+    BASE_URL          = "https://api.openai.com/v1"
+    PROVIDER_NAME     = "openai"
+    API_KEY_FIELD     = "openai_api_key"
+    MODEL_FIELD       = "openai_model"
+    DEFAULT_MODEL     = "gpt-4o"
+    KEY_HELP_URL      = "platform.openai.com/api-keys"
+    MAX_TOKENS_PARAM  = "max_completion_tokens"
 
 
 class GeminiProvider(_OpenAICompatProvider):
