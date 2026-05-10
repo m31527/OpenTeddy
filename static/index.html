@@ -3595,7 +3595,38 @@
                   <span class="escalation-toggle-hint" data-i18n="streaming_enabled_hint">Show tokens as the model generates them. Big perceived-speed win on small thinking models.</span>
                 </span>
               </label>
+              <!-- ── Cloud LLM Provider switcher ────────────────────
+                   The provider selector comes FIRST, then the matching
+                   vendor's key+model row shows below. Picking a vendor
+                   → only that vendor's key field is visible — keeps
+                   the user from accidentally pasting an OpenAI key
+                   into the Claude field (every vendor's key prefix
+                   looks different but they're all "sk-…" enough that
+                   misroutes happen). syncProviderUI() drives the
+                   show/hide off the selector value via a uniform
+                   `row_<provider>` id pattern. -->
               <div class="row" style="margin-bottom:0.85rem">
+                <div class="field">
+                  <label data-i18n="llm_provider_label">Cloud LLM Provider</label>
+                  <select id="sel_llm_provider" onchange="syncProviderUI()">
+                    <option value="anthropic"  data-i18n="llm_provider_opt_anthropic">Anthropic (Claude — direct, recommended)</option>
+                    <option value="openrouter" data-i18n="llm_provider_opt_openrouter">OpenRouter (one key, 100+ models)</option>
+                    <option value="openai"     data-i18n="llm_provider_opt_openai">OpenAI (ChatGPT — direct)</option>
+                    <option value="gemini"     data-i18n="llm_provider_opt_gemini">Gemini (Google — direct)</option>
+                    <option value="deepseek"   data-i18n="llm_provider_opt_deepseek">Deepseek (cheapest, weaker tool use)</option>
+                  </select>
+                </div>
+              </div>
+
+              <!-- ── Per-provider key + model rows ─────────────────────
+                   Hidden by default; the matching row shows when its
+                   provider is selected in sel_llm_provider. Anthropic
+                   gets a row here too (id=row_anthropic) so all 5
+                   providers behave uniformly — no special-cased
+                   "Claude lives above the selector" exception. -->
+
+              <!-- Anthropic (Claude direct) -->
+              <div class="row provider-row" id="row_anthropic" hidden style="margin-bottom:1.25rem">
                 <div class="field" style="flex:2">
                   <label class="label-with-info">
                     <span data-i18n="claude_api_key_label">Claude API Key</span>
@@ -3613,33 +3644,6 @@
                   <input type="text" id="inp_claude_model" data-i18n-placeholder="claude_model_placeholder" placeholder="claude-opus-4-6" />
                 </div>
               </div>
-
-              <!-- ── Cloud LLM Provider switcher ────────────────────
-                   Routes cloud-side calls (escalation, skill gen, prompt
-                   optimiser, summary synthesis) to one of five backends.
-                   Anthropic uses the Claude key+model fields above; the
-                   other four each have their own conditional row below
-                   that auto-shows/hides on selector change. See
-                   syncProviderUI() for the show/hide logic. -->
-              <div class="row" style="margin-bottom:0.85rem">
-                <div class="field">
-                  <label data-i18n="llm_provider_label">Cloud LLM Provider</label>
-                  <select id="sel_llm_provider" onchange="syncProviderUI()">
-                    <option value="anthropic"  data-i18n="llm_provider_opt_anthropic">Anthropic (Claude — direct, recommended)</option>
-                    <option value="openrouter" data-i18n="llm_provider_opt_openrouter">OpenRouter (one key, 100+ models)</option>
-                    <option value="openai"     data-i18n="llm_provider_opt_openai">OpenAI (ChatGPT — direct)</option>
-                    <option value="gemini"     data-i18n="llm_provider_opt_gemini">Gemini (Google — direct)</option>
-                    <option value="deepseek"   data-i18n="llm_provider_opt_deepseek">Deepseek (cheapest, weaker tool use)</option>
-                  </select>
-                </div>
-              </div>
-
-              <!-- ── Per-provider key + model rows ─────────────────────
-                   Hidden by default; the matching one shows when its
-                   provider is selected in sel_llm_provider. Anthropic
-                   uses the Claude key+model fields above the provider
-                   selector (which existed long before this section),
-                   so there's no extra row for it here. -->
 
               <!-- OpenRouter -->
               <div class="row provider-row" id="row_openrouter" hidden style="margin-bottom:1.25rem">
