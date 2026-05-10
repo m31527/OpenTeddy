@@ -707,6 +707,74 @@ class _OpenAICompatProvider(LLMProvider):
             self._cached_key = key
         return self._client
 
+    async def _post_chat_completions(
+        self, client: Any, body: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Single network call helper that surfaces the upstream's
+        actual error body when status >= 400.
+
+        Why: previously the four call sites just did
+            resp = await client.post(...); resp.raise_for_status()
+            except Exception as exc: raise LLMProviderError(str(exc))
+        — and httpx's HTTPStatusError.__str__ only includes the
+        URL + status, NOT the response body. A 400 from OpenAI
+        bubbled up as just '400 Bad Request' with no clue WHY
+        OpenAI rejected the request (invalid model? bad tool
+        schema? quota? content policy?). User had to fish the
+        real reason out of devtools network tab.
+
+        This helper preserves the body so the LLMProviderError
+        message contains everything the upstream told us — the
+        UI surfaces it verbatim, log lines have full provenance,
+        and "OpenAI says you sent an unknown model 'gpt-5'" is
+        actionable instead of "400 Bad Request".
+        """
+        import json
+        try:
+            resp = await client.post("/chat/completions", json=body)
+        except Exception as exc:  # noqa: BLE001
+            # Network-level failure — DNS, TLS, timeout, etc. No body.
+            raise LLMProviderError(
+                f"{self.PROVIDER_NAME} network error: {exc}"
+            ) from exc
+
+        if resp.status_code >= 400:
+            # Try to extract the upstream's structured error. OpenAI-
+            # compat APIs return JSON like:
+            #   {"error": {"message": "...", "type": "...", "code": "..."}}
+            # Surface .error.message if present, else the raw text.
+            detail = ""
+            try:
+                err_body = resp.json()
+                if isinstance(err_body, dict):
+                    err_obj = err_body.get("error")
+                    if isinstance(err_obj, dict):
+                        detail = err_obj.get("message") or json.dumps(err_obj)
+                    elif err_obj:
+                        detail = str(err_obj)
+                    else:
+                        detail = json.dumps(err_body)
+            except Exception:  # noqa: BLE001
+                # Non-JSON body (HTML 502 from a proxy, plain text, etc.)
+                detail = (resp.text or "").strip()[:500]
+
+            logger.error(
+                "[%s] %s %s -> %d: %s",
+                self.PROVIDER_NAME, "POST", "/chat/completions",
+                resp.status_code, detail,
+            )
+            raise LLMProviderError(
+                f"{self.PROVIDER_NAME} API error "
+                f"(HTTP {resp.status_code}): {detail or '(empty body)'}"
+            )
+
+        try:
+            return resp.json()
+        except Exception as exc:  # noqa: BLE001
+            raise LLMProviderError(
+                f"{self.PROVIDER_NAME} returned non-JSON response: {exc}"
+            ) from exc
+
     @staticmethod
     def _parse_response(payload: Dict[str, Any]) -> LLMToolTurnResponse:
         """Decode an OpenAI-compat /chat/completions response into our
@@ -771,20 +839,11 @@ class _OpenAICompatProvider(LLMProvider):
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": user_message})
 
-        try:
-            resp = await client.post(
-                "/chat/completions",
-                json={
-                    "model":      self.model_name,
-                    "messages":   messages,
-                    "max_tokens": max_tokens,
-                },
-            )
-            resp.raise_for_status()
-            payload = resp.json()
-        except Exception as exc:  # noqa: BLE001
-            raise LLMProviderError(str(exc)) from exc
-
+        payload = await self._post_chat_completions(client, {
+            "model":      self.model_name,
+            "messages":   messages,
+            "max_tokens": max_tokens,
+        })
         parsed = self._parse_response(payload)
         return LLMTextResponse(text=parsed.text, usage=parsed.usage)
 
@@ -814,21 +873,12 @@ class _OpenAICompatProvider(LLMProvider):
             # not as a top-level kwarg the way Anthropic does.
             messages = [{"role": "system", "content": system}] + messages
 
-        try:
-            resp = await client.post(
-                "/chat/completions",
-                json={
-                    "model":      self.model_name,
-                    "messages":   messages,
-                    "tools":      tools,
-                    "max_tokens": max_tokens,
-                },
-            )
-            resp.raise_for_status()
-            payload = resp.json()
-        except Exception as exc:  # noqa: BLE001
-            raise LLMProviderError(str(exc)) from exc
-
+        payload = await self._post_chat_completions(client, {
+            "model":      self.model_name,
+            "messages":   messages,
+            "tools":      tools,
+            "max_tokens": max_tokens,
+        })
         return self._parse_response(payload)
 
 
