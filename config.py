@@ -114,30 +114,52 @@ class Config:
         default_factory=lambda: os.getenv("CLAUDE_MODEL", "claude-opus-4-6")
     )
 
-    # ── Cloud LLM provider switch (Phase: OpenRouter) ────────────────────────
+    # ── Cloud LLM provider switch ────────────────────────────────────────────
     # Which LLMProvider implementation handles cloud-side calls (escalation,
     # skill generation, prompt optimiser, summary synthesis). See
-    # llm_provider.get_default_provider() for the dispatch.
+    # llm_provider.PROVIDER_REGISTRY for the full set of recognised values.
     #   "anthropic"  — direct Anthropic API (default; uses anthropic_api_key
     #                  + claude_model above)
-    #   "openrouter" — OpenAI-compat aggregator at openrouter.ai (uses the
-    #                  two settings below; lets users pick GPT-4o / Gemini /
-    #                  Claude-via-OR / Llama / etc. with one key)
+    #   "openrouter" — OpenAI-compat aggregator at openrouter.ai (one key,
+    #                  100+ models including GPT-4o / Gemini / Llama /
+    #                  Claude-via-OR / Deepseek)
+    #   "openai"     — direct ChatGPT API at api.openai.com
+    #   "gemini"     — Google Gemini's OpenAI-compat endpoint
+    #   "deepseek"   — direct Deepseek API (cheapest tier for tool use)
     llm_provider: str = field(
         default_factory=lambda: os.getenv("LLM_PROVIDER", "anthropic")
     )
+
+    # OpenRouter — multi-vendor aggregator
     openrouter_api_key: str = field(
         default_factory=lambda: os.getenv("OPENROUTER_API_KEY", "")
     )
-    # OpenRouter model id, namespaced by upstream provider. Defaults to
-    # Claude Sonnet via OR — same capability tier as the Anthropic
-    # default, so behaviour is consistent when a user just switches
-    # provider without touching the model picker. Curated UI options
-    # (anthropic/claude-sonnet-4, openai/gpt-4o, google/gemini-2.0-pro)
-    # in static/index.html. Free-form so power users can paste any of
-    # OpenRouter's 100+ catalogue ids.
     openrouter_model: str = field(
         default_factory=lambda: os.getenv("OPENROUTER_MODEL", "anthropic/claude-sonnet-4")
+    )
+
+    # OpenAI direct (ChatGPT)
+    openai_api_key: str = field(
+        default_factory=lambda: os.getenv("OPENAI_API_KEY", "")
+    )
+    openai_model: str = field(
+        default_factory=lambda: os.getenv("OPENAI_MODEL", "gpt-4o")
+    )
+
+    # Google Gemini direct (OpenAI-compat endpoint)
+    gemini_api_key: str = field(
+        default_factory=lambda: os.getenv("GEMINI_API_KEY", "")
+    )
+    gemini_model: str = field(
+        default_factory=lambda: os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+    )
+
+    # Deepseek direct (OpenAI-compat)
+    deepseek_api_key: str = field(
+        default_factory=lambda: os.getenv("DEEPSEEK_API_KEY", "")
+    )
+    deepseek_model: str = field(
+        default_factory=lambda: os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
     )
     # Brave Search API key — powers the web_search tool, which is the
     # only tool exposed in chat mode. Without it the tool is registered
@@ -369,17 +391,33 @@ class Config:
         if settings.get("anthropic_api_key"):
             self.anthropic_api_key = settings["anthropic_api_key"]
 
-        # ── OpenRouter (cloud LLM provider alternative) ────────────────────
-        # Provider switch ("anthropic" / "openrouter"). Drives which
-        # LLMProvider implementation get_default_provider() returns.
+        # ── Cloud LLM provider switch ──────────────────────────────────────
+        # Provider switch — drives which LLMProvider implementation
+        # get_default_provider() returns. See llm_provider.PROVIDER_REGISTRY
+        # for recognised values.
         if _s("llm_provider"):
             self.llm_provider = settings["llm_provider"].lower()
-        # API key + model — same "only overwrite on truthy" pattern as
-        # the Anthropic key so an empty DB row doesn't wipe an env var.
+
+        # API keys + model ids for the four OpenAI-compat providers.
+        # Same "only overwrite on truthy" pattern as the Anthropic key
+        # so an empty DB row doesn't wipe an env var the user might
+        # have set instead of using Settings UI.
         if settings.get("openrouter_api_key"):
             self.openrouter_api_key = settings["openrouter_api_key"]
         if _s("openrouter_model"):
             self.openrouter_model = settings["openrouter_model"]
+        if settings.get("openai_api_key"):
+            self.openai_api_key = settings["openai_api_key"]
+        if _s("openai_model"):
+            self.openai_model = settings["openai_model"]
+        if settings.get("gemini_api_key"):
+            self.gemini_api_key = settings["gemini_api_key"]
+        if _s("gemini_model"):
+            self.gemini_model = settings["gemini_model"]
+        if settings.get("deepseek_api_key"):
+            self.deepseek_api_key = settings["deepseek_api_key"]
+        if _s("deepseek_model"):
+            self.deepseek_model = settings["deepseek_model"]
 
         # Brave Search API key — same pattern as Anthropic; empty string
         # leaves the env-var fallback alone so removing the row in the

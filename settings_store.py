@@ -44,24 +44,23 @@ SETTINGS_META: dict[str, dict[str, Any]] = {
                         "Get one at console.anthropic.com → Settings → API Keys.",
         "type":        "secret",
     },
-    # ── OpenRouter (alternative cloud LLM provider) ─────────────────────
+    # ── Cloud LLM provider switcher + per-vendor key/model ──────────────
     "llm_provider": {
         "label":       "Cloud LLM Provider",
         "description": "Where to route cloud-side calls (escalation, "
-                        "skill generation, prompt optimiser). "
-                        "'anthropic' uses the Claude key above; 'openrouter' "
-                        "lets you pick GPT-4o / Gemini / Claude-via-OR / Llama "
-                        "with a single OpenRouter key — cheaper bulk pricing, "
-                        "and works in regions where Anthropic isn't reachable.",
+                        "skill generation, prompt optimiser). Pick one: "
+                        "'anthropic' (uses the Claude key above), "
+                        "'openrouter' (one key for 100+ models), "
+                        "'openai' (ChatGPT direct), "
+                        "'gemini' (Google direct), "
+                        "'deepseek' (cheapest, weaker tool use).",
         "type":        "select",
-        "options":     ["anthropic", "openrouter"],
+        "options":     ["anthropic", "openrouter", "openai", "gemini", "deepseek"],
     },
     "openrouter_api_key": {
         "label":       "OpenRouter API Key",
-        "description": "Get one at openrouter.ai/keys. Only used when "
-                        "Cloud LLM Provider is set to 'openrouter'. Stored "
-                        "in the settings DB; overrides OPENROUTER_API_KEY "
-                        "env var when set.",
+        "description": "openrouter.ai/keys. Only used when Cloud LLM "
+                        "Provider is 'openrouter'.",
         "type":        "secret",
     },
     "openrouter_model": {
@@ -69,8 +68,45 @@ SETTINGS_META: dict[str, dict[str, Any]] = {
         "description": "Model id namespaced by upstream provider, e.g. "
                         "'anthropic/claude-sonnet-4' (recommended), "
                         "'openai/gpt-4o', 'google/gemini-2.0-pro'. Full "
-                        "catalogue: openrouter.ai/models. Only used when "
-                        "Cloud LLM Provider is 'openrouter'.",
+                        "catalogue: openrouter.ai/models.",
+        "type":        "text",
+    },
+    "openai_api_key": {
+        "label":       "OpenAI (ChatGPT) API Key",
+        "description": "platform.openai.com/api-keys. Only used when "
+                        "Cloud LLM Provider is 'openai'.",
+        "type":        "secret",
+    },
+    "openai_model": {
+        "label":       "OpenAI Model",
+        "description": "Model id, e.g. 'gpt-4o' (recommended), 'gpt-4-turbo', "
+                        "'gpt-4o-mini' (cheaper). Full list: "
+                        "platform.openai.com/docs/models.",
+        "type":        "text",
+    },
+    "gemini_api_key": {
+        "label":       "Gemini API Key",
+        "description": "aistudio.google.com/app/apikey. Only used when "
+                        "Cloud LLM Provider is 'gemini'.",
+        "type":        "secret",
+    },
+    "gemini_model": {
+        "label":       "Gemini Model",
+        "description": "Model id, e.g. 'gemini-2.0-flash' (recommended — "
+                        "fast + cheap), 'gemini-2.0-pro' (strongest), "
+                        "'gemini-1.5-flash-8b' (cheapest).",
+        "type":        "text",
+    },
+    "deepseek_api_key": {
+        "label":       "Deepseek API Key",
+        "description": "platform.deepseek.com/api_keys. Only used when "
+                        "Cloud LLM Provider is 'deepseek'.",
+        "type":        "secret",
+    },
+    "deepseek_model": {
+        "label":       "Deepseek Model",
+        "description": "Model id, e.g. 'deepseek-chat' (recommended), "
+                        "'deepseek-reasoner' (slower but more capable).",
         "type":        "text",
     },
     "brave_search_api_key": {
@@ -266,6 +302,12 @@ def _defaults_from_config() -> dict[str, str]:
         "llm_provider":             getattr(config, "llm_provider", "anthropic"),
         "openrouter_api_key":       getattr(config, "openrouter_api_key", ""),
         "openrouter_model":         getattr(config, "openrouter_model", "anthropic/claude-sonnet-4"),
+        "openai_api_key":           getattr(config, "openai_api_key", ""),
+        "openai_model":             getattr(config, "openai_model", "gpt-4o"),
+        "gemini_api_key":           getattr(config, "gemini_api_key", ""),
+        "gemini_model":             getattr(config, "gemini_model", "gemini-2.0-flash"),
+        "deepseek_api_key":         getattr(config, "deepseek_api_key", ""),
+        "deepseek_model":           getattr(config, "deepseek_model", "deepseek-chat"),
         "brave_search_api_key":     getattr(config, "brave_search_api_key", ""),
         "escalation_enabled":       "true" if config.escalation_enabled else "false",
         "streaming_enabled":        "true" if config.streaming_enabled else "false",
@@ -458,13 +500,27 @@ class SettingsStore:
             # Empty string ⇒ keep the env-var fallback. Only overwrite
             # when the user actually saved a key in the UI.
             config.anthropic_api_key = settings["anthropic_api_key"]
-        # OpenRouter — same overwrite-only-on-truthy pattern as Anthropic.
+        # Cloud LLM provider trio for each of the four OpenAI-compat
+        # vendors. Same overwrite-only-on-truthy pattern as Anthropic
+        # so empty DB rows don't wipe env-var fallbacks.
         if "llm_provider" in settings and settings["llm_provider"]:
             config.llm_provider = settings["llm_provider"].lower()
         if settings.get("openrouter_api_key"):
             config.openrouter_api_key = settings["openrouter_api_key"]
         if "openrouter_model" in settings and settings["openrouter_model"]:
             config.openrouter_model = settings["openrouter_model"]
+        if settings.get("openai_api_key"):
+            config.openai_api_key = settings["openai_api_key"]
+        if "openai_model" in settings and settings["openai_model"]:
+            config.openai_model = settings["openai_model"]
+        if settings.get("gemini_api_key"):
+            config.gemini_api_key = settings["gemini_api_key"]
+        if "gemini_model" in settings and settings["gemini_model"]:
+            config.gemini_model = settings["gemini_model"]
+        if settings.get("deepseek_api_key"):
+            config.deepseek_api_key = settings["deepseek_api_key"]
+        if "deepseek_model" in settings and settings["deepseek_model"]:
+            config.deepseek_model = settings["deepseek_model"]
         if settings.get("brave_search_api_key"):
             # Same pattern as Anthropic — empty in UI = keep env-var.
             config.brave_search_api_key = settings["brave_search_api_key"]

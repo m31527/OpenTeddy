@@ -3614,27 +3614,35 @@
                 </div>
               </div>
 
-              <!-- ── Cloud LLM Provider switcher (Phase: OpenRouter) ──
-                   Lets the user route cloud-side calls (escalation,
-                   skill generation, summary, prompt optimiser) through
-                   OpenRouter instead of direct Anthropic. The two
-                   OpenRouter fields below the dropdown auto-show /
-                   hide based on this selection — see syncProviderUI().
-                   This whole row stays compact when the user is on
-                   the default Anthropic path; only expands when they
-                   actively pick OpenRouter. -->
+              <!-- ── Cloud LLM Provider switcher ────────────────────
+                   Routes cloud-side calls (escalation, skill gen, prompt
+                   optimiser, summary synthesis) to one of five backends.
+                   Anthropic uses the Claude key+model fields above; the
+                   other four each have their own conditional row below
+                   that auto-shows/hides on selector change. See
+                   syncProviderUI() for the show/hide logic. -->
               <div class="row" style="margin-bottom:0.85rem">
                 <div class="field">
                   <label data-i18n="llm_provider_label">Cloud LLM Provider</label>
                   <select id="sel_llm_provider" onchange="syncProviderUI()">
-                    <option value="anthropic" data-i18n="llm_provider_opt_anthropic">Anthropic (direct — recommended)</option>
-                    <option value="openrouter" data-i18n="llm_provider_opt_openrouter">OpenRouter (GPT-4o / Gemini / Llama / Claude-via-OR)</option>
+                    <option value="anthropic"  data-i18n="llm_provider_opt_anthropic">Anthropic (Claude — direct, recommended)</option>
+                    <option value="openrouter" data-i18n="llm_provider_opt_openrouter">OpenRouter (one key, 100+ models)</option>
+                    <option value="openai"     data-i18n="llm_provider_opt_openai">OpenAI (ChatGPT — direct)</option>
+                    <option value="gemini"     data-i18n="llm_provider_opt_gemini">Gemini (Google — direct)</option>
+                    <option value="deepseek"   data-i18n="llm_provider_opt_deepseek">Deepseek (cheapest, weaker tool use)</option>
                   </select>
                 </div>
               </div>
-              <!-- OpenRouter-specific fields. Hidden by default; shown
-                   only when sel_llm_provider === 'openrouter'. -->
-              <div class="row openrouter-row" id="row_openrouter" hidden style="margin-bottom:1.25rem">
+
+              <!-- ── Per-provider key + model rows ─────────────────────
+                   Hidden by default; the matching one shows when its
+                   provider is selected in sel_llm_provider. Anthropic
+                   uses the Claude key+model fields above the provider
+                   selector (which existed long before this section),
+                   so there's no extra row for it here. -->
+
+              <!-- OpenRouter -->
+              <div class="row provider-row" id="row_openrouter" hidden style="margin-bottom:1.25rem">
                 <div class="field" style="flex:2">
                   <label class="label-with-info">
                     <span data-i18n="openrouter_api_key_label">OpenRouter API Key</span>
@@ -3655,20 +3663,104 @@
                        data-i18n-title="openrouter_model_info"
                        title="Browse the full catalogue at openrouter.ai/models">i</a>
                   </label>
-                  <!-- Datalist gives a searchable dropdown of curated
-                       picks while still allowing free-form entry for
-                       any of OpenRouter's 100+ catalogue ids. -->
                   <input type="text" id="inp_openrouter_model"
                          list="openrouter_model_suggestions"
                          placeholder="anthropic/claude-sonnet-4" />
                   <datalist id="openrouter_model_suggestions">
-                    <option value="anthropic/claude-sonnet-4">Claude Sonnet 4 — same tier as the Anthropic default</option>
-                    <option value="anthropic/claude-opus-4">Claude Opus 4 — strongest reasoning, more expensive</option>
+                    <option value="anthropic/claude-sonnet-4">Claude Sonnet 4 — same tier as Anthropic default</option>
+                    <option value="anthropic/claude-opus-4">Claude Opus 4 — strongest reasoning</option>
                     <option value="openai/gpt-4o">GPT-4o — fast, cheap, good tool use</option>
                     <option value="openai/gpt-4-turbo">GPT-4 Turbo — older but stable</option>
                     <option value="google/gemini-2.0-pro">Gemini 2.0 Pro — Google's tier-1</option>
-                    <option value="meta-llama/llama-3.3-70b-instruct">Llama 3.3 70B — open weights via OR</option>
-                    <option value="deepseek/deepseek-chat">DeepSeek Chat — very cheap, weaker tool use</option>
+                    <option value="meta-llama/llama-3.3-70b-instruct">Llama 3.3 70B — open weights</option>
+                    <option value="deepseek/deepseek-chat">Deepseek Chat — cheapest tier</option>
+                  </datalist>
+                </div>
+              </div>
+
+              <!-- OpenAI direct (ChatGPT) -->
+              <div class="row provider-row" id="row_openai" hidden style="margin-bottom:1.25rem">
+                <div class="field" style="flex:2">
+                  <label class="label-with-info">
+                    <span data-i18n="openai_api_key_label">OpenAI API Key</span>
+                    <a class="info-dot" href="https://platform.openai.com/api-keys"
+                       target="_blank" rel="noopener noreferrer"
+                       data-i18n-title="openai_api_key_info"
+                       title="Get your key from platform.openai.com/api-keys">i</a>
+                  </label>
+                  <input type="password" id="inp_openai_api_key"
+                    placeholder="sk-…" autocomplete="off" />
+                </div>
+                <div class="field">
+                  <label class="label-with-info">
+                    <span data-i18n="openai_model_label">OpenAI Model</span>
+                    <a class="info-dot" href="https://platform.openai.com/docs/models"
+                       target="_blank" rel="noopener noreferrer"
+                       data-i18n-title="openai_model_info"
+                       title="Full model list at platform.openai.com/docs/models">i</a>
+                  </label>
+                  <input type="text" id="inp_openai_model"
+                         list="openai_model_suggestions"
+                         placeholder="gpt-4o" />
+                  <datalist id="openai_model_suggestions">
+                    <option value="gpt-4o">GPT-4o — recommended (fast, good tool use)</option>
+                    <option value="gpt-4o-mini">GPT-4o mini — cheaper</option>
+                    <option value="gpt-4-turbo">GPT-4 Turbo — older but stable</option>
+                  </datalist>
+                </div>
+              </div>
+
+              <!-- Gemini direct (Google) -->
+              <div class="row provider-row" id="row_gemini" hidden style="margin-bottom:1.25rem">
+                <div class="field" style="flex:2">
+                  <label class="label-with-info">
+                    <span data-i18n="gemini_api_key_label">Gemini API Key</span>
+                    <a class="info-dot" href="https://aistudio.google.com/app/apikey"
+                       target="_blank" rel="noopener noreferrer"
+                       data-i18n-title="gemini_api_key_info"
+                       title="Get your key from aistudio.google.com/app/apikey">i</a>
+                  </label>
+                  <input type="password" id="inp_gemini_api_key"
+                    placeholder="AIza…" autocomplete="off" />
+                </div>
+                <div class="field">
+                  <label class="label-with-info">
+                    <span data-i18n="gemini_model_label">Gemini Model</span>
+                  </label>
+                  <input type="text" id="inp_gemini_model"
+                         list="gemini_model_suggestions"
+                         placeholder="gemini-2.0-flash" />
+                  <datalist id="gemini_model_suggestions">
+                    <option value="gemini-2.0-flash">Gemini 2.0 Flash — recommended (fast + cheap)</option>
+                    <option value="gemini-2.0-pro">Gemini 2.0 Pro — strongest reasoning</option>
+                    <option value="gemini-1.5-flash-8b">Gemini 1.5 Flash 8B — cheapest</option>
+                  </datalist>
+                </div>
+              </div>
+
+              <!-- Deepseek direct -->
+              <div class="row provider-row" id="row_deepseek" hidden style="margin-bottom:1.25rem">
+                <div class="field" style="flex:2">
+                  <label class="label-with-info">
+                    <span data-i18n="deepseek_api_key_label">Deepseek API Key</span>
+                    <a class="info-dot" href="https://platform.deepseek.com/api_keys"
+                       target="_blank" rel="noopener noreferrer"
+                       data-i18n-title="deepseek_api_key_info"
+                       title="Get your key from platform.deepseek.com/api_keys">i</a>
+                  </label>
+                  <input type="password" id="inp_deepseek_api_key"
+                    placeholder="sk-…" autocomplete="off" />
+                </div>
+                <div class="field">
+                  <label class="label-with-info">
+                    <span data-i18n="deepseek_model_label">Deepseek Model</span>
+                  </label>
+                  <input type="text" id="inp_deepseek_model"
+                         list="deepseek_model_suggestions"
+                         placeholder="deepseek-chat" />
+                  <datalist id="deepseek_model_suggestions">
+                    <option value="deepseek-chat">deepseek-chat — recommended</option>
+                    <option value="deepseek-reasoner">deepseek-reasoner — slower, more capable</option>
                   </datalist>
                 </div>
               </div>
@@ -7435,14 +7527,21 @@
         loadPerfStats().catch(() => {});
         _setInput('inp_claude_model',      s.claude_model?.value      ?? '');
         _setInput('inp_anthropic_api_key', s.anthropic_api_key?.value ?? '');
-        // OpenRouter trio. Provider select drives whether the OR
-        // fields are visible — sync after setting all three values.
+        // Cloud LLM provider trio for each of the 4 OpenAI-compat
+        // vendors. Provider selector drives which row is visible —
+        // sync after setting all values.
         const providerEl = document.getElementById('sel_llm_provider');
         if (providerEl) {
           providerEl.value = s.llm_provider?.value || 'anthropic';
         }
         _setInput('inp_openrouter_api_key', s.openrouter_api_key?.value ?? '');
         _setInput('inp_openrouter_model',   s.openrouter_model?.value   ?? '');
+        _setInput('inp_openai_api_key',     s.openai_api_key?.value     ?? '');
+        _setInput('inp_openai_model',       s.openai_model?.value       ?? '');
+        _setInput('inp_gemini_api_key',     s.gemini_api_key?.value     ?? '');
+        _setInput('inp_gemini_model',       s.gemini_model?.value       ?? '');
+        _setInput('inp_deepseek_api_key',   s.deepseek_api_key?.value   ?? '');
+        _setInput('inp_deepseek_model',     s.deepseek_model?.value     ?? '');
         syncProviderUI();
         const escEl = document.getElementById('chk_escalation_enabled');
         if (escEl) {
@@ -7583,18 +7682,30 @@
       warn.hidden = !v || isGemma;
     }
 
-    // Show / hide the OpenRouter key + model fields based on the
+    // Show / hide the per-provider key + model rows based on the
     // Cloud LLM Provider selector. Called on selector change AND
-    // after settings load. Hiding the OR fields when Anthropic is
-    // selected stops the user from accidentally putting a Bearer
-    // token into the wrong place + keeps the Settings tab compact
-    // for the 90% of users who never touch this.
+    // after settings load. Hiding the inactive rows stops the user
+    // from accidentally pasting a Bearer token into the wrong vendor
+    // (every key starts with sk- or similar; vendors are mutually
+    // exclusive) AND keeps the Settings tab compact for the 90% of
+    // users who never touch this.
+    //
+    // Anthropic uses the existing Claude key+model fields above the
+    // provider selector — there's no conditional row for it here,
+    // so when 'anthropic' is selected ALL conditional rows hide.
     function syncProviderUI() {
       const sel = document.getElementById('sel_llm_provider');
-      const row = document.getElementById('row_openrouter');
-      if (!sel || !row) return;
-      const isOpenRouter = sel.value === 'openrouter';
-      row.hidden = !isOpenRouter;
+      if (!sel) return;
+      const selected = sel.value;
+      // Walk every .provider-row, show only the matching one. Adding
+      // a new provider is one new row in the DOM + one new
+      // PROVIDER_REGISTRY entry server-side; this function doesn't
+      // need touching.
+      document.querySelectorAll('.provider-row').forEach(row => {
+        // Row id pattern: "row_<provider>" — match against selected.
+        const expectedId = `row_${selected}`;
+        row.hidden = row.id !== expectedId;
+      });
     }
 
     async function deleteModel(name) {
@@ -7966,6 +8077,12 @@
         llm_provider:              document.getElementById('sel_llm_provider')?.value || 'anthropic',
         openrouter_api_key:        document.getElementById('inp_openrouter_api_key')?.value.trim() || '',
         openrouter_model:          document.getElementById('inp_openrouter_model')?.value.trim() || '',
+        openai_api_key:            document.getElementById('inp_openai_api_key')?.value.trim() || '',
+        openai_model:              document.getElementById('inp_openai_model')?.value.trim() || '',
+        gemini_api_key:            document.getElementById('inp_gemini_api_key')?.value.trim() || '',
+        gemini_model:              document.getElementById('inp_gemini_model')?.value.trim() || '',
+        deepseek_api_key:          document.getElementById('inp_deepseek_api_key')?.value.trim() || '',
+        deepseek_model:            document.getElementById('inp_deepseek_model')?.value.trim() || '',
         escalation_enabled:        document.getElementById('chk_escalation_enabled').checked ? 'true' : 'false',
         streaming_enabled:         document.getElementById('chk_streaming_enabled').checked ? 'true' : 'false',
         gemma_base_url:            document.getElementById('inp_gemma_base_url').value.trim(),

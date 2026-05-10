@@ -496,7 +496,7 @@ class AnthropicProvider(LLMProvider):
 # on the wire differ.
 
 
-class _OpenRouterHistory(LLMHistory):
+class _OpenAICompatHistory(LLMHistory):
     """History stored in OpenAI's chat-completions message shape.
 
     OpenAI format reminder:
@@ -589,33 +589,50 @@ def json_dumps(obj: Any) -> str:
     return json.dumps(obj, ensure_ascii=False, separators=(",", ":"))
 
 
-class OpenRouterProvider(LLMProvider):
-    """LLMProvider that talks to OpenRouter's OpenAI-compat endpoint.
+class _OpenAICompatProvider(LLMProvider):
+    """Abstract base for any LLM endpoint that speaks OpenAI's
+    chat-completions protocol.
 
-    Configuration lives in ``config.openrouter_api_key`` +
-    ``config.openrouter_model``. Selecting OpenRouter over Anthropic is
-    a single ``config.llm_provider`` flip — see
-    :func:`get_default_provider`.
+    Covers four real providers in the current build:
+      * OpenRouter — multi-vendor aggregator at openrouter.ai
+      * OpenAI    — direct ChatGPT API at api.openai.com
+      * Gemini    — Google's OpenAI-compat endpoint at
+                    generativelanguage.googleapis.com/v1beta/openai
+                    (added Nov 2024; same protocol as OpenAI)
+      * Deepseek  — direct at api.deepseek.com (also OpenAI-compat)
 
-    What's different from AnthropicProvider:
-      * Auth: ``Authorization: Bearer <key>`` header (not Anthropic's
-        ``x-api-key``).
-      * Endpoint: ``POST /chat/completions`` against
-        https://openrouter.ai/api/v1
-      * Message shape: flat OpenAI tool_calls (see _OpenRouterHistory)
-      * Tool-schema shape: OpenRouter accepts ``{type:"function",
-        function:{name, description, parameters}}`` directly — which is
-        the same shape ToolRegistry.get_schemas() already emits, so
-        no conversion needed.
-      * Optional headers ``HTTP-Referer`` + ``X-Title``: OpenRouter's
-        analytics ranks apps by these. We send them so OpenTeddy shows
-        up in OpenRouter's "popular apps" list (free marketing).
+    All four share:
+      * Bearer-token auth (header: ``Authorization: Bearer <key>``)
+      * ``POST /chat/completions`` endpoint
+      * The OpenAI message shape we already encode in
+        :class:`_OpenAICompatHistory`
+      * The OpenAI ``tools`` schema (matches what
+        ToolRegistry.get_schemas() already emits)
 
-    Uses httpx instead of an SDK because OpenRouter doesn't ship one
-    and the OpenAI Python SDK is overkill for this single endpoint.
+    Subclasses set five class attributes — base URL, the
+    ``provider_name`` we record on usage rows, the ``config.*``
+    attribute names that hold the API key + model, and a default
+    model id for when ``config.{prefix}_model`` isn't set. That's
+    it; everything else is shared.
+
+    Optionally override :meth:`_get_extra_headers` for provider-
+    specific bits (OpenRouter uses HTTP-Referer + X-Title for the
+    public app leaderboard, e.g.).
+
+    Uses httpx instead of OpenAI's official SDK because (a) the SDK
+    is heavyweight relative to the single endpoint we hit, and (b) it
+    bakes in OpenAI-only retry / proxy behaviour that doesn't always
+    play nice with non-OpenAI compat endpoints.
     """
 
-    BASE_URL = "https://openrouter.ai/api/v1"
+    # Subclasses MUST override these — they're class-level so each
+    # provider gets its own values without re-implementing __init__.
+    BASE_URL: str          = ""
+    PROVIDER_NAME: str     = ""
+    API_KEY_FIELD: str     = ""   # name of config attribute, e.g. "openai_api_key"
+    MODEL_FIELD: str       = ""   # name of config attribute, e.g. "openai_model"
+    DEFAULT_MODEL: str     = ""   # used when config field is empty
+    KEY_HELP_URL: str      = ""   # surfaced in the unconfigured message
 
     def __init__(self) -> None:
         self._client: Any = None  # lazy httpx.AsyncClient
@@ -626,71 +643,77 @@ class OpenRouterProvider(LLMProvider):
     @property
     def model_name(self) -> str:
         from config import config
-        # Default to Claude Sonnet via OpenRouter when nothing's
-        # configured — most consistent capability tier across the
-        # OpenRouter catalogue and matches the Anthropic baseline.
-        return getattr(config, "openrouter_model", None) or "anthropic/claude-sonnet-4"
+        return getattr(config, self.MODEL_FIELD, None) or self.DEFAULT_MODEL
 
     @property
     def provider_name(self) -> str:
-        return "openrouter"
+        return self.PROVIDER_NAME
+
+    def _get_key(self) -> str:
+        from config import config
+        return (getattr(config, self.API_KEY_FIELD, "") or "").strip()
 
     def is_configured(self) -> bool:
-        from config import config
-        return bool((getattr(config, "openrouter_api_key", "") or "").strip())
+        return bool(self._get_key())
 
     def get_unconfigured_message(self) -> str:
+        # Title-case provider name unless it's an acronym we want to
+        # preserve. Map the few we know; default to .title() for
+        # anything else.
+        nice = {
+            "openrouter": "OpenRouter",
+            "openai":     "OpenAI",
+            "gemini":     "Gemini",
+            "deepseek":   "Deepseek",
+        }.get(self.PROVIDER_NAME, self.PROVIDER_NAME.title())
         return (
-            "OpenRouter API key is not configured. Open Settings → Model "
-            "Settings → LLM Provider → pick OpenRouter and paste a key "
-            "from openrouter.ai/keys, or switch back to Anthropic."
+            f"{nice} API key is not configured. Get one at "
+            f"{self.KEY_HELP_URL}, then paste it in Settings → Model "
+            f"Settings → Cloud LLM Provider."
         )
 
     # ── Conversation factory ─────────────────────────────────────────────────
 
     def new_history(self) -> LLMHistory:
-        return _OpenRouterHistory()
+        return _OpenAICompatHistory()
 
     # ── Internals ────────────────────────────────────────────────────────────
 
+    def _get_extra_headers(self) -> Dict[str, str]:
+        """Override to add provider-specific headers. Defaults to none."""
+        return {}
+
     def _get_client(self) -> Any:
         """Lazy httpx.AsyncClient. Rebuilt whenever the key changes so
-        the Settings UI's hot-reload of credentials takes effect on
-        the next request without restarting uvicorn."""
-        from config import config
+        Settings UI hot-reload of credentials takes effect on the next
+        request without restarting uvicorn."""
         import httpx
-        key = (getattr(config, "openrouter_api_key", "") or "").strip()
+        key = self._get_key()
         if self._client is None or self._cached_key != key:
-            # Close the old client so we don't leak connections when
-            # the user rotates their key.
             if self._client is not None:
-                # httpx clients close cleanly via aclose(), but we're
-                # in a sync getter so just drop the ref — the GC + the
-                # client's __del__ will tear sockets down.
+                # httpx clients clean up via aclose() but we're in a
+                # sync getter; drop the ref + let GC handle sockets.
                 self._client = None
+            headers = {"Authorization": f"Bearer {key}"}
+            headers.update(self._get_extra_headers())
             self._client = httpx.AsyncClient(
                 base_url=self.BASE_URL,
-                # Generous timeout — OpenRouter routes to the actual
-                # upstream provider, so latency stacks. 90s covers
-                # Claude on a long-context tool-use turn.
+                # 90s covers a Claude-tier model on a long-context
+                # tool-use turn. Cheap providers (Deepseek, GPT-4o)
+                # finish much faster — 90s is just the ceiling.
                 timeout=httpx.Timeout(90.0, connect=10.0),
-                headers={
-                    "Authorization": f"Bearer {key}",
-                    # OpenRouter's app-leaderboard headers. Optional but
-                    # cheap visibility for OpenTeddy.
-                    "HTTP-Referer": "https://openteddy.net",
-                    "X-Title":      "OpenTeddy",
-                },
+                headers=headers,
             )
             self._cached_key = key
         return self._client
 
     @staticmethod
     def _parse_response(payload: Dict[str, Any]) -> LLMToolTurnResponse:
-        """Decode OpenRouter's chat-completion response into our
-        normalised LLMToolTurnResponse. Tolerates the various dialects
-        different upstreams use (Claude-via-OpenRouter sometimes
-        returns content as a list of blocks, GPT-4 returns a string)."""
+        """Decode an OpenAI-compat /chat/completions response into our
+        normalised LLMToolTurnResponse. Tolerates the dialects we've
+        seen across the four upstreams (Claude-via-OR returns
+        content as a list of blocks; GPT-4 returns a plain string;
+        Gemini occasionally emits null content alongside tool_calls)."""
         choices = payload.get("choices") or []
         if not choices:
             return LLMToolTurnResponse(text="", tool_uses=[], usage=LLMUsage())
@@ -727,14 +750,11 @@ class OpenRouterProvider(LLMProvider):
                 input=args if isinstance(args, dict) else {},
             ))
 
-        # Usage. OpenAI uses prompt_tokens / completion_tokens; some
-        # OpenRouter responses also include them under .usage.
         usage_raw = payload.get("usage") or {}
         usage = LLMUsage(
             input_tokens=int(usage_raw.get("prompt_tokens", 0) or 0),
             output_tokens=int(usage_raw.get("completion_tokens", 0) or 0),
         )
-
         return LLMToolTurnResponse(text=text, tool_uses=tool_uses, usage=usage)
 
     # ── Text completion ──────────────────────────────────────────────────────
@@ -777,9 +797,9 @@ class OpenRouterProvider(LLMProvider):
         system: Optional[str] = None,
         max_tokens: int = 4096,
     ) -> LLMToolTurnResponse:
-        if not isinstance(history, _OpenRouterHistory):
+        if not isinstance(history, _OpenAICompatHistory):
             raise LLMProviderError(
-                "OpenRouterProvider received non-OpenRouter history "
+                f"{type(self).__name__} received non-OpenAI-compat history "
                 f"({type(history).__name__}); call provider.new_history() "
                 "to get a compatible instance."
             )
@@ -812,7 +832,81 @@ class OpenRouterProvider(LLMProvider):
         return self._parse_response(payload)
 
 
-# ── Default provider factory ─────────────────────────────────────────────────
+# ── Concrete OpenAI-compat providers ─────────────────────────────────────────
+# Each is a thin subclass that fills in the per-vendor URL + key/model
+# field names + default model id + help URL. Add a new provider by
+# adding ~10 lines here and one entry in PROVIDER_REGISTRY at the
+# bottom of this file (used by the factory + the Settings UI guard).
+
+class OpenRouterProvider(_OpenAICompatProvider):
+    BASE_URL      = "https://openrouter.ai/api/v1"
+    PROVIDER_NAME = "openrouter"
+    API_KEY_FIELD = "openrouter_api_key"
+    MODEL_FIELD   = "openrouter_model"
+    # Default to Claude Sonnet via OR so behaviour is consistent when
+    # users just flip the provider switch without touching the model.
+    DEFAULT_MODEL = "anthropic/claude-sonnet-4"
+    KEY_HELP_URL  = "openrouter.ai/keys"
+
+    def _get_extra_headers(self) -> Dict[str, str]:
+        # OpenRouter ranks "popular apps" by these headers — cheap
+        # marketing visibility for OpenTeddy.
+        return {
+            "HTTP-Referer": "https://openteddy.net",
+            "X-Title":      "OpenTeddy",
+        }
+
+
+class OpenAIProvider(_OpenAICompatProvider):
+    """Direct ChatGPT API. For users who already pay for OpenAI and
+    want to consolidate billing instead of going through OpenRouter."""
+    BASE_URL      = "https://api.openai.com/v1"
+    PROVIDER_NAME = "openai"
+    API_KEY_FIELD = "openai_api_key"
+    MODEL_FIELD   = "openai_model"
+    DEFAULT_MODEL = "gpt-4o"
+    KEY_HELP_URL  = "platform.openai.com/api-keys"
+
+
+class GeminiProvider(_OpenAICompatProvider):
+    """Google Gemini via the OpenAI-compat endpoint Google added in
+    Nov 2024. Same Bearer auth + chat-completions shape, just a
+    different base URL. Tool use IS supported on this endpoint."""
+    BASE_URL      = "https://generativelanguage.googleapis.com/v1beta/openai"
+    PROVIDER_NAME = "gemini"
+    API_KEY_FIELD = "gemini_api_key"
+    MODEL_FIELD   = "gemini_model"
+    DEFAULT_MODEL = "gemini-2.0-flash"
+    KEY_HELP_URL  = "aistudio.google.com/app/apikey"
+
+
+class DeepseekProvider(_OpenAICompatProvider):
+    """Deepseek's direct API — pure OpenAI-compat. Cheapest of the
+    four (~$0.27 / M input tokens for deepseek-chat). Tool-use
+    quality is weaker than Claude / GPT-4 but workable for non-
+    long-horizon tasks."""
+    BASE_URL      = "https://api.deepseek.com/v1"
+    PROVIDER_NAME = "deepseek"
+    API_KEY_FIELD = "deepseek_api_key"
+    MODEL_FIELD   = "deepseek_model"
+    DEFAULT_MODEL = "deepseek-chat"
+    KEY_HELP_URL  = "platform.deepseek.com/api_keys"
+
+
+# ── Provider registry + factory ──────────────────────────────────────────────
+
+# Single source of truth for "which providers exist". The Settings UI
+# walks this same registry to render the provider dropdown + the
+# conditional key/model rows, so adding a 6th provider is one entry
+# here + one row in static/index.html — nothing else needs to change.
+PROVIDER_REGISTRY: Dict[str, type] = {
+    "anthropic":  AnthropicProvider,
+    "openrouter": OpenRouterProvider,
+    "openai":     OpenAIProvider,
+    "gemini":     GeminiProvider,
+    "deepseek":   DeepseekProvider,
+}
+
 
 _DEFAULT_PROVIDER: Optional[LLMProvider] = None
 _DEFAULT_PROVIDER_NAME: Optional[str] = None
@@ -820,27 +914,22 @@ _DEFAULT_PROVIDER_NAME: Optional[str] = None
 
 def get_default_provider() -> LLMProvider:
     """Return the configured default provider, switching on the
-    ``config.llm_provider`` setting:
-
-      * ``"anthropic"`` (default) → :class:`AnthropicProvider`
-      * ``"openrouter"``           → :class:`OpenRouterProvider`
+    ``config.llm_provider`` setting. See :data:`PROVIDER_REGISTRY` for
+    the full set of recognised values; unknown values fall back to
+    Anthropic (the validated default).
 
     Cached as a module-level singleton, BUT we also remember which
-    provider name we cached — if the user flips the setting via
-    Settings UI, the next call rebuilds. (Plain key-rotation is
-    handled inside the provider's _get_client(), but a provider-name
-    flip needs a fresh instance.)
+    provider name we cached — if the user flips the setting via the
+    Settings UI, the next call rebuilds with the new class. Plain
+    key-rotation is handled inside the provider's _get_client(); only
+    a provider-name flip needs a fresh instance.
     """
     global _DEFAULT_PROVIDER, _DEFAULT_PROVIDER_NAME
     from config import config
     requested = (getattr(config, "llm_provider", None) or "anthropic").lower()
     if _DEFAULT_PROVIDER is not None and _DEFAULT_PROVIDER_NAME == requested:
         return _DEFAULT_PROVIDER
-    if requested == "openrouter":
-        _DEFAULT_PROVIDER = OpenRouterProvider()
-    else:
-        # Anything else (including unset / typo) falls back to
-        # Anthropic — the validated default.
-        _DEFAULT_PROVIDER = AnthropicProvider()
+    cls = PROVIDER_REGISTRY.get(requested, AnthropicProvider)
+    _DEFAULT_PROVIDER = cls()
     _DEFAULT_PROVIDER_NAME = requested
     return _DEFAULT_PROVIDER
