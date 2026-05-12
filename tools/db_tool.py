@@ -56,12 +56,86 @@ from __future__ import annotations
 import csv
 import logging
 import os
+import re
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
 from tool_registry import RiskLevel, make_result
 
 logger = logging.getLogger(__name__)
+
+
+# ── Always-on destructive-SQL block ──────────────────────────────────────────
+#
+# These four keywords are HARD-BLOCKED on every DB-tool call, regardless of
+# approval state, regardless of the kind of connection, regardless of whether
+# the model thinks it has a good reason. The block fires BEFORE the approval
+# queue — users don't even get a popup for an op we won't run.
+#
+# Why hard-block (vs trust the approval queue):
+#   1. LLM is operating on user data the user often doesn't fully know — a
+#      misjudged WHERE clause (or NO WHERE clause) on UPDATE / DELETE can
+#      wipe a production table in milliseconds. Even with an approval prompt,
+#      humans click-through rapidly under "the agent is busy" mental load.
+#   2. The destructive ops here (DELETE / DROP / TRUNCATE / UPDATE) are
+#      effectively irreversible without a backup. The bug class isn't worth
+#      the marginal capability gain.
+#   3. If a user genuinely needs to run DELETE etc. on their DB, they can
+#      open psql / mysql / DataGrip and do it manually with full agency.
+#      The agent doesn't NEED this power to be useful for analytics.
+#
+# Detection strategy:
+#   * Strip line + block comments so `-- DROP TABLE x` doesn't trigger.
+#   * Split on ; so multi-statement SQL ("SELECT 1; DROP TABLE x") gets
+#     caught on the destructive half.
+#   * Match each statement with a \bKEYWORD\b regex so CTE tricks like
+#     ``WITH d AS (DELETE FROM x RETURNING *) SELECT * FROM d`` get caught
+#     (Postgres allows DELETE inside a CTE — a startswith() check would
+#     miss this).
+#
+# We deliberately don't pretend to parse SQL — that's a rabbit hole. Keyword
+# matching has a small false-positive surface (a column literally named
+# "delete" would refuse to query) but that's a SQL-reserved-word problem
+# users can solve by aliasing.
+_DESTRUCTIVE_KEYWORDS = (
+    "DELETE",     # remove rows
+    "DROP",       # remove tables / schemas / indexes / databases / users
+    "TRUNCATE",   # instant-empty a table (DDL-level data loss)
+    "UPDATE",     # mutate rows in place — most common LLM footgun
+)
+
+
+def _check_safe_sql(sql: str) -> Optional[str]:
+    """Return ``None`` when the SQL is allowed, otherwise a
+    user-facing error string explaining which keyword tripped the
+    block.
+
+    Applied to db_query, db_query_to_csv, AND db_execute — defence in
+    depth, since each of the three tools is a separate entry point and
+    we never want a code path that lets DELETE through.
+    """
+    # Strip line ("-- ...") and block ("/* ... */") comments first.
+    # Without this, a polite comment "-- DROP TABLE users" trips the
+    # filter and breaks legitimate annotated queries.
+    cleaned = re.sub(r"--.*$",      "", sql,     flags=re.MULTILINE)
+    cleaned = re.sub(r"/\*.*?\*/",  "", cleaned, flags=re.DOTALL)
+    for stmt in cleaned.split(";"):
+        stmt = stmt.strip()
+        if not stmt:
+            continue
+        upper = stmt.upper()
+        for kw in _DESTRUCTIVE_KEYWORDS:
+            if re.search(rf"\b{kw}\b", upper):
+                return (
+                    f"OpenTeddy refuses to run {kw} against a database "
+                    f"connection. DELETE / DROP / TRUNCATE / UPDATE are "
+                    f"irreversible operations that have repeatedly caused "
+                    f"data loss when LLMs run them with the wrong WHERE "
+                    f"clause — they're blocked regardless of approval "
+                    f"state. Run this manually in your DB client if you "
+                    f"really need it."
+                )
+    return None
 
 
 # ── Engine cache (keyed by URL) ───────────────────────────────────────────────
@@ -227,15 +301,26 @@ async def db_query(sql: str, limit: int = 1000) -> Dict[str, Any]:
     1000 rows by default so a misjudged query can't return 10M rows
     into the LLM context. Pass ``limit=N`` to override.
 
-    Hard-rejects write/DDL keywords — use db_execute for those.
+    Two safety layers:
+      1. _check_safe_sql() — HARD-BLOCKS DELETE / DROP / TRUNCATE /
+         UPDATE no matter what. (Yes, this is also a write-keyword
+         check; the duplication is intentional — db_query is meant
+         for SELECT.)
+      2. _is_write_sql() — rejects any other write/DDL keyword and
+         redirects to db_execute (which goes through approval).
     """
     start = time.monotonic()
+    block_err = _check_safe_sql(sql)
+    if block_err:
+        return make_result(False, error=block_err, duration_ms=_ms(start))
     if _is_write_sql(sql):
         return make_result(
             False,
             error=(
-                "db_query is SELECT-only. Use db_execute for INSERT / "
-                "UPDATE / DELETE / DDL — those require user approval."
+                "db_query is SELECT-only. Use db_execute for non-"
+                "destructive writes (INSERT / CREATE / ALTER) — those "
+                "require user approval. DELETE / DROP / TRUNCATE / "
+                "UPDATE are blocked regardless."
             ),
             duration_ms=_ms(start),
         )
@@ -284,10 +369,17 @@ async def db_query_to_csv(sql: str, output_path: str) -> Dict[str, Any]:
     SQL exports into /etc/.
     """
     start = time.monotonic()
+    block_err = _check_safe_sql(sql)
+    if block_err:
+        return make_result(False, error=block_err, duration_ms=_ms(start))
     if _is_write_sql(sql):
         return make_result(
             False,
-            error="db_query_to_csv is SELECT-only. Use db_execute for writes.",
+            error=(
+                "db_query_to_csv is SELECT-only. Use db_execute for "
+                "non-destructive writes — DELETE / DROP / TRUNCATE / "
+                "UPDATE are blocked regardless."
+            ),
             duration_ms=_ms(start),
         )
     # Workspace-relative path; reject anything that tries to escape.
@@ -334,9 +426,24 @@ async def db_query_to_csv(sql: str, output_path: str) -> Dict[str, Any]:
 
 
 async def db_execute(sql: str) -> Dict[str, Any]:
-    """Execute INSERT / UPDATE / DELETE / DDL. HIGH risk — requires
-    user approval via the popup before the SQL runs."""
+    """Execute a non-destructive write (INSERT / CREATE / ALTER /
+    GRANT / etc.). HIGH risk — requires user approval via the popup
+    before the SQL runs.
+
+    DELETE / DROP / TRUNCATE / UPDATE are HARD-BLOCKED here even
+    though this tool is approval-gated — approval-click-through is
+    a known failure mode and the destructive ops are irreversible.
+    Block fires BEFORE the approval queue so the user doesn't get
+    a popup for an op we won't run anyway.
+    """
     start = time.monotonic()
+    # Defence layer 1: hard block destructive keywords. Runs before
+    # approval — no point asking the user to approve something we'd
+    # refuse to execute. Returns the user-facing reason verbatim.
+    block_err = _check_safe_sql(sql)
+    if block_err:
+        return make_result(False, error=block_err, duration_ms=_ms(start))
+
     engine, err = await _get_session_engine()
     if err:
         return make_result(False, error=err, duration_ms=_ms(start))
@@ -479,8 +586,14 @@ _SCHEMA_EXECUTE: Dict[str, Any] = {
     "function": {
         "name": "db_execute",
         "description": (
-            "Run a write SQL statement (INSERT, UPDATE, DELETE, DDL). "
-            "Requires user approval before execution."
+            "Run a non-destructive write SQL statement (INSERT, CREATE "
+            "TABLE/INDEX/VIEW, ALTER ADD COLUMN, GRANT, etc.). Requires "
+            "user approval before execution.\n\n"
+            "BLOCKED regardless of approval: DELETE, DROP, TRUNCATE, "
+            "UPDATE. These keywords are hard-blocked even inside CTEs "
+            "(WITH ... AS (DELETE FROM ...)) and across multi-statement "
+            "SQL — there is no way to bypass. If the user wants such an "
+            "operation, ask them to run it manually in their DB client."
         ),
         "parameters": {
             "type": "object",
