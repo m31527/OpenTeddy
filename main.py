@@ -2059,6 +2059,21 @@ async def get_usage_summary() -> dict:
     return await tracker.get_usage_summary()
 
 
+@app.get("/admin/perf")
+async def get_perf_stats(days: int = 30, slowest_n: int = 10) -> dict:
+    """Per-mode time-to-result aggregates for the Performance card in
+    the Usage tab.
+
+    Window defaults to 30 days, slowest list defaults to 10. The user
+    can pass ``?days=7`` to scope to a quicker recency window when
+    benchmarking a specific change. Capped at 365 days + 100 slowest
+    to keep one accidental URL from triggering a megabyte response.
+    """
+    days      = max(1, min(int(days),      365))
+    slowest_n = max(1, min(int(slowest_n), 100))
+    return await tracker.get_perf_stats(days=days, slowest_n=slowest_n)
+
+
 # ── Settings endpoints ────────────────────────────────────────────────────────
 
 @app.get("/settings")

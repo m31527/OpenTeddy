@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 
 import aiosqlite
@@ -769,4 +769,149 @@ class Tracker:
             "gpt4_equiv_cost_usd": round(gpt4_equiv_cost, 6),
             "gpt4_price_in_per_mtok":  30.0,
             "gpt4_price_out_per_mtok": 60.0,
+        }
+
+    # ── Performance / time-to-result statistics ─────────────────────────────
+    # User-facing observability so people can see "Chat: avg 2s, Code: 14s,
+    # Analytic: 8s" right inside the Usage tab. Doubles as feedback data the
+    # user can screenshot + send to dev when something feels slow.
+    #
+    # Numbers come from the tasks table only — created_at / completed_at
+    # bracket the entire orchestrator.run() lifecycle (plan → execute →
+    # escalate → summarise → memory write). No per-stage breakdown yet;
+    # that would need additional timestamp columns and isn't worth the
+    # schema churn until a user actually asks "why is the code phase slow".
+
+    async def get_perf_stats(self, days: int = 30, slowest_n: int = 10) -> Dict:
+        """Return per-mode duration aggregates + slowest N tasks.
+
+        Returned shape:
+          {
+            "window_days":   30,
+            "modes": {
+                "chat":     {"count": N, "mean_ms": X, "p50_ms": X,
+                             "p95_ms": X, "max_ms": X},
+                "code":     {...same...},
+                "analytic": {...same...},
+            },
+            "slowest": [
+                {"id": "...", "goal": "first 80 chars…", "mode": "code",
+                 "duration_ms": 38400, "completed_at": "2026-..."},
+                ...
+            ],
+            "total_completed": N,   # tasks completed in the window
+          }
+
+        Percentiles computed in Python after fetching the durations —
+        SQLite has no native percentile_cont(). For N up to a few
+        thousand this is cheap (sorting one column).
+        """
+        # Date window. ISO-formatted strings comparable directly against
+        # the TEXT created_at column.
+        since = (datetime.utcnow() - timedelta(days=int(days))).isoformat()
+
+        # Per-mode duration vectors. Pull (mode, duration_ms) only —
+        # everything else is computed Python-side.
+        async with self.db.execute(
+            "SELECT COALESCE(s.mode, 'code') AS mode, "
+            "       t.created_at AS created_at, "
+            "       t.completed_at AS completed_at "
+            "FROM tasks t "
+            "LEFT JOIN sessions s ON s.id = t.session_id "
+            "WHERE t.completed_at IS NOT NULL "
+            "  AND t.completed_at >= ? "
+            "  AND t.status = 'completed'",
+            (since,),
+        ) as cur:
+            rows = await cur.fetchall()
+
+        # Bucket durations by mode.
+        per_mode: Dict[str, List[int]] = {
+            "chat": [], "code": [], "analytic": [],
+        }
+        for r in rows:
+            mode = (r["mode"] or "code").lower()
+            if mode not in per_mode:
+                per_mode[mode] = []
+            try:
+                t0 = datetime.fromisoformat(r["created_at"])
+                t1 = datetime.fromisoformat(r["completed_at"])
+                ms = int((t1 - t0).total_seconds() * 1000)
+                if ms >= 0:
+                    per_mode[mode].append(ms)
+            except (TypeError, ValueError):
+                # Malformed timestamps — skip rather than blow up the
+                # whole stats endpoint over a single bad row.
+                continue
+
+        def _pct(sorted_xs: List[int], p: float) -> int:
+            """Linear-interpolation percentile against a SORTED list.
+            Returns 0 for empty input (so the UI doesn't blow up on
+            modes the user has never tried)."""
+            if not sorted_xs:
+                return 0
+            if len(sorted_xs) == 1:
+                return sorted_xs[0]
+            k = (len(sorted_xs) - 1) * (p / 100.0)
+            f = int(k)
+            c = min(f + 1, len(sorted_xs) - 1)
+            if f == c:
+                return sorted_xs[f]
+            return int(sorted_xs[f] + (k - f) * (sorted_xs[c] - sorted_xs[f]))
+
+        modes_out: Dict[str, Dict[str, int]] = {}
+        for mode, vals in per_mode.items():
+            if not vals:
+                modes_out[mode] = {
+                    "count": 0, "mean_ms": 0, "p50_ms": 0,
+                    "p95_ms": 0, "max_ms": 0,
+                }
+                continue
+            sorted_vals = sorted(vals)
+            modes_out[mode] = {
+                "count":   len(sorted_vals),
+                "mean_ms": int(sum(sorted_vals) / len(sorted_vals)),
+                "p50_ms":  _pct(sorted_vals, 50),
+                "p95_ms":  _pct(sorted_vals, 95),
+                "max_ms":  sorted_vals[-1],
+            }
+
+        # Slowest N tasks in the window. Order by duration desc on the
+        # SQL side so we don't have to load every task. (Couldn't do this
+        # in the same query above because we need the mode label from
+        # the join AND we wanted the Python-side bucketing.)
+        async with self.db.execute(
+            "SELECT t.id, t.goal, "
+            "       COALESCE(s.mode, 'code') AS mode, "
+            "       t.created_at, t.completed_at, "
+            "       CAST("
+            "         (strftime('%s', t.completed_at) - strftime('%s', t.created_at)) "
+            "         * 1000 AS INTEGER"
+            "       ) AS duration_ms "
+            "FROM tasks t "
+            "LEFT JOIN sessions s ON s.id = t.session_id "
+            "WHERE t.completed_at IS NOT NULL "
+            "  AND t.completed_at >= ? "
+            "  AND t.status = 'completed' "
+            "ORDER BY duration_ms DESC "
+            "LIMIT ?",
+            (since, int(slowest_n)),
+        ) as cur:
+            slow_rows = await cur.fetchall()
+        slowest: List[Dict] = []
+        for r in slow_rows:
+            slowest.append({
+                "id":           r["id"],
+                "goal":         (r["goal"] or "")[:120],
+                "mode":         (r["mode"] or "code").lower(),
+                "duration_ms":  int(r["duration_ms"] or 0),
+                "completed_at": r["completed_at"],
+            })
+
+        total_completed = sum(m["count"] for m in modes_out.values())
+        return {
+            "window_days":     int(days),
+            "modes":           modes_out,
+            "slowest":         slowest,
+            "total_completed": total_completed,
         }

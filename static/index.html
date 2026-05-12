@@ -3678,6 +3678,57 @@
             </div>
           </div>
 
+          <!-- ── Performance card ──────────────────────────────────
+               Per-mode time-to-result observability. Three cards
+               (Chat / Code / Analytic) each showing the volume +
+               mean + p95 + max in the chosen time window, plus a
+               "slowest 10" table users can scan to spot outliers
+               and screenshot back to dev as bug reports. -->
+          <div class="card">
+            <div style="display:flex; justify-content:space-between; align-items:center; gap:0.8rem; flex-wrap:wrap;">
+              <h2 data-i18n="perf_heading">Performance — time to result</h2>
+              <div style="display:flex; gap:0.4rem; align-items:center;">
+                <label style="font-size:0.78rem; color:var(--text-muted);" data-i18n="perf_window_label">Window:</label>
+                <select id="perfWindow" onchange="loadPerfStats()"
+                        style="padding:0.25rem 0.5rem; font-size:0.78rem;">
+                  <option value="7"  data-i18n="perf_window_7d">Last 7 days</option>
+                  <option value="30" selected data-i18n="perf_window_30d">Last 30 days</option>
+                  <option value="90" data-i18n="perf_window_90d">Last 90 days</option>
+                  <option value="365" data-i18n="perf_window_365d">Last year</option>
+                </select>
+                <button class="btn-ghost btn-sm" onclick="loadPerfStats()"
+                        data-i18n="btn_refresh_stats">Refresh Stats</button>
+              </div>
+            </div>
+            <p style="color:var(--text-muted); font-size:0.78rem; margin:0.3rem 0 0.8rem; line-height:1.5;"
+               data-i18n="perf_subhead">
+              How long each task takes from submit to final result, broken down by mode. Use the slowest list to spot regressions; screenshot it into a bug report if something looks off.
+            </p>
+            <div class="stats-grid" id="perfModeGrid">
+              <!-- 3 mode cards inserted by renderPerfStats() -->
+              <div class="stat-card"><div class="stat-label">—</div><div class="stat-value">—</div></div>
+              <div class="stat-card"><div class="stat-label">—</div><div class="stat-value">—</div></div>
+              <div class="stat-card"><div class="stat-label">—</div><div class="stat-value">—</div></div>
+            </div>
+            <div style="margin-top:1rem;">
+              <h3 style="font-size:0.92rem; font-weight:600; margin-bottom:0.5rem;"
+                  data-i18n="perf_slowest_heading">Slowest tasks in this window</h3>
+              <table class="usage-table" style="width:100%;">
+                <thead>
+                  <tr>
+                    <th style="width:1%; white-space:nowrap;" data-i18n="perf_slowest_col_mode">Mode</th>
+                    <th data-i18n="perf_slowest_col_goal">Task</th>
+                    <th style="width:1%; white-space:nowrap; text-align:right;" data-i18n="perf_slowest_col_duration">Duration</th>
+                    <th style="width:1%; white-space:nowrap;" data-i18n="perf_slowest_col_when">Completed</th>
+                  </tr>
+                </thead>
+                <tbody id="perfSlowestBody">
+                  <tr><td colspan="4" style="text-align:center;color:var(--text-muted);padding:1rem;">—</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
           <div class="card">
             <h2 data-i18n="usage_records">Usage Records</h2>
             <div class="usage-filters">
@@ -6386,7 +6437,7 @@
 
       if (name === 'tools')    loadTools();   // also covers ex-'skills'
       if (name === 'memory')   loadMemory();
-      if (name === 'usage')    { loadUsageSummary(); loadUsageRecords(1); }
+      if (name === 'usage')    { loadUsageSummary(); loadUsageRecords(1); loadPerfStats(); }
       if (name === 'settings') loadSettings();
       closeSidebar();
     }
@@ -7851,6 +7902,120 @@
 
         drawChart(data.cost_by_day || []);
       } catch (e) { console.error('Usage summary error:', e); }
+    }
+
+    // ── Performance stats (time to result, per mode) ────────────────────
+    // Pulls /admin/perf and renders the three mode cards + slowest-N table.
+    // Window selector ('Last 7 / 30 / 90 days / Year') passes ?days=N.
+    // No chart / no histogram yet — mean/p95/max numerics give 90% of the
+    // signal users want, and counting bins by mode keeps the rendering
+    // dead simple.
+
+    function _fmtDuration(ms) {
+      // Render ms in the unit that produces 1-3 significant digits.
+      // 432 ms       → "432 ms"
+      // 1432 ms      → "1.4 s"
+      // 38400 ms     → "38 s"
+      // 132000 ms    → "2.2 m"
+      // 7320000 ms   → "2.0 h"
+      if (!ms || ms < 0) return '—';
+      if (ms < 1000)    return ms + ' ms';
+      const s = ms / 1000;
+      if (s < 60)       return (s < 10 ? s.toFixed(1) : Math.round(s)) + ' s';
+      const m = s / 60;
+      if (m < 60)       return (m < 10 ? m.toFixed(1) : Math.round(m)) + ' m';
+      const h = m / 60;
+      return (h < 10 ? h.toFixed(1) : Math.round(h)) + ' h';
+    }
+
+    function _fmtRelativeTime(iso) {
+      if (!iso) return '—';
+      try {
+        const d = new Date(iso);
+        const delta = (Date.now() - d.getTime()) / 1000;
+        if (delta < 60)         return Math.round(delta) + ' s ago';
+        if (delta < 3600)       return Math.round(delta / 60) + ' m ago';
+        if (delta < 86400)      return Math.round(delta / 3600) + ' h ago';
+        return Math.round(delta / 86400) + ' d ago';
+      } catch { return iso; }
+    }
+
+    async function loadPerfStats() {
+      const win = parseInt(document.getElementById('perfWindow')?.value || '30', 10);
+      try {
+        const res = await fetch(`${API}/admin/perf?days=${win}&slowest_n=10`);
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const data = await res.json();
+        renderPerfStats(data);
+      } catch (e) {
+        console.error('Perf stats error:', e);
+      }
+    }
+
+    function renderPerfStats(data) {
+      const modes = data.modes || {};
+      // Per-mode card. Icon + label + 3 metrics (count / mean / p95) +
+      // worst-case (max) as a footnote. Empty modes show "—" everywhere
+      // so the layout doesn't shuffle when the user picks a window with
+      // no analytic tasks (e.g.).
+      const labels = {
+        chat:     { icon: '💬', label: t('perf_mode_chat')     || 'Chat'     },
+        code:     { icon: '⚙️',  label: t('perf_mode_code')     || 'Code'     },
+        analytic: { icon: '📊', label: t('perf_mode_analytic') || 'Analytic' },
+      };
+      const grid = document.getElementById('perfModeGrid');
+      if (!grid) return;
+      const cards = ['chat', 'code', 'analytic'].map(mode => {
+        const m = modes[mode] || { count: 0, mean_ms: 0, p95_ms: 0, max_ms: 0 };
+        const lbl = labels[mode];
+        if (!m.count) {
+          return `
+            <div class="stat-card">
+              <div class="stat-label">${lbl.icon} ${escHtml(lbl.label)}</div>
+              <div class="stat-value" style="color:var(--text-muted);">—</div>
+              <div style="font-size:0.7rem;color:var(--text-muted);margin-top:0.3rem;">
+                ${escHtml(t('perf_no_tasks') || 'No tasks in this window')}
+              </div>
+            </div>`;
+        }
+        return `
+          <div class="stat-card">
+            <div class="stat-label">${lbl.icon} ${escHtml(lbl.label)} <span style="opacity:0.5;font-weight:400">· ${m.count}</span></div>
+            <div class="stat-value">${escHtml(_fmtDuration(m.mean_ms))}</div>
+            <div style="font-size:0.72rem;color:var(--text-muted);margin-top:0.3rem;line-height:1.5;">
+              <div>p95: <b style="color:var(--text-secondary)">${escHtml(_fmtDuration(m.p95_ms))}</b></div>
+              <div>max: <b style="color:var(--text-secondary)">${escHtml(_fmtDuration(m.max_ms))}</b></div>
+            </div>
+          </div>`;
+      }).join('');
+      grid.innerHTML = cards;
+
+      // Slowest table
+      const tbody = document.getElementById('perfSlowestBody');
+      if (tbody) {
+        const slow = data.slowest || [];
+        if (!slow.length) {
+          tbody.innerHTML = `
+            <tr><td colspan="4" style="text-align:center;color:var(--text-muted);padding:1rem;">
+              ${escHtml(t('perf_no_tasks') || 'No tasks in this window')}
+            </td></tr>`;
+        } else {
+          tbody.innerHTML = slow.map(s => `
+            <tr>
+              <td style="white-space:nowrap;">
+                ${(labels[s.mode] || {icon:'·', label:s.mode}).icon}
+                <span style="color:var(--text-secondary);font-size:0.78rem;">${escHtml((labels[s.mode] || {label:s.mode}).label)}</span>
+              </td>
+              <td style="font-size:0.82rem;line-height:1.4;">${escHtml(s.goal || '—')}</td>
+              <td style="text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums;">
+                <b>${escHtml(_fmtDuration(s.duration_ms))}</b>
+              </td>
+              <td style="white-space:nowrap;color:var(--text-muted);font-size:0.72rem;">
+                ${escHtml(_fmtRelativeTime(s.completed_at))}
+              </td>
+            </tr>`).join('');
+        }
+      }
     }
 
     async function loadUsageRecords(page) {
