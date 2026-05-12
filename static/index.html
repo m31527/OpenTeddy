@@ -6731,14 +6731,40 @@
     }
 
     // Helper used by db_chip + connect modal — returns the current
-    // session id. We rely on the same source-of-truth as the rest of
-    // the chat UI: window._currentSessionId set by switchSession().
+    // session id.
+    //
+    // We could ALSO read window._currentSessionId, but the source of
+    // truth in this file is the module-scope `let _currentSessionId`
+    // declared near the top of the script tag. Both helpers below are
+    // defined in the SAME script tag, so they have direct closure access
+    // to that variable — no window-property dance needed.
+    //
+    // Earlier draft used:
+    //   if (window._currentSessionId) return window._currentSessionId;
+    //   const active = document.querySelector('.session-row.active');
+    //   return active ? active.dataset.sessionId || '' : '';
+    // That fell over on the desktop because:
+    //   1. window._currentSessionId is only set inside switchSession();
+    //      a freshly-loaded iframe that auto-picked a session via the
+    //      bootstrap path (line ~4657) never calls switchSession, so
+    //      window.X stays undefined.
+    //   2. The DOM fallback selector was `.session-row.active`, but the
+    //      actual class in this file is `.session-item.active` —
+    //      mismatch, querySelector returns null, helper returns "".
+    //   Net effect: 'Open or create a session first' even though a
+    //   session was active on screen.
+    //
+    // Direct closure access skips both failure modes.
     function currentSessionId() {
-      // Same name as the existing global if one is in use; fallback to
-      // walking the DOM for the active session row.
-      if (window._currentSessionId) return window._currentSessionId;
-      const active = document.querySelector('.session-row.active');
-      return active ? active.dataset.sessionId || '' : '';
+      try {
+        return _currentSessionId || "";
+      } catch (_) {
+        // Defensive — if some future refactor moves _currentSessionId
+        // out of closure scope, fall back to localStorage (the bootstrap
+        // path persists it there anyway).
+        try { return localStorage.getItem('teddy.session_id') || ''; }
+        catch { return ''; }
+      }
     }
 
     async function onFilesPicked(event) {
