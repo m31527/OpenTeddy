@@ -130,6 +130,7 @@ class ToolRegistry:
         tool_name: str,
         args: Dict[str, Any],
         task_id: str = "unknown",
+        session_id: str = "",
     ) -> Dict[str, Any]:
         """
         Execute a tool by name.
@@ -137,6 +138,11 @@ class ToolRegistry:
         LOW risk  → call directly.
         HIGH risk → create PendingApproval, wait for human resolution.
                     On reject → return rejection error so agent can try alternative.
+
+        session_id is bound to a ContextVar for the duration of the
+        tool call so tools like ``db_query`` can look up the session's
+        attached DB connection without the LLM having to pass session_id
+        in its args (and without polluting the tool's JSON schema).
         """
         tool = self._tools.get(tool_name)
         if not tool:
@@ -161,6 +167,17 @@ class ToolRegistry:
                 )
 
         # ── Execute ───────────────────────────────────────────────────────────
+        # Bind session_id to the context var BEFORE invoking the tool
+        # so any code path that needs it (db_tool's engine lookup,
+        # future per-session sandboxing) can read it without an extra
+        # function param. ONLY bind if session_id is non-empty —
+        # orchestrator.run() already set the ContextVar at the top of
+        # the task, and that binding propagates here through asyncio's
+        # context inheritance. Overwriting with "" (the default for
+        # callers that don't supply session_id) would erase the
+        # orchestrator-level binding for this one tool call.
+        from tools._context import set_session_id, reset_session_id
+        ctx_token = set_session_id(session_id) if session_id else None
         start = time.monotonic()
         try:
             result = await fn(**args)
@@ -173,6 +190,9 @@ class ToolRegistry:
             duration_ms = int((time.monotonic() - start) * 1000)
             logger.error("Tool '%s' raised exception: %s", tool_name, exc)
             return make_result(False, error=str(exc), duration_ms=duration_ms)
+        finally:
+            if ctx_token is not None:
+                reset_session_id(ctx_token)
 
     # ── Auto-registration ─────────────────────────────────────────────────────
 

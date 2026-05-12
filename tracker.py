@@ -93,6 +93,16 @@ class Tracker:
             # are both disabled. Intended for Analytic sessions
             # handling customer data / PII.
             "ALTER TABLE sessions ADD COLUMN local_only INTEGER NOT NULL DEFAULT 0",
+            # Per-session DB connection (Analytic mode "Connect database"
+            # flow). The URL is treated as a secret — masked in UI and
+            # redacted in /admin/diagnostics zips. db_kind names the
+            # SQLAlchemy driver family (postgres / mysql / sqlite /
+            # mssql / oracle / duckdb). db_label is the friendly chip
+            # text auto-derived from URL host+db on connect. All three
+            # default to empty so existing rows match a fresh session.
+            "ALTER TABLE sessions ADD COLUMN db_kind  TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE sessions ADD COLUMN db_url   TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE sessions ADD COLUMN db_label TEXT NOT NULL DEFAULT ''",
         ]
         for sql in migrations:
             try:
@@ -259,6 +269,62 @@ class Tracker:
         await self.db.execute(
             "UPDATE sessions SET local_only=?, updated_at=? WHERE id=?",
             (1 if local_only else 0, datetime.utcnow().isoformat(), session_id),
+        )
+        await self.db.commit()
+
+    # ── Per-session DB connection (Analytic mode "Connect database") ───────
+    #
+    # These three methods own the kind/url/label trio on sessions. The
+    # URL is the only true secret here — kind is just a router (postgres
+    # / mysql / sqlite / …), label is the friendly chip text shown in
+    # the session UI. Callers retrieve the URL via get_session_db_connection
+    # only at point of use (db_tool building an engine); the URL never
+    # gets serialised back to the UI verbatim — only kind + label.
+
+    async def set_session_db_connection(
+        self,
+        session_id: str,
+        kind: str,
+        url: str,
+        label: str,
+    ) -> None:
+        """Attach a DB connection to the session. Overwrites any
+        previously-set connection on the same session — switching
+        databases mid-session means dropping the old engine and
+        building a fresh one keyed off the new URL."""
+        await self.db.execute(
+            "UPDATE sessions SET db_kind=?, db_url=?, db_label=?, updated_at=? "
+            "WHERE id=?",
+            (kind, url, label, datetime.utcnow().isoformat(), session_id),
+        )
+        await self.db.commit()
+
+    async def get_session_db_connection(
+        self, session_id: str,
+    ) -> Optional[dict]:
+        """Return ``{kind, url, label}`` for the session, or None if
+        no DB has been attached. The URL is returned verbatim — only
+        call this from server-side code (tool execution, internal
+        engine builder); never expose it to the UI."""
+        async with self.db.execute(
+            "SELECT db_kind, db_url, db_label FROM sessions WHERE id=?",
+            (session_id,),
+        ) as cursor:
+            row = await cursor.fetchone()
+        if not row:
+            return None
+        kind, url, label = row[0], row[1], row[2]
+        if not (kind and url):
+            return None
+        return {"kind": kind, "url": url, "label": label}
+
+    async def clear_session_db_connection(self, session_id: str) -> None:
+        """Detach the DB. Same effect as set_session_db_connection with
+        empty strings; named separately so call-sites read clearly."""
+        await self.db.execute(
+            "UPDATE sessions SET db_kind='', db_url='', db_label='', "
+            "updated_at=? WHERE id=?",
+            (datetime.utcnow().isoformat(), session_id),
         )
         await self.db.commit()
 

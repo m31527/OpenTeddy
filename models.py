@@ -220,11 +220,18 @@ CREATE TABLE IF NOT EXISTS sessions (
     mode          TEXT NOT NULL DEFAULT 'code',
     workspace_dir TEXT,
     local_only    INTEGER NOT NULL DEFAULT 0,  -- boolean 0/1
+    -- Per-session DB connection (Analytic mode "Connect database" flow).
+    -- db_url is a secret — masked in UI, redacted in /admin/diagnostics
+    -- zips. db_kind names the SQLAlchemy driver family. db_label is the
+    -- friendly chip text auto-derived from URL host+db on connect.
+    db_kind       TEXT NOT NULL DEFAULT '',
+    db_url        TEXT NOT NULL DEFAULT '',
+    db_label      TEXT NOT NULL DEFAULT '',
     created_at    TEXT NOT NULL,
     updated_at    TEXT NOT NULL
 );
--- NOTE: for pre-existing DBs the `mode`, `workspace_dir` and
--- `local_only` columns are added in tracker._migrate_usage_columns.
+-- NOTE: for pre-existing DBs the `mode`, `workspace_dir`, `local_only`
+-- and `db_*` columns are added in tracker._migrate_usage_columns.
 
 CREATE TABLE IF NOT EXISTS tasks (
     id          TEXT PRIMARY KEY,

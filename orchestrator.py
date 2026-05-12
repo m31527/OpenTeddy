@@ -331,6 +331,19 @@ class Orchestrator:
                 pass
         set_session_workspace(session_ws)
         set_session_local_only(session_local_only)
+
+        # Bind session_id to the per-task ContextVar that tool
+        # implementations read. Set at the top of run() so the whole
+        # task lifecycle — planning, executor turns, escalation,
+        # summary synthesis — sees the same session. ContextVar is
+        # asyncio-task-local; concurrent orchestrator.run() calls in
+        # other sessions don't see each other's binding.
+        # Tools that need to look up per-session state (db_tool's
+        # engine builder reads the session's attached DB URL via
+        # tracker) just call tools._context.get_session_id() —
+        # no extra plumbing through executor/registry needed.
+        from tools._context import set_session_id as _ot_set_session
+        _ot_set_session(req.session_id or "")
         if session_ws:
             logger.info(
                 "Task %s using session-specific workspace: %s",

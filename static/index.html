@@ -2818,6 +2818,81 @@
     }
     .upload-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
+    /* ── Attach menu (+ button popup) ────────────────────────────────
+       Replaces the direct file-picker click on the + button with a
+       small popup so Analytic mode can offer both file-upload and
+       database-connect as attachment sources. Positioning is
+       absolute against the .attach-menu-wrap parent. */
+    .attach-menu-wrap { position: relative; }
+    .attach-menu {
+      position: absolute;
+      bottom: calc(100% + 6px);
+      left: 0;
+      min-width: 240px;
+      background: var(--bg-primary, #1c1c1f);
+      border: 1px solid var(--border, rgba(255,255,255,0.12));
+      border-radius: 10px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+      padding: 0.3rem;
+      z-index: 50;
+      animation: attach-menu-pop 0.12s ease-out;
+    }
+    .attach-menu[hidden] { display: none; }
+    @keyframes attach-menu-pop {
+      from { opacity: 0; transform: translateY(4px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    .attach-menu-item {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      width: 100%;
+      padding: 0.55rem 0.7rem;
+      border: none;
+      background: transparent;
+      color: var(--text-primary, #e5e5e7);
+      cursor: pointer;
+      border-radius: 6px;
+      text-align: left;
+      font: inherit;
+    }
+    .attach-menu-item:hover {
+      background: var(--bg-secondary, rgba(255,255,255,0.06));
+    }
+    .attach-menu-icon { font-size: 1.05rem; flex-shrink: 0; }
+    .attach-menu-text { display: flex; flex-direction: column; gap: 0.15rem; }
+    .attach-menu-label { font-size: 0.84rem; font-weight: 500; }
+    .attach-menu-hint  { font-size: 0.72rem; color: var(--text-muted, rgba(255,255,255,0.45)); }
+
+    /* ── DB connection chip (shown when session has a DB attached) ──── */
+    .db-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      padding: 0.18rem 0.55rem;
+      background: rgba(102, 126, 234, 0.12);
+      border: 1px solid rgba(102, 126, 234, 0.35);
+      border-radius: 999px;
+      font-size: 0.72rem;
+      color: rgba(102, 126, 234, 1);
+      cursor: pointer;
+      transition: background 0.12s;
+      max-width: 240px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .db-chip:hover { background: rgba(102, 126, 234, 0.18); }
+    .db-chip[hidden] { display: none; }
+    .db-chip-icon { font-size: 0.9rem; }
+    .db-chip-label { overflow: hidden; text-overflow: ellipsis; }
+    .db-chip-disconnect {
+      margin-left: 0.2rem; opacity: 0.6; cursor: pointer;
+      background: transparent; border: none; color: inherit;
+      padding: 0 2px;
+    }
+    .db-chip-disconnect:hover { opacity: 1; }
+
     .attach-chips {
       display: flex;
       flex-wrap: wrap;
@@ -3339,6 +3414,25 @@
                  rel_path so runTask() can pass the list to the agent. -->
             <div id="attachmentChips" class="attach-chips"></div>
 
+            <!-- Per-session DB connection chip. Hidden by default; shown
+                 by syncDbChip() after a successful Connect database flow,
+                 cleared on disconnect. Click → reopens the connect modal
+                 in "edit" state; the ✕ → POST /sessions/{id}/db_connect
+                 DELETE then hide. -->
+            <div style="margin: 0.3rem 0;">
+              <span class="db-chip" id="dbChip" hidden
+                    onclick="openDbConnectModal()"
+                    data-i18n-title="db_chip_title"
+                    title="Database connected to this session — click to reconfigure">
+                <span class="db-chip-icon">🗄️</span>
+                <span class="db-chip-label" id="dbChipLabel">—</span>
+                <button class="db-chip-disconnect" type="button"
+                        onclick="event.stopPropagation(); disconnectSessionDb()"
+                        data-i18n-title="db_chip_disconnect_title"
+                        title="Disconnect database">✕</button>
+              </span>
+            </div>
+
             <div class="chat-input-row">
               <div class="priority-field">
                 <label data-i18n="priority_label">Priority</label>
@@ -3347,10 +3441,34 @@
               <input type="file" id="fileInput" multiple
                 accept=".csv,.tsv,.json,.xlsx,.xls,.txt,.md,.log,.yaml,.yml,.parquet"
                 onchange="onFilesPicked(event)" style="display:none">
-              <button class="upload-btn" id="uploadBtn" type="button"
-                onclick="document.getElementById('fileInput').click()"
-                data-i18n-title="upload_title"
-                title="Attach files to this task (analytic mode: csv / xlsx / json etc.)">+</button>
+              <!-- Attach-source menu. Previously the + was a direct
+                   file-picker trigger; now it opens a small popup so the
+                   user can also attach a database connection in Analytic
+                   mode. File picker still wired via the menu's first item. -->
+              <div class="attach-menu-wrap">
+                <button class="upload-btn" id="uploadBtn" type="button"
+                  onclick="toggleAttachMenu(event)"
+                  data-i18n-title="upload_title"
+                  title="Attach files or a database (analytic mode)">+</button>
+                <div class="attach-menu" id="attachMenu" hidden role="menu">
+                  <button class="attach-menu-item" type="button"
+                          onclick="closeAttachMenu(); document.getElementById('fileInput').click()">
+                    <span class="attach-menu-icon">📎</span>
+                    <span class="attach-menu-text">
+                      <span class="attach-menu-label" data-i18n="attach_file_label">Upload file</span>
+                      <span class="attach-menu-hint"  data-i18n="attach_file_hint">CSV · XLSX · JSON · text</span>
+                    </span>
+                  </button>
+                  <button class="attach-menu-item" type="button"
+                          onclick="closeAttachMenu(); openDbConnectModal()">
+                    <span class="attach-menu-icon">🗄️</span>
+                    <span class="attach-menu-text">
+                      <span class="attach-menu-label" data-i18n="attach_db_label">Connect database</span>
+                      <span class="attach-menu-hint"  data-i18n="attach_db_hint">Postgres · MySQL · SQLite · MSSQL</span>
+                    </span>
+                  </button>
+                </div>
+              </div>
               <div class="chat-input-wrap">
                 <textarea id="goal" rows="1"
                   data-i18n-placeholder="goal_placeholder"
@@ -4006,6 +4124,64 @@
 
     </div><!-- /main-content -->
   </div><!-- /app-layout -->
+
+  <!-- ── Connect database modal ─────────────────────────────────────────── -->
+  <!-- Opened from the + button menu in Analytic mode. User picks a kind
+       (postgres / mysql / sqlite / mssql / oracle / duckdb), pastes a
+       SQLAlchemy URL, and clicks Test & Connect. The backend runs
+       SELECT 1 against the URL before persisting — bad URLs surface
+       a friendly error inline without leaving anything in the DB. On
+       success the modal closes, the chat header's db-chip shows the
+       new connection, and a hidden auto-discovery task fires that
+       summarises the schema as the assistant's first message. -->
+  <div class="signin-overlay" id="dbConnectOverlay" hidden onclick="maybeCloseDbConnectModal(event)">
+    <div class="signin-dialog" style="max-width: 520px;">
+      <button class="signin-dialog-close" type="button"
+              onclick="closeDbConnectModal()" aria-label="Close" title="Close">✕</button>
+      <div class="signin-dialog-icon">🗄️</div>
+      <h2 class="signin-dialog-title" data-i18n="db_connect_title">Connect a database</h2>
+      <p class="signin-dialog-body" data-i18n="db_connect_body">
+        Attach a database to this session. The agent will explore the schema
+        and let you run analyses + generate charts from your tables.
+        The connection lives in this session only — no global setting.
+      </p>
+
+      <div style="display:flex; flex-direction:column; gap:0.7rem; text-align:left; margin: 0.6rem 0 0.9rem;">
+        <div class="field">
+          <label data-i18n="db_connect_kind_label">Database type</label>
+          <select id="dbConnectKind" onchange="onDbConnectKindChange()">
+            <option value="postgres">PostgreSQL</option>
+            <option value="mysql">MySQL / MariaDB</option>
+            <option value="sqlite">SQLite (local file)</option>
+            <option value="mssql">Microsoft SQL Server</option>
+            <option value="oracle">Oracle</option>
+            <option value="duckdb">DuckDB</option>
+          </select>
+        </div>
+        <div class="field">
+          <label data-i18n="db_connect_url_label">Connection URL</label>
+          <input type="password" id="dbConnectUrl"
+                 placeholder="postgresql+asyncpg://user:pass@host:5432/dbname"
+                 autocomplete="off" spellcheck="false" />
+          <!-- Per-kind hint about what URL prefix to use. Updated by
+               onDbConnectKindChange() when the selector flips. -->
+          <div id="dbConnectHint"
+               style="font-size:0.72rem;color:var(--text-muted);margin-top:0.3rem;line-height:1.4">
+            postgresql+asyncpg://user:pass@host:5432/dbname
+          </div>
+        </div>
+        <div id="dbConnectError"
+             style="display:none;padding:0.5rem 0.7rem;background:rgba(220,53,69,0.1);border-left:2px solid #c0392b;color:#c0392b;font-size:0.78rem;border-radius:4px;text-align:left;line-height:1.4">
+        </div>
+      </div>
+
+      <div style="display:flex; gap:0.5rem; justify-content:flex-end;">
+        <button class="btn-ghost" type="button" onclick="closeDbConnectModal()" data-i18n="btn_cancel">Cancel</button>
+        <button class="btn-primary" type="button" id="dbConnectSubmitBtn"
+                onclick="submitDbConnect()" data-i18n="db_connect_submit">Test &amp; Connect</button>
+      </div>
+    </div>
+  </div>
 
   <!-- ── Workspace folder-picker modal ──────────────────────────────────── -->
   <!-- Replaces the old JS prompt() flow. Shortcut roots on the left,
@@ -4953,6 +5129,12 @@
       updatePrivacyIndicator();    // reflect this session's local_only
       refreshMemoryCount();        // intentionally not awaited — fire and forget
       refreshWorkspaceIndicator(); // session workspace may differ from prev
+      // Also re-check the DB-connection chip — switching sessions may
+      // mean switching DB attachments (or unattaching entirely).
+      // Expose the new id on window so the helpers can read it without
+      // a closure dance.
+      window._currentSessionId = id;
+      syncDbChip();
       await loadChatHistory();
       closeSidebar();
     }
@@ -6091,6 +6273,185 @@
       if (n < 1024)      return `${n} B`;
       if (n < 1024*1024) return `${(n/1024).toFixed(1)} KB`;
       return `${(n/1024/1024).toFixed(1)} MB`;
+    }
+
+    // ── Attach menu (+ button popup) ───────────────────────────────────
+    // The + button no longer goes directly to file-picker; it opens a
+    // small menu with "Upload file" and "Connect database" choices.
+    // File upload still flows through onFilesPicked exactly like before.
+    function toggleAttachMenu(event) {
+      if (event) event.stopPropagation();
+      const menu = document.getElementById('attachMenu');
+      if (!menu) return;
+      const wasHidden = menu.hidden;
+      menu.hidden = !wasHidden;
+      // Outside-click closes — install once, the listener self-removes
+      // when the menu closes.
+      if (wasHidden) {
+        setTimeout(() => {
+          document.addEventListener('click', _attachMenuOutsideClose, true);
+        }, 0);
+      }
+    }
+    function closeAttachMenu() {
+      const menu = document.getElementById('attachMenu');
+      if (menu) menu.hidden = true;
+      document.removeEventListener('click', _attachMenuOutsideClose, true);
+    }
+    function _attachMenuOutsideClose(e) {
+      const wrap = document.querySelector('.attach-menu-wrap');
+      if (wrap && !wrap.contains(e.target)) closeAttachMenu();
+    }
+
+    // ── Connect database modal ──────────────────────────────────────────
+    // Per-kind URL-format hints + default examples. The selector flips
+    // the hint text on change so the user sees the right URL shape.
+    const _DB_KIND_HINTS = {
+      postgres: 'postgresql+asyncpg://user:pass@host:5432/dbname',
+      mysql:    'mysql+aiomysql://user:pass@host:3306/dbname',
+      sqlite:   'sqlite+aiosqlite:////absolute/path/to/file.db',
+      mssql:    'mssql+aioodbc://user:pass@host:1433/dbname',
+      oracle:   'oracle+oracledb://user:pass@host:1521/?service_name=svc',
+      duckdb:   'duckdb:////absolute/path/to/file.db  (or duckdb:///:memory:)',
+    };
+
+    function openDbConnectModal() {
+      const overlay = document.getElementById('dbConnectOverlay');
+      const err     = document.getElementById('dbConnectError');
+      const btn     = document.getElementById('dbConnectSubmitBtn');
+      if (!overlay) return;
+      if (err) err.style.display = 'none';
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = t('db_connect_submit') || 'Test & Connect';
+      }
+      onDbConnectKindChange();   // set hint to current kind's example
+      overlay.hidden = false;
+    }
+    function closeDbConnectModal() {
+      const overlay = document.getElementById('dbConnectOverlay');
+      if (overlay) overlay.hidden = true;
+    }
+    function maybeCloseDbConnectModal(event) {
+      // Only close on backdrop click (not when clicking inside the
+      // dialog itself — that propagates from the dialog's children).
+      if (event.target.id === 'dbConnectOverlay') closeDbConnectModal();
+    }
+    function onDbConnectKindChange() {
+      const kind = document.getElementById('dbConnectKind')?.value || 'postgres';
+      const hint = document.getElementById('dbConnectHint');
+      const url  = document.getElementById('dbConnectUrl');
+      const example = _DB_KIND_HINTS[kind] || '';
+      if (hint) hint.textContent = example;
+      if (url && !url.value) url.placeholder = example;
+    }
+
+    async function submitDbConnect() {
+      const kind = document.getElementById('dbConnectKind').value;
+      const url  = document.getElementById('dbConnectUrl').value.trim();
+      const btn  = document.getElementById('dbConnectSubmitBtn');
+      const err  = document.getElementById('dbConnectError');
+      if (!url) {
+        err.textContent = t('db_connect_url_required') || 'Connection URL is required.';
+        err.style.display = '';
+        return;
+      }
+      const sessionId = currentSessionId();
+      if (!sessionId) {
+        err.textContent = t('db_connect_no_session') || 'Open or create a session first.';
+        err.style.display = '';
+        return;
+      }
+
+      btn.disabled = true;
+      btn.textContent = '⏳ ' + (t('db_connect_testing') || 'Testing connection…');
+      err.style.display = 'none';
+
+      try {
+        const res = await fetch(`${API}/sessions/${encodeURIComponent(sessionId)}/db_connect`, {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({ kind, url }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          // Show the driver's actual error (FastAPI's HTTPException
+          // detail) so the user can fix their URL without guessing.
+          err.textContent = data.detail || `HTTP ${res.status}`;
+          err.style.display = '';
+          btn.disabled = false;
+          btn.textContent = t('db_connect_submit') || 'Test & Connect';
+          return;
+        }
+        // Success — close modal, show chip, auto-discovery task is
+        // already queued server-side and will stream into chat.
+        closeDbConnectModal();
+        document.getElementById('dbConnectUrl').value = '';
+        await syncDbChip();
+        toast(t('db_connect_success') || '✅ Database connected — analysing schema…');
+      } catch (e) {
+        err.textContent = (t('db_connect_failed') || 'Connection failed') + ': ' + e.message;
+        err.style.display = '';
+        btn.disabled = false;
+        btn.textContent = t('db_connect_submit') || 'Test & Connect';
+      }
+    }
+
+    // ── Session DB chip ─────────────────────────────────────────────────
+    // Polls /sessions/{id}/db_connect and shows the chip if a DB is
+    // attached. Called on session-switch + after submitDbConnect succeeds.
+    async function syncDbChip() {
+      const chip      = document.getElementById('dbChip');
+      const chipLabel = document.getElementById('dbChipLabel');
+      if (!chip || !chipLabel) return;
+      const sessionId = currentSessionId();
+      if (!sessionId) { chip.hidden = true; return; }
+      try {
+        const res = await fetch(`${API}/sessions/${encodeURIComponent(sessionId)}/db_connect`);
+        const data = await res.json();
+        if (data.connected) {
+          chipLabel.textContent = `${data.label} · ${data.kind}`;
+          chip.hidden = false;
+        } else {
+          chip.hidden = true;
+        }
+      } catch (e) {
+        // Network blip — leave the chip in whatever state it was.
+        console.warn('[db-chip] sync failed:', e);
+      }
+    }
+
+    async function disconnectSessionDb() {
+      const sessionId = currentSessionId();
+      if (!sessionId) return;
+      const ok = await showConfirm({
+        title:       t('db_disconnect_title')  || 'Disconnect database?',
+        body:        t('db_disconnect_body')   || 'The agent will no longer be able to query this database in this session.',
+        okLabel:     t('db_disconnect_ok')     || 'Disconnect',
+        cancelLabel: t('btn_cancel')           || 'Cancel',
+        danger:      false,
+      });
+      if (!ok) return;
+      try {
+        await fetch(`${API}/sessions/${encodeURIComponent(sessionId)}/db_connect`, {
+          method: 'DELETE',
+        });
+        await syncDbChip();
+        toast(t('db_disconnect_done') || '🗄️ Database disconnected');
+      } catch (e) {
+        toast((t('db_disconnect_failed') || 'Disconnect failed') + ': ' + e.message, true);
+      }
+    }
+
+    // Helper used by db_chip + connect modal — returns the current
+    // session id. We rely on the same source-of-truth as the rest of
+    // the chat UI: window._currentSessionId set by switchSession().
+    function currentSessionId() {
+      // Same name as the existing global if one is in use; fallback to
+      // walking the DOM for the active session row.
+      if (window._currentSessionId) return window._currentSessionId;
+      const active = document.querySelector('.session-row.active');
+      return active ? active.dataset.sessionId || '' : '';
     }
 
     async function onFilesPicked(event) {

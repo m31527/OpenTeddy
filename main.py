@@ -18,6 +18,7 @@ from datetime import datetime
 from typing import Any, AsyncGenerator, Optional
 
 from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile, WebSocket, WebSocketDisconnect
+from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -1745,6 +1746,169 @@ async def clear_session_memory(session_id: str) -> dict:
     """
     deleted = await memory_manager.clear_session(session_id)
     return {"ok": True, "deleted_count": deleted, "session_id": session_id}
+
+
+# ── Per-session DB connection (Analytic mode "Connect database" flow) ──────
+#
+# Three endpoints power the Settings-less, session-scoped database flow:
+#
+#   GET    /sessions/{id}/db_connect    → does this session have a DB?
+#                                         returns {connected, kind, label}
+#                                         — NEVER the URL.
+#   POST   /sessions/{id}/db_connect    → test + persist a connection.
+#                                         body: {kind, url}
+#                                         tests with SELECT 1 before saving
+#                                         so we never persist a broken URL.
+#   DELETE /sessions/{id}/db_connect    → detach. Same effect as setting
+#                                         url to empty; useful when the user
+#                                         wants to clear a leaked key.
+#
+# URLs are write-only from the server's perspective — they go in via POST,
+# get stored on the session row, get used by db_tool when building the
+# session's engine, but never come back out via any API. Diagnostics
+# zips redact them.
+
+class DBConnectRequest(BaseModel):
+    """Body for POST /sessions/{id}/db_connect.
+
+    kind: one of postgres / mysql / sqlite / mssql / oracle / duckdb.
+          Used purely for the UI chip label + (future) driver-specific
+          help text. The actual driver is determined by the URL prefix
+          SQLAlchemy parses.
+    url:  full SQLAlchemy async URL, e.g.
+          'postgresql+asyncpg://user:pass@host:5432/dbname'.
+          Stored as a secret on the session row.
+    """
+    kind: str
+    url:  str
+
+
+def _derive_db_label(kind: str, url: str) -> str:
+    """Build a friendly chip label from the URL — host + db name,
+    minus credentials. Falls back to '<kind> connection' if the URL
+    doesn't parse cleanly."""
+    try:
+        from urllib.parse import urlparse
+        # SQLAlchemy URLs have a + in the scheme (e.g. postgresql+asyncpg);
+        # urlparse handles them but the scheme captures everything up to ://
+        p = urlparse(url)
+        host = p.hostname or ""
+        # path is "/dbname" — strip the leading slash
+        db = (p.path or "").lstrip("/").split("?", 1)[0]
+        # Format: "dbname @ host" if both present; just one of them otherwise.
+        if host and db:
+            return f"{db} @ {host}"
+        if db:
+            return db
+        if host:
+            return host
+    except Exception:  # noqa: BLE001
+        pass
+    return f"{kind} connection"
+
+
+@app.get("/sessions/{session_id}/db_connect")
+async def get_session_db_connect(session_id: str) -> dict:
+    """Return whether the session has a DB attached. NEVER returns the
+    URL — only the kind + label. Used by the iframe to render the
+    'connected' chip in the chat header on session-switch."""
+    conn = await tracker.get_session_db_connection(session_id)
+    if not conn:
+        return {"connected": False, "kind": "", "label": ""}
+    return {
+        "connected": True,
+        "kind":  conn["kind"],
+        "label": conn["label"],
+    }
+
+
+@app.post("/sessions/{session_id}/db_connect")
+async def set_session_db_connect(session_id: str, body: DBConnectRequest) -> dict:
+    """Attach a DB to the session.
+
+    Tests the connection with a ``SELECT 1`` before persisting so we
+    never write a broken URL to the row. On success, kicks off the
+    auto-discovery task (server-side hidden task that lists tables +
+    describes each + posts a summary back into the chat as the
+    assistant's first message of the session) — see fire-and-forget
+    below.
+    """
+    if not body.kind or not body.url:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail="kind and url are required")
+
+    # Smoke-test the connection.
+    try:
+        from sqlalchemy.ext.asyncio import create_async_engine
+        from sqlalchemy import text
+    except ImportError:
+        from fastapi import HTTPException
+        raise HTTPException(
+            status_code=500,
+            detail="sqlalchemy[asyncio] not installed in this build",
+        )
+    try:
+        test_engine = create_async_engine(body.url, pool_pre_ping=True)
+        async with test_engine.connect() as conn:
+            await conn.execute(text("SELECT 1"))
+        await test_engine.dispose()
+    except Exception as exc:  # noqa: BLE001
+        from fastapi import HTTPException
+        # Surface the driver's actual error — "could not translate host
+        # name", "password authentication failed", etc. — so the user
+        # can fix their URL without guessing.
+        raise HTTPException(status_code=400, detail=f"Connection failed: {exc}")
+
+    label = _derive_db_label(body.kind, body.url)
+    await tracker.set_session_db_connection(
+        session_id, body.kind, body.url, label,
+    )
+
+    # Fire-and-forget the auto-discovery task. Submitted as a normal
+    # task tied to this session so the result streams into chat as an
+    # assistant message — the user sees "I see 12 tables…" without
+    # having to ask.
+    async def _kick_discovery():
+        try:
+            discovery_goal = (
+                "I just attached a database to this session. "
+                "Briefly: (1) list every table, (2) describe each table's "
+                "purpose in one sentence based on its columns, and (3) "
+                "suggest 2-3 useful analyses I could run. Keep it under "
+                "200 words. Use db_list_tables + db_describe_table."
+            )
+            from models import TaskRequest, SessionMode
+            disc_req = TaskRequest(
+                id=str(uuid.uuid4()),
+                goal=discovery_goal,
+                context={},
+                priority=5,
+                session_id=session_id,
+                mode=SessionMode.ANALYTIC,
+            )
+            await orchestrator.run(disc_req)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("DB auto-discovery failed for %s: %s", session_id, exc)
+
+    asyncio.create_task(_kick_discovery())
+
+    return {
+        "ok":        True,
+        "connected": True,
+        "kind":      body.kind,
+        "label":     label,
+    }
+
+
+@app.delete("/sessions/{session_id}/db_connect")
+async def clear_session_db_connect(session_id: str) -> dict:
+    """Detach the session's DB. Future tool calls error with the
+    "no database attached" message until the user attaches a new
+    one. Engine cache stays warm — sqlalchemy connection pools
+    are cheap to keep around and there might be other sessions
+    pointed at the same URL."""
+    await tracker.clear_session_db_connection(session_id)
+    return {"ok": True, "connected": False}
 
 
 @app.get("/skills", response_model=SkillListResponse)
