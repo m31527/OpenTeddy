@@ -2933,34 +2933,69 @@
       line-height: 1.5;
     }
 
-    /* ── DB connection chip (shown when session has a DB attached) ──── */
+    /* ── DB connection chip (shown when session has a DB attached) ────
+       Pill-shaped, vendor-icon + DB type label + tiny pulse dot to
+       indicate live connection state. Designed to read at a glance:
+       you can tell at 50% screen zoom there's a DB attached and what
+       kind it is. Host / db name / credentials are deliberately NOT
+       on the chip — see syncDbChip() comment for why. */
     .db-chip {
       display: inline-flex;
       align-items: center;
-      gap: 0.35rem;
-      padding: 0.18rem 0.55rem;
-      background: rgba(102, 126, 234, 0.12);
-      border: 1px solid rgba(102, 126, 234, 0.35);
+      gap: 0.45rem;
+      padding: 0.3rem 0.75rem;
+      background: linear-gradient(135deg, rgba(102, 126, 234, 0.14), rgba(118, 75, 162, 0.14));
+      border: 1px solid rgba(102, 126, 234, 0.38);
       border-radius: 999px;
-      font-size: 0.72rem;
+      font-size: 0.78rem;
+      font-weight: 500;
       color: rgba(102, 126, 234, 1);
       cursor: pointer;
-      transition: background 0.12s;
-      max-width: 240px;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
+      transition: all 0.14s ease;
+      box-shadow: 0 1px 3px rgba(102, 126, 234, 0.12);
     }
-    .db-chip:hover { background: rgba(102, 126, 234, 0.18); }
+    .db-chip:hover {
+      background: linear-gradient(135deg, rgba(102, 126, 234, 0.22), rgba(118, 75, 162, 0.22));
+      transform: translateY(-1px);
+      box-shadow: 0 2px 8px rgba(102, 126, 234, 0.22);
+    }
     .db-chip[hidden] { display: none; }
-    .db-chip-icon { font-size: 0.9rem; }
-    .db-chip-label { overflow: hidden; text-overflow: ellipsis; }
-    .db-chip-disconnect {
-      margin-left: 0.2rem; opacity: 0.6; cursor: pointer;
-      background: transparent; border: none; color: inherit;
-      padding: 0 2px;
+    /* Tiny "live connection" pulse — green dot with a CSS animation so
+       the user sees at a glance the DB is attached and active.
+       Pulses gently, doesn't strobe. */
+    .db-chip-status-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: #2f9c5e;
+      box-shadow: 0 0 0 0 rgba(47, 156, 94, 0.45);
+      animation: db-chip-pulse 2.2s ease-in-out infinite;
+      flex-shrink: 0;
     }
-    .db-chip-disconnect:hover { opacity: 1; }
+    @keyframes db-chip-pulse {
+      0%, 100% { box-shadow: 0 0 0 0   rgba(47, 156, 94, 0.55); }
+      50%      { box-shadow: 0 0 0 5px rgba(47, 156, 94, 0);    }
+    }
+    .db-chip-icon  { font-size: 1rem; line-height: 1; }
+    .db-chip-label { font-weight: 600; letter-spacing: 0.01em; }
+    .db-chip-disconnect {
+      margin-left: 0.25rem;
+      opacity: 0.55;
+      cursor: pointer;
+      background: transparent;
+      border: none;
+      color: inherit;
+      padding: 0 4px;
+      border-radius: 4px;
+      font-size: 0.82rem;
+      line-height: 1;
+      transition: opacity 0.12s, background 0.12s;
+    }
+    .db-chip-disconnect:hover {
+      opacity: 1;
+      background: rgba(220, 53, 69, 0.16);
+      color: #c0392b;
+    }
 
     .attach-chips {
       display: flex;
@@ -3493,7 +3528,8 @@
                     onclick="openDbConnectModal()"
                     data-i18n-title="db_chip_title"
                     title="Database connected to this session — click to reconfigure">
-                <span class="db-chip-icon">🗄️</span>
+                <span class="db-chip-status-dot" aria-hidden="true"></span>
+                <span class="db-chip-icon" id="dbChipIcon">🗄️</span>
                 <span class="db-chip-label" id="dbChipLabel">—</span>
                 <button class="db-chip-disconnect" type="button"
                         onclick="event.stopPropagation(); disconnectSessionDb()"
@@ -4329,10 +4365,28 @@
             </div>
             <div class="field" style="flex:1;">
               <label data-i18n="db_connect_pass_label">Password</label>
-              <input type="password" id="dbConnectPass"
-                     placeholder="••••••••"
-                     autocomplete="off" spellcheck="false"
-                     oninput="resetDbTestStatus()" />
+              <!-- Inline-positioned toggle button — input has padding-right
+                   to make room for the icon; button is absolute-positioned
+                   inside the relative wrapper. Same pattern as every login
+                   form on the modern web. -->
+              <div style="position:relative;">
+                <input type="password" id="dbConnectPass"
+                       placeholder="••••••••"
+                       autocomplete="off" spellcheck="false"
+                       oninput="resetDbTestStatus()"
+                       style="padding-right:2rem;" />
+                <button type="button" id="dbPassToggleBtn"
+                        onclick="toggleDbPassVisibility()"
+                        data-i18n-title="db_pass_show"
+                        title="Show password"
+                        aria-label="Show password"
+                        style="position:absolute; right:0.4rem; top:50%;
+                               transform:translateY(-50%);
+                               background:transparent; border:none;
+                               cursor:pointer; padding:0.25rem 0.35rem;
+                               font-size:0.95rem; line-height:1;
+                               color:var(--text-muted); border-radius:4px;">👁</button>
+              </div>
             </div>
           </div>
         </div>
@@ -6524,9 +6578,19 @@
       if (!overlay) return;
       resetDbTestStatus();
       // Clear sensitive fields on each open so a reopened modal isn't
-      // showing the previous attempt's password.
-      const pwd = document.getElementById('dbConnectPass');
-      if (pwd) pwd.value = '';
+      // showing the previous attempt's password — AND force the input
+      // back to type=password (in case the user left "show" on last
+      // time, we don't want the new attempt's chars visible by
+      // default). Reset the toggle icon to match.
+      const pwd       = document.getElementById('dbConnectPass');
+      const passToggle = document.getElementById('dbPassToggleBtn');
+      if (pwd) { pwd.value = ''; pwd.type = 'password'; }
+      if (passToggle) {
+        passToggle.textContent = '👁';
+        const lbl = t('db_pass_show') || 'Show password';
+        passToggle.setAttribute('aria-label', lbl);
+        passToggle.setAttribute('title', lbl);
+      }
       onDbConnectKindChange();   // fills port default + flips form
       overlay.hidden = false;
       // Auto-focus the first useful field after the form swaps in.
@@ -6554,13 +6618,37 @@
       const fileForm   = document.getElementById('dbConnectFileForm');
       if (serverForm) serverForm.hidden = meta.kind !== 'server';
       if (fileForm)   fileForm.hidden   = meta.kind !== 'file';
-      // Refresh the port default if the field is empty.
+      // Port follows the kind. User explicitly asked for this — they
+      // expect "I picked MySQL, port should say 3306" without having
+      // to clear the field first. We always overwrite, NOT "only if
+      // empty" — even if the user typed 6432 (pgbouncer) earlier,
+      // flipping to MySQL means we replace with 3306 because that's
+      // the only port value that's correct for the new kind.
       if (meta.kind === 'server') {
         const portEl = document.getElementById('dbConnectPort');
-        if (portEl && !portEl.value) portEl.value = String(meta.defaultPort);
+        if (portEl) portEl.value = String(meta.defaultPort);
       }
       // Different kind → previous test result no longer applies.
       resetDbTestStatus();
+    }
+
+    // ── Password show / hide toggle ────────────────────────────────────
+    // Eye-icon button injected inside the password input wrapper. Click
+    // flips the input.type between 'password' and 'text' + swaps the
+    // icon glyph. We do this in JS rather than CSS-only so users who
+    // accidentally click the chip in the popover can also reveal — same
+    // affordance everywhere.
+    function toggleDbPassVisibility() {
+      const inp = document.getElementById('dbConnectPass');
+      const btn = document.getElementById('dbPassToggleBtn');
+      if (!inp || !btn) return;
+      const showing = inp.type === 'text';
+      inp.type = showing ? 'password' : 'text';
+      btn.textContent = showing ? '👁' : '🙈';
+      btn.setAttribute('aria-label',
+        showing ? (t('db_pass_show') || 'Show password')
+                : (t('db_pass_hide') || 'Hide password'));
+      btn.setAttribute('title', btn.getAttribute('aria-label'));
     }
 
     // Wipe the test status + disable the Connect button. Called on
@@ -6738,8 +6826,29 @@
     // ── Session DB chip ─────────────────────────────────────────────────
     // Polls /sessions/{id}/db_connect and shows the chip if a DB is
     // attached. Called on session-switch + after submitDbConnect succeeds.
+    //
+    // What we show INTENTIONALLY:
+    //   • Vendor icon (🐘 PostgreSQL, 🐬 MySQL, 📁 SQLite, …)
+    //   • DB type pretty name
+    // What we DO NOT show on the chip:
+    //   • Host / IP / database name / username / port
+    //   These are credentials-adjacent (anyone with screenshots could
+    //   start probing) and don't help the user tell the chip what kind
+    //   of connection it is. The hover-tooltip on the chip itself is
+    //   enough for "wait, which one is this?" cases — and clicking the
+    //   chip reopens the modal where the full URL fields are shown.
+    const _DB_KIND_DISPLAY = {
+      postgres: { icon: '🐘', label: 'PostgreSQL' },
+      mysql:    { icon: '🐬', label: 'MySQL'      },
+      mssql:    { icon: '🪟', label: 'SQL Server' },
+      oracle:   { icon: '🔶', label: 'Oracle'     },
+      sqlite:   { icon: '📁', label: 'SQLite'     },
+      duckdb:   { icon: '🦆', label: 'DuckDB'     },
+    };
+
     async function syncDbChip() {
       const chip      = document.getElementById('dbChip');
+      const chipIcon  = document.getElementById('dbChipIcon');
       const chipLabel = document.getElementById('dbChipLabel');
       if (!chip || !chipLabel) return;
       const sessionId = currentSessionId();
@@ -6748,7 +6857,10 @@
         const res = await fetch(`${API}/sessions/${encodeURIComponent(sessionId)}/db_connect`);
         const data = await res.json();
         if (data.connected) {
-          chipLabel.textContent = `${data.label} · ${data.kind}`;
+          const display = _DB_KIND_DISPLAY[data.kind] ||
+                          { icon: '🗄️', label: data.kind };
+          if (chipIcon) chipIcon.textContent = display.icon;
+          chipLabel.textContent = display.label;
           chip.hidden = false;
         } else {
           chip.hidden = true;
