@@ -1807,6 +1807,49 @@ def _derive_db_label(kind: str, url: str) -> str:
     return f"{kind} connection"
 
 
+async def _db_smoke_test(url: str) -> Optional[str]:
+    """Run SELECT 1 against a candidate DB URL. Returns None on success,
+    a user-facing error string on failure. Shared by both the dry-run
+    /db_test endpoint and the persist-on-success /db_connect endpoint."""
+    try:
+        from sqlalchemy.ext.asyncio import create_async_engine
+        from sqlalchemy import text
+    except ImportError:
+        return "sqlalchemy[asyncio] not installed in this build"
+    try:
+        test_engine = create_async_engine(url, pool_pre_ping=True)
+        async with test_engine.connect() as conn:
+            await conn.execute(text("SELECT 1"))
+        await test_engine.dispose()
+    except Exception as exc:  # noqa: BLE001
+        return str(exc)
+    return None
+
+
+@app.post("/sessions/{session_id}/db_test")
+async def test_session_db_connect(session_id: str, body: DBConnectRequest) -> dict:
+    """Dry-run: SELECT 1 against the URL WITHOUT persisting to the
+    session row. Used by the modal's [Test connection] button so the
+    user can verify their fields are right before committing.
+
+    The session_id in the path is currently unused (no per-session state
+    is touched), but we keep it in the URL so the endpoint shape mirrors
+    /db_connect — easier for the frontend to swap.
+    """
+    if not body.kind or not body.url:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail="kind and url are required")
+    err = await _db_smoke_test(body.url)
+    if err:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail=f"Connection failed: {err}")
+    return {
+        "ok":    True,
+        "kind":  body.kind,
+        "label": _derive_db_label(body.kind, body.url),
+    }
+
+
 @app.get("/sessions/{session_id}/db_connect")
 async def get_session_db_connect(session_id: str) -> dict:
     """Return whether the session has a DB attached. NEVER returns the
@@ -1837,27 +1880,14 @@ async def set_session_db_connect(session_id: str, body: DBConnectRequest) -> dic
         from fastapi import HTTPException
         raise HTTPException(status_code=400, detail="kind and url are required")
 
-    # Smoke-test the connection.
-    try:
-        from sqlalchemy.ext.asyncio import create_async_engine
-        from sqlalchemy import text
-    except ImportError:
+    # Smoke-test the connection BEFORE persisting. _db_smoke_test
+    # returns None on success or the driver's actual error string —
+    # "password authentication failed", "could not translate host
+    # name", etc. — so the user can fix their input without guessing.
+    err = await _db_smoke_test(body.url)
+    if err:
         from fastapi import HTTPException
-        raise HTTPException(
-            status_code=500,
-            detail="sqlalchemy[asyncio] not installed in this build",
-        )
-    try:
-        test_engine = create_async_engine(body.url, pool_pre_ping=True)
-        async with test_engine.connect() as conn:
-            await conn.execute(text("SELECT 1"))
-        await test_engine.dispose()
-    except Exception as exc:  # noqa: BLE001
-        from fastapi import HTTPException
-        # Surface the driver's actual error — "could not translate host
-        # name", "password authentication failed", etc. — so the user
-        # can fix their URL without guessing.
-        raise HTTPException(status_code=400, detail=f"Connection failed: {exc}")
+        raise HTTPException(status_code=400, detail=f"Connection failed: {err}")
 
     label = _derive_db_label(body.kind, body.url)
     await tracker.set_session_db_connection(

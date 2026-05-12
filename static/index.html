@@ -4126,59 +4126,133 @@
   </div><!-- /app-layout -->
 
   <!-- ── Connect database modal ─────────────────────────────────────────── -->
-  <!-- Opened from the + button menu in Analytic mode. User picks a kind
-       (postgres / mysql / sqlite / mssql / oracle / duckdb), pastes a
-       SQLAlchemy URL, and clicks Test & Connect. The backend runs
-       SELECT 1 against the URL before persisting — bad URLs surface
-       a friendly error inline without leaving anything in the DB. On
-       success the modal closes, the chat header's db-chip shows the
-       new connection, and a hidden auto-discovery task fires that
-       summarises the schema as the assistant's first message. -->
+  <!-- Opened from the + button menu. End-user-friendly form: instead of
+       making them paste a SQLAlchemy URL with the right scheme + driver
+       prefix, we offer the 5 fields any DB-tool dialog has shown for
+       30 years (host / port / database / user / password) and build the
+       URL ourselves on submit.
+
+       SQLite / DuckDB use a single file-path field instead — they have
+       no server, no auth.
+
+       Two-stage flow with clear status:
+         1. User fills the fields, clicks [Test connection]
+         2. Status strip shows ⏳ "Testing…" → ✅ "Connection successful"
+            (or ❌ "<driver's actual error message>")
+         3. [Connect] button stays disabled until a successful test.
+            User can edit fields again to re-run the test.
+
+       Closes on backdrop click + ✕ + Esc + after a successful Connect.
+       Persisted state cleared on next open(). -->
   <div class="signin-overlay" id="dbConnectOverlay" hidden onclick="maybeCloseDbConnectModal(event)">
-    <div class="signin-dialog" style="max-width: 520px;">
+    <div class="signin-dialog" style="max-width: 560px;">
       <button class="signin-dialog-close" type="button"
               onclick="closeDbConnectModal()" aria-label="Close" title="Close">✕</button>
       <div class="signin-dialog-icon">🗄️</div>
       <h2 class="signin-dialog-title" data-i18n="db_connect_title">Connect a database</h2>
       <p class="signin-dialog-body" data-i18n="db_connect_body">
-        Attach a database to this session. The agent will explore the schema
-        and let you run analyses + generate charts from your tables.
-        The connection lives in this session only — no global setting.
+        Attach a database to this session. The agent will explore your
+        tables and answer questions or generate reports from them. The
+        connection lives in this session only.
       </p>
 
       <div style="display:flex; flex-direction:column; gap:0.7rem; text-align:left; margin: 0.6rem 0 0.9rem;">
+        <!-- Kind selector — flips between the server-form and the
+             file-form below via onDbConnectKindChange(). -->
         <div class="field">
           <label data-i18n="db_connect_kind_label">Database type</label>
           <select id="dbConnectKind" onchange="onDbConnectKindChange()">
-            <option value="postgres">PostgreSQL</option>
-            <option value="mysql">MySQL / MariaDB</option>
-            <option value="sqlite">SQLite (local file)</option>
-            <option value="mssql">Microsoft SQL Server</option>
-            <option value="oracle">Oracle</option>
-            <option value="duckdb">DuckDB</option>
+            <option value="postgres">🐘 PostgreSQL</option>
+            <option value="mysql">🐬 MySQL / MariaDB</option>
+            <option value="mssql">🪟 Microsoft SQL Server</option>
+            <option value="oracle">🔶 Oracle</option>
+            <option value="sqlite">📁 SQLite (local file)</option>
+            <option value="duckdb">🦆 DuckDB (local file)</option>
           </select>
         </div>
-        <div class="field">
-          <label data-i18n="db_connect_url_label">Connection URL</label>
-          <input type="password" id="dbConnectUrl"
-                 placeholder="postgresql+asyncpg://user:pass@host:5432/dbname"
-                 autocomplete="off" spellcheck="false" />
-          <!-- Per-kind hint about what URL prefix to use. Updated by
-               onDbConnectKindChange() when the selector flips. -->
-          <div id="dbConnectHint"
-               style="font-size:0.72rem;color:var(--text-muted);margin-top:0.3rem;line-height:1.4">
-            postgresql+asyncpg://user:pass@host:5432/dbname
+
+        <!-- Server form: postgres / mysql / mssql / oracle.
+             Two rows: (host, port) on one line, (database) full-width,
+             (user, password) on one line. -->
+        <div id="dbConnectServerForm">
+          <div class="row" style="margin-bottom:0.6rem; gap:0.5rem;">
+            <div class="field" style="flex:2">
+              <label data-i18n="db_connect_host_label">Host</label>
+              <input type="text" id="dbConnectHost"
+                     placeholder="db.example.com or 127.0.0.1"
+                     autocomplete="off" spellcheck="false"
+                     oninput="resetDbTestStatus()" />
+            </div>
+            <div class="field" style="flex:1; max-width:110px;">
+              <label data-i18n="db_connect_port_label">Port</label>
+              <input type="number" id="dbConnectPort"
+                     placeholder="5432" min="1" max="65535"
+                     oninput="resetDbTestStatus()" />
+            </div>
+          </div>
+          <div class="row" style="margin-bottom:0.6rem;">
+            <div class="field" style="flex:1;">
+              <label data-i18n="db_connect_db_label">Database name</label>
+              <input type="text" id="dbConnectDb"
+                     placeholder="my_database"
+                     autocomplete="off" spellcheck="false"
+                     oninput="resetDbTestStatus()" />
+            </div>
+          </div>
+          <div class="row" style="gap:0.5rem;">
+            <div class="field" style="flex:1;">
+              <label data-i18n="db_connect_user_label">Username</label>
+              <input type="text" id="dbConnectUser"
+                     placeholder="user"
+                     autocomplete="off" spellcheck="false"
+                     oninput="resetDbTestStatus()" />
+            </div>
+            <div class="field" style="flex:1;">
+              <label data-i18n="db_connect_pass_label">Password</label>
+              <input type="password" id="dbConnectPass"
+                     placeholder="••••••••"
+                     autocomplete="off" spellcheck="false"
+                     oninput="resetDbTestStatus()" />
+            </div>
           </div>
         </div>
-        <div id="dbConnectError"
-             style="display:none;padding:0.5rem 0.7rem;background:rgba(220,53,69,0.1);border-left:2px solid #c0392b;color:#c0392b;font-size:0.78rem;border-radius:4px;text-align:left;line-height:1.4">
+
+        <!-- File form: sqlite / duckdb. Shown only when kind is one of
+             the file-based backends. -->
+        <div id="dbConnectFileForm" hidden>
+          <div class="field">
+            <label data-i18n="db_connect_file_label">Database file path</label>
+            <input type="text" id="dbConnectFile"
+                   placeholder="/Users/you/Documents/mydata.db"
+                   autocomplete="off" spellcheck="false"
+                   oninput="resetDbTestStatus()" />
+            <div style="font-size:0.72rem;color:var(--text-muted);margin-top:0.3rem;line-height:1.4"
+                 data-i18n="db_connect_file_hint">
+              Absolute path on this machine. For DuckDB, use ':memory:' for an in-memory database.
+            </div>
+          </div>
+        </div>
+
+        <!-- Status strip: empty by default, fills in with "Testing…",
+             "✅ Connection successful", or "❌ <error>" after the user
+             clicks Test connection. resetDbTestStatus() blanks it when
+             any field changes so the green tick doesn't lie. -->
+        <div id="dbConnectStatus" style="display:none; padding:0.55rem 0.7rem; border-radius:6px; font-size:0.82rem; line-height:1.45;">
         </div>
       </div>
 
-      <div style="display:flex; gap:0.5rem; justify-content:flex-end;">
+      <!-- Two buttons. Test is the primary action until a test passes;
+           Connect is disabled until then. After a successful test,
+           Connect becomes the primary CTA and Test becomes secondary. -->
+      <div style="display:flex; gap:0.5rem; justify-content:space-between; align-items:center;">
         <button class="btn-ghost" type="button" onclick="closeDbConnectModal()" data-i18n="btn_cancel">Cancel</button>
-        <button class="btn-primary" type="button" id="dbConnectSubmitBtn"
-                onclick="submitDbConnect()" data-i18n="db_connect_submit">Test &amp; Connect</button>
+        <div style="display:flex; gap:0.5rem;">
+          <button class="btn-ghost" type="button" id="dbTestBtn"
+                  onclick="testDbConnect()" data-i18n="db_connect_test_btn">Test connection</button>
+          <button class="btn-primary" type="button" id="dbConnectBtn"
+                  onclick="submitDbConnect()" disabled
+                  data-i18n="db_connect_submit">Connect</button>
+        </div>
       </div>
     </div>
   </div>
@@ -6303,70 +6377,215 @@
       if (wrap && !wrap.contains(e.target)) closeAttachMenu();
     }
 
-    // ── Connect database modal ──────────────────────────────────────────
-    // Per-kind URL-format hints + default examples. The selector flips
-    // the hint text on change so the user sees the right URL shape.
-    const _DB_KIND_HINTS = {
-      postgres: 'postgresql+asyncpg://user:pass@host:5432/dbname',
-      mysql:    'mysql+aiomysql://user:pass@host:3306/dbname',
-      sqlite:   'sqlite+aiosqlite:////absolute/path/to/file.db',
-      mssql:    'mssql+aioodbc://user:pass@host:1433/dbname',
-      oracle:   'oracle+oracledb://user:pass@host:1521/?service_name=svc',
-      duckdb:   'duckdb:////absolute/path/to/file.db  (or duckdb:///:memory:)',
+    // ── Connect database modal (user-friendly two-step) ────────────────
+    //
+    // UX rules:
+    //   * No raw SQLAlchemy URL exposed to the end user — they fill in
+    //     host/port/database/user/password (or a file path for SQLite /
+    //     DuckDB), we assemble the URL on submit.
+    //   * Two-step flow: [Test connection] → status strip shows ✓/✗ →
+    //     [Connect] enabled only after a successful test. Editing any
+    //     field after a green tick wipes the test state so the user
+    //     can't accidentally Connect with a stale OK from prior values.
+
+    // Default port + driver scheme per kind. The scheme prefixes match
+    // what SQLAlchemy's async engine expects; users never see them.
+    const _DB_KIND_META = {
+      postgres: { defaultPort: 5432, scheme: 'postgresql+asyncpg', kind: 'server' },
+      mysql:    { defaultPort: 3306, scheme: 'mysql+aiomysql',     kind: 'server' },
+      mssql:    { defaultPort: 1433, scheme: 'mssql+aioodbc',      kind: 'server' },
+      oracle:   { defaultPort: 1521, scheme: 'oracle+oracledb',    kind: 'server' },
+      sqlite:   { scheme: 'sqlite+aiosqlite', kind: 'file' },
+      duckdb:   { scheme: 'duckdb',           kind: 'file' },
     };
 
     function openDbConnectModal() {
       const overlay = document.getElementById('dbConnectOverlay');
-      const err     = document.getElementById('dbConnectError');
-      const btn     = document.getElementById('dbConnectSubmitBtn');
       if (!overlay) return;
-      if (err) err.style.display = 'none';
-      if (btn) {
-        btn.disabled = false;
-        btn.textContent = t('db_connect_submit') || 'Test & Connect';
-      }
-      onDbConnectKindChange();   // set hint to current kind's example
+      resetDbTestStatus();
+      // Clear sensitive fields on each open so a reopened modal isn't
+      // showing the previous attempt's password.
+      const pwd = document.getElementById('dbConnectPass');
+      if (pwd) pwd.value = '';
+      onDbConnectKindChange();   // fills port default + flips form
       overlay.hidden = false;
+      // Auto-focus the first useful field after the form swaps in.
+      setTimeout(() => {
+        const meta = _DB_KIND_META[document.getElementById('dbConnectKind').value];
+        const focusId = meta && meta.kind === 'file' ? 'dbConnectFile' : 'dbConnectHost';
+        document.getElementById(focusId)?.focus();
+      }, 50);
     }
     function closeDbConnectModal() {
       const overlay = document.getElementById('dbConnectOverlay');
       if (overlay) overlay.hidden = true;
     }
     function maybeCloseDbConnectModal(event) {
-      // Only close on backdrop click (not when clicking inside the
-      // dialog itself — that propagates from the dialog's children).
+      // Only close on backdrop click (not clicks bubbling up from the
+      // dialog's children).
       if (event.target.id === 'dbConnectOverlay') closeDbConnectModal();
     }
+
     function onDbConnectKindChange() {
       const kind = document.getElementById('dbConnectKind')?.value || 'postgres';
-      const hint = document.getElementById('dbConnectHint');
-      const url  = document.getElementById('dbConnectUrl');
-      const example = _DB_KIND_HINTS[kind] || '';
-      if (hint) hint.textContent = example;
-      if (url && !url.value) url.placeholder = example;
+      const meta = _DB_KIND_META[kind] || _DB_KIND_META.postgres;
+      // Swap form panels (server fields vs file path).
+      const serverForm = document.getElementById('dbConnectServerForm');
+      const fileForm   = document.getElementById('dbConnectFileForm');
+      if (serverForm) serverForm.hidden = meta.kind !== 'server';
+      if (fileForm)   fileForm.hidden   = meta.kind !== 'file';
+      // Refresh the port default if the field is empty.
+      if (meta.kind === 'server') {
+        const portEl = document.getElementById('dbConnectPort');
+        if (portEl && !portEl.value) portEl.value = String(meta.defaultPort);
+      }
+      // Different kind → previous test result no longer applies.
+      resetDbTestStatus();
+    }
+
+    // Wipe the test status + disable the Connect button. Called on
+    // every field-change so the green tick can't lie about stale values.
+    function resetDbTestStatus() {
+      const status = document.getElementById('dbConnectStatus');
+      const btn    = document.getElementById('dbConnectBtn');
+      if (status) { status.style.display = 'none'; status.innerHTML = ''; }
+      if (btn) btn.disabled = true;
+      // Cache invalidated.
+      window._dbLastTestedUrl = null;
+      window._dbLastTestedKind = null;
+    }
+
+    function _setDbStatus(state, message) {
+      const status = document.getElementById('dbConnectStatus');
+      if (!status) return;
+      const styles = {
+        testing: { bg: 'rgba(102, 126, 234, 0.1)',  bd: '#667eea', fg: '#667eea', icon: '⏳' },
+        ok:      { bg: 'rgba(47, 156, 94, 0.12)',   bd: '#2f9c5e', fg: '#2f9c5e', icon: '✅' },
+        err:     { bg: 'rgba(220, 53, 69, 0.1)',    bd: '#c0392b', fg: '#c0392b', icon: '❌' },
+      };
+      const s = styles[state] || styles.testing;
+      status.style.cssText = `display:block;padding:0.55rem 0.7rem;border-radius:6px;font-size:0.82rem;line-height:1.45;background:${s.bg};border-left:3px solid ${s.bd};color:${s.fg};`;
+      status.innerHTML = `<span style="font-weight:600">${s.icon} ${escHtml(message.title || '')}</span>` +
+                        (message.detail ? `<br><span style="opacity:0.85;font-size:0.76rem">${escHtml(message.detail)}</span>` : '');
+    }
+
+    // Build the SQLAlchemy URL from form fields. Returns ``null`` (and
+    // shows an inline error) when required fields are missing — better
+    // than letting the model post a half-baked URL to the backend.
+    function _buildDbConnectUrl() {
+      const kind = document.getElementById('dbConnectKind').value;
+      const meta = _DB_KIND_META[kind];
+      if (!meta) return null;
+      if (meta.kind === 'file') {
+        const path = document.getElementById('dbConnectFile').value.trim();
+        if (!path) {
+          _setDbStatus('err', { title: t('db_connect_file_required') || 'File path is required.' });
+          return null;
+        }
+        // SQLite uses 4 slashes for absolute paths in SQLAlchemy URLs.
+        // DuckDB accepts the same plus ':memory:'.
+        if (kind === 'duckdb' && path === ':memory:') {
+          return `${meta.scheme}:///:memory:`;
+        }
+        return `${meta.scheme}:///${path.replace(/^\//, '')}`;
+      }
+      // Server form
+      const host = document.getElementById('dbConnectHost').value.trim();
+      const port = document.getElementById('dbConnectPort').value.trim() || String(meta.defaultPort);
+      const db   = document.getElementById('dbConnectDb').value.trim();
+      const user = document.getElementById('dbConnectUser').value.trim();
+      const pass = document.getElementById('dbConnectPass').value;
+      if (!host || !db) {
+        _setDbStatus('err', { title: t('db_connect_host_db_required') || 'Host and database name are required.' });
+        return null;
+      }
+      // Build user:pass@host:port/db. URL-encode credentials so
+      // special chars (@, /, :) don't break the parse.
+      const auth = user ? `${encodeURIComponent(user)}:${encodeURIComponent(pass || '')}@` : '';
+      // Oracle's SQLAlchemy URL uses ?service_name=foo, not /foo —
+      // we let users put the service name in the "Database name"
+      // field and translate here.
+      if (kind === 'oracle') {
+        return `${meta.scheme}://${auth}${host}:${port}/?service_name=${encodeURIComponent(db)}`;
+      }
+      return `${meta.scheme}://${auth}${host}:${port}/${encodeURIComponent(db)}`;
+    }
+
+    async function testDbConnect() {
+      const kind = document.getElementById('dbConnectKind').value;
+      const url  = _buildDbConnectUrl();
+      if (!url) return;
+      const sessionId = currentSessionId();
+      if (!sessionId) {
+        _setDbStatus('err', { title: t('db_connect_no_session') || 'Open or create a session first.' });
+        return;
+      }
+
+      const testBtn = document.getElementById('dbTestBtn');
+      const connBtn = document.getElementById('dbConnectBtn');
+      testBtn.disabled = true;
+      connBtn.disabled = true;
+      _setDbStatus('testing', { title: t('db_connect_testing') || 'Testing connection…' });
+
+      // Dry-run /db_test — does SELECT 1 but does NOT persist or fire
+      // the discovery task. Pairs with the persistent POST /db_connect
+      // that submitDbConnect() calls after the user clicks Connect.
+      try {
+        const res = await fetch(`${API}/sessions/${encodeURIComponent(sessionId)}/db_test`, {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({ kind, url }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          _setDbStatus('err', {
+            title:  t('db_connect_test_failed_title') || 'Could not connect',
+            detail: data.detail || `HTTP ${res.status}`,
+          });
+          testBtn.disabled = false;
+          return;
+        }
+        _setDbStatus('ok', {
+          title:  t('db_connect_test_ok_title') || 'Connection successful',
+          detail: data.label ? `${data.label} · ${data.kind}` : '',
+        });
+        testBtn.disabled = false;
+        connBtn.disabled = false;
+        // Cache the tested (kind, url) so submitDbConnect can post
+        // EXACTLY what we tested — no chance of the user editing a
+        // field after the green tick and committing different values.
+        window._dbLastTestedUrl  = url;
+        window._dbLastTestedKind = kind;
+        connBtn.focus();
+      } catch (e) {
+        _setDbStatus('err', {
+          title:  t('db_connect_failed') || 'Connection failed',
+          detail: e.message,
+        });
+        testBtn.disabled = false;
+      }
     }
 
     async function submitDbConnect() {
-      const kind = document.getElementById('dbConnectKind').value;
-      const url  = document.getElementById('dbConnectUrl').value.trim();
-      const btn  = document.getElementById('dbConnectSubmitBtn');
-      const err  = document.getElementById('dbConnectError');
-      if (!url) {
-        err.textContent = t('db_connect_url_required') || 'Connection URL is required.';
-        err.style.display = '';
+      // Commit the (kind, url) that Test green-lit. We cached them
+      // on window so a user who edited a field after the test result
+      // can't smuggle untested values past the disabled state.
+      const kind = window._dbLastTestedKind;
+      const url  = window._dbLastTestedUrl;
+      if (!kind || !url) {
+        // Defensive — Connect should be disabled in this state, but
+        // belt-and-suspenders.
+        _setDbStatus('err', { title: t('db_connect_run_test_first') || 'Click Test connection first.' });
         return;
       }
       const sessionId = currentSessionId();
       if (!sessionId) {
-        err.textContent = t('db_connect_no_session') || 'Open or create a session first.';
-        err.style.display = '';
+        _setDbStatus('err', { title: t('db_connect_no_session') || 'Open or create a session first.' });
         return;
       }
-
-      btn.disabled = true;
-      btn.textContent = '⏳ ' + (t('db_connect_testing') || 'Testing connection…');
-      err.style.display = 'none';
-
+      const connBtn = document.getElementById('dbConnectBtn');
+      connBtn.disabled = true;
+      connBtn.textContent = '⏳ ' + (t('db_connect_connecting') || 'Connecting…');
       try {
         const res = await fetch(`${API}/sessions/${encodeURIComponent(sessionId)}/db_connect`, {
           method:  'POST',
@@ -6375,25 +6594,24 @@
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) {
-          // Show the driver's actual error (FastAPI's HTTPException
-          // detail) so the user can fix their URL without guessing.
-          err.textContent = data.detail || `HTTP ${res.status}`;
-          err.style.display = '';
-          btn.disabled = false;
-          btn.textContent = t('db_connect_submit') || 'Test & Connect';
+          _setDbStatus('err', {
+            title:  t('db_connect_failed') || 'Connection failed',
+            detail: data.detail || `HTTP ${res.status}`,
+          });
+          connBtn.disabled = false;
+          connBtn.textContent = t('db_connect_submit') || 'Connect';
           return;
         }
-        // Success — close modal, show chip, auto-discovery task is
-        // already queued server-side and will stream into chat.
         closeDbConnectModal();
-        document.getElementById('dbConnectUrl').value = '';
         await syncDbChip();
         toast(t('db_connect_success') || '✅ Database connected — analysing schema…');
       } catch (e) {
-        err.textContent = (t('db_connect_failed') || 'Connection failed') + ': ' + e.message;
-        err.style.display = '';
-        btn.disabled = false;
-        btn.textContent = t('db_connect_submit') || 'Test & Connect';
+        _setDbStatus('err', {
+          title:  t('db_connect_failed') || 'Connection failed',
+          detail: e.message,
+        });
+        connBtn.disabled = false;
+        connBtn.textContent = t('db_connect_submit') || 'Connect';
       }
     }
 
