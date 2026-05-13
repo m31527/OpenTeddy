@@ -1145,11 +1145,35 @@ class Executor:
                 if tool_result.get("success"):
                     inner = tool_result.get("result")
                     if isinstance(inner, dict):
-                        # render_chart_report + write_file both use the
-                        # "path" key. delete_file also uses "deleted"
-                        # which we intentionally skip (nothing to download).
+                        # ── Artifact emission (allow-list mode) ──────────────
+                        # Earlier this fired on ANY tool returning result.path,
+                        # which produced a flood of duplicate chips for
+                        # read-only tools whose "path" is the INPUT file (e.g.
+                        # pdf_extract_text called once per page chunk → 8
+                        # duplicate chips for the same uploaded PDF).
+                        #
+                        # The user-visible "📎 download this" chip only makes
+                        # sense for tools that PRODUCE a new file. Restrict
+                        # emission to:
+                        #   - explicit producer list (write_file,
+                        #     render_chart_report, db_query_to_csv, …)
+                        #   - any tool whose result advertises bytes_written
+                        #     / rows_written (future-proof heuristic — new
+                        #     producer tools just need to set one of those
+                        #     keys to get a download chip for free).
+                        _FILE_PRODUCER_TOOLS = {
+                            "write_file",
+                            "render_chart_report",
+                            "db_query_to_csv",
+                            "python_exec",  # may write output files (charts, CSVs)
+                        }
                         file_path = inner.get("path")
-                        if file_path and tool_name != "delete_file":
+                        is_producer = (
+                            tool_name in _FILE_PRODUCER_TOOLS
+                            or inner.get("bytes_written") is not None
+                            or inner.get("rows_written") is not None
+                        )
+                        if file_path and is_producer:
                             try:
                                 import os as _os
                                 if _os.path.isfile(file_path):

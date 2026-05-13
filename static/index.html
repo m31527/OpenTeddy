@@ -1329,6 +1329,20 @@
       color: var(--text-muted);
       margin: 10px 0 4px;
     }
+    /* Auto-approve countdown — amber so it reads as "heads up something
+       is about to fire" without being as alarming as the red Deny
+       button. Sits between subtext and the action row. */
+    .approval-card .approval-countdown {
+      font-size: 0.78rem;
+      color: #b45309;             /* amber-700 */
+      background: #fef3c7;        /* amber-100 */
+      border: 1px solid #fde68a;  /* amber-200 */
+      border-radius: 6px;
+      padding: 6px 10px;
+      margin: 6px 0 4px;
+      display: inline-block;
+      font-variant-numeric: tabular-nums;  /* digits don't jitter */
+    }
     .approval-card .approval-card-actions {
       display: flex;
       justify-content: flex-end;
@@ -4101,6 +4115,27 @@
               </div>
               <div class="param-row">
                 <div class="param-field">
+                  <!-- Auto-approve timeout — 0 keeps the safe-by-default
+                       behaviour (wait for explicit click). >0 means the
+                       agent can grind through routine writes without
+                       babysitting; the approval card surfaces a live
+                       countdown so it's obvious what's about to happen. -->
+                  <label><span data-i18n="approval_auto_approve_after_label">Auto-approve after (seconds, 0 = off)</span>
+                    <span class="param-value" id="val_approval_auto_approve_after">0</span>
+                  </label>
+                  <input type="range" id="rng_approval_auto_approve_after" min="0" max="300" step="5" value="0"
+                    oninput="document.getElementById('val_approval_auto_approve_after').textContent=this.value" />
+                  <div class="escalation-toggle-hint" data-i18n="approval_auto_approve_after_hint"
+                       style="margin-top: 0.4rem;">
+                    Warning: this makes the approval gate fail-permissive. The
+                    agent can run shell_exec_write / delete_file without your
+                    explicit OK once the countdown ends. Keep at 0 unless you
+                    trust the current task.
+                  </div>
+                </div>
+              </div>
+              <div class="param-row">
+                <div class="param-field">
                   <!-- Reserved for a future priority-scheduler. The value
                        is persisted on every /run and recorded in the
                        tasks.priority column, but no current code path
@@ -5885,6 +5920,12 @@
     // feedback that a file was produced, even before the task summary.
     function handleArtifact(data) {
       if (!data || !data.path) return;
+      // De-dup by absolute path — the server allow-listed producers
+      // already, but the same producer tool can fire across subtask
+      // retries / verification passes and would still queue duplicate
+      // chips for the same output file. One file = one chip is the
+      // user-friendly rule here.
+      if (_currentArtifacts.some(a => a.path === data.path)) return;
       _currentArtifacts.push({
         path:      data.path,
         rel:       data.relative_path || data.name || data.path,
@@ -7823,6 +7864,19 @@
       card.id = `chat-approval-${escHtml(approvalId)}`;
       card.dataset.approvalId = approvalId;
       card.dataset.toolName   = toolName;
+      // Live countdown UI when Settings → "Auto-approve after" is on.
+      // The server is the source of truth (it'll flip the approval to
+      // 'approved' at the same N-second mark), but we surface the timer
+      // here so the user understands what's about to happen and has a
+      // chance to Deny if the agent's about to do something unexpected.
+      const autoAfter = Number(_approvalAutoApproveAfter) || 0;
+      const countdownHTML = autoAfter > 0
+        ? `<div class="approval-countdown" id="cd-${escHtml(approvalId)}"
+                data-i18n-base="approval_auto_in"
+                title="${escHtml(t('approval_auto_tooltip') || 'Auto-approving — Settings → Auto-approve after')}">
+             ⏱ ${t('approval_auto_in', { n: autoAfter }) || `Auto-approving in ${autoAfter}s…`}
+           </div>`
+        : '';
       // Use the macOS-ish symbols that Claude Code uses (⌘⇧↵). On
       // Windows/Linux ⌘ reads as "Cmd" but the symbol is universally
       // recognisable as "the modifier key".
@@ -7830,6 +7884,7 @@
         <div class="approval-header">${t('approval_header', { tool: escHtml(toolName) })}</div>
         <div class="approval-command">${escHtml(argsStr)}</div>
         <div class="approval-subtext">${t('approval_subtext', { taskId: escHtml(taskId.slice(0, 8)) })}</div>
+        ${countdownHTML}
         <div class="approval-card-actions">
           <button class="btn-approval btn-deny"
             onclick="resolveChatApproval('${escHtml(approvalId)}', 'deny', this)">
@@ -7846,6 +7901,32 @@
         </div>`;
       appendToChat(card);
       _activeApprovalCard = card;
+
+      // Hook up the live tick. Pure UI — the server's wait_for_resolution
+      // is what actually approves; this is just feedback. We update once
+      // per second until either the user clicks (card gets removed /
+      // resolved) or the counter hits 0 (server flips it to approved
+      // around the same instant — pollApprovals will then dismiss the
+      // card naturally).
+      if (autoAfter > 0) {
+        let remaining = autoAfter;
+        const cdEl = card.querySelector('.approval-countdown');
+        const tick = () => {
+          if (!document.body.contains(card) || card.classList.contains('resolved')) {
+            return; // user already acted, stop ticking
+          }
+          remaining -= 1;
+          if (remaining <= 0) {
+            if (cdEl) cdEl.textContent =
+              t('approval_auto_firing') || '⏱ Auto-approving…';
+            return;
+          }
+          if (cdEl) cdEl.textContent =
+            t('approval_auto_in', { n: remaining }) || `⏱ Auto-approving in ${remaining}s…`;
+          setTimeout(tick, 1000);
+        };
+        setTimeout(tick, 1000);
+      }
     }
 
     async function resolveChatApproval(approvalId, action, btn) {
@@ -8404,6 +8485,12 @@
     // loadSettings() call; until then we fall back to 1 (matches the
     // backend Task.priority default). Avoids a per-send fetch round-trip.
     let _defaultPriority = 1;
+    // Cached "auto-approve after N seconds" setting. 0 = OFF (the safe
+    // default: approval cards stay up forever until clicked). > 0 means
+    // approval cards show a live countdown and auto-resolve to approved.
+    // Hydrated from /settings; see hydrateDefaultPriority for the
+    // pre-warm pattern.
+    let _approvalAutoApproveAfter = 0;
 
     function toggleSettingsSection(h3) {
       h3.parentElement.classList.toggle('collapsed');
@@ -8501,6 +8588,11 @@
       const raw = data.data?.default_priority?.value;
       const dp  = parseInt(raw ?? '1', 10);
       if (!Number.isNaN(dp)) _defaultPriority = Math.max(1, Math.min(10, dp));
+      // Also warm the auto-approve cache from the same fetch — saves
+      // an extra round-trip and means approval cards know about the
+      // setting immediately on first paint.
+      const aa = parseInt(data.data?.approval_auto_approve_after?.value ?? '0', 10);
+      if (!Number.isNaN(aa)) _approvalAutoApproveAfter = Math.max(0, Math.min(300, aa));
     }
 
     async function loadSettings() {
@@ -8553,10 +8645,15 @@
         _setSlider('escalation_threshold',      s.escalation_threshold?.value      ?? 0.6);
         _setSlider('escalation_failure_limit',  s.escalation_failure_limit?.value  ?? 3);
         _setSlider('default_priority',          s.default_priority?.value          ?? 1);
+        _setSlider('approval_auto_approve_after', s.approval_auto_approve_after?.value ?? 0);
         // Cache for runTask() — avoid a /settings round-trip per send.
         // Range 1–10 mirrors the Pydantic constraint on Task.priority.
         const dp = parseInt(s.default_priority?.value ?? '1', 10);
         if (!Number.isNaN(dp)) _defaultPriority = Math.max(1, Math.min(10, dp));
+        // Same trick for approval auto-approve — handleApprovalRequired
+        // reads this synchronously when it shows a new card.
+        const aa = parseInt(s.approval_auto_approve_after?.value ?? '0', 10);
+        if (!Number.isNaN(aa)) _approvalAutoApproveAfter = Math.max(0, Math.min(300, aa));
         _setSlider('gemma_max_tokens',          s.gemma_max_tokens?.value          ?? 4096);
         _setSlider('qwen_max_tokens',           s.qwen_max_tokens?.value           ?? 4096);
         _setSlider('skill_match_threshold',     s.skill_match_threshold?.value     ?? 0.4);
@@ -9081,6 +9178,7 @@
         escalation_threshold:      document.getElementById('rng_escalation_threshold').value,
         escalation_failure_limit:  document.getElementById('rng_escalation_failure_limit').value,
         default_priority:          document.getElementById('rng_default_priority').value,
+        approval_auto_approve_after: document.getElementById('rng_approval_auto_approve_after').value,
         gemma_max_tokens:          document.getElementById('rng_gemma_max_tokens').value,
         qwen_max_tokens:           document.getElementById('rng_qwen_max_tokens').value,
         skill_match_threshold:     document.getElementById('rng_skill_match_threshold').value,

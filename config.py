@@ -330,6 +330,25 @@ class Config:
         default_factory=lambda: int(os.getenv("API_PORT", "8000"))
     )
 
+    # ── Approval auto-resolve ────────────────────────────────────────────────
+    # When > 0, HIGH-risk tool approval prompts auto-approve if the user
+    # doesn't click within this many seconds. 0 = disabled (current
+    # behaviour: 300 s timeout → automatic REJECTION).
+    #
+    # Trade-off: the manual approval gate exists precisely to stop the
+    # agent from running shell_exec_write / delete_file / rm_rf without
+    # human review. Flipping the timeout from "reject" to "approve"
+    # turns the gate from "fail-safe" to "fail-permissive". Default 0
+    # so the safer behaviour stays in place; the user has to explicitly
+    # opt in via Settings → "Auto-approve after seconds".
+    #
+    # Recommended range when enabled: 15-60 s. Higher means more
+    # supervision; lower means the agent can grind through routine
+    # write-file work without you babysitting.
+    approval_auto_approve_after: int = field(
+        default_factory=lambda: int(os.getenv("APPROVAL_AUTO_APPROVE_AFTER", "0"))
+    )
+
     # ── Task scheduling (currently a no-op — kept for forward-compat) ───────
     # Default priority recorded on tasks created from the chat input. Was
     # hard-coded to 5 in the static UI, which forced every send through a
@@ -496,6 +515,14 @@ class Config:
         if vdp is not None:
             # Clamp 1–10 to match the Pydantic constraint on Task.priority.
             self.default_priority = max(1, min(10, vdp))
+
+        vaa = _i("approval_auto_approve_after")
+        if vaa is not None:
+            # Clamp 0–300 — 0 = disabled, 300 = the existing
+            # rejection-timeout ceiling. Anything higher and the agent
+            # could deadlock waiting on a phantom approval that's about
+            # to flip to auto-approve anyway.
+            self.approval_auto_approve_after = max(0, min(300, vaa))
 
         v7 = _i("subtask_timeout")
         if v7 is not None:

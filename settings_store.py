@@ -218,6 +218,19 @@ SETTINGS_META: dict[str, dict[str, Any]] = {
         "min":         1,
         "max":         50,
     },
+    "approval_auto_approve_after": {
+        "label":       "Auto-approve after (seconds)",
+        "description": "When > 0, HIGH-risk tool approval prompts "
+                       "(shell_exec_write, delete_file, etc.) auto-approve "
+                       "if you don't click within this many seconds. 0 = "
+                       "disabled (current behaviour: wait forever / reject "
+                       "after 5 min). Use 15–60 s for routine workflows; "
+                       "keep at 0 when you want explicit oversight on every "
+                       "destructive action.",
+        "type":        "int",
+        "min":         0,
+        "max":         300,
+    },
     "default_priority": {
         "label":       "Default Task Priority",
         "description": "Reserved for a future priority-aware scheduler. The "
@@ -337,6 +350,7 @@ def _defaults_from_config() -> dict[str, str]:
         "skill_match_threshold":    str(getattr(config, "skill_match_threshold", "0.4")),
         "skill_promotion_threshold": str(config.skill_promotion_threshold),
         "default_priority":          str(getattr(config, "default_priority", 1)),
+        "approval_auto_approve_after": str(getattr(config, "approval_auto_approve_after", 0)),
         "subtask_timeout":           str(config.subtask_timeout),
         "shell_silence_timeout":     str(config.shell_silence_timeout),
         "agent_workspace_dir":       str(config.agent_workspace_dir),
@@ -593,6 +607,10 @@ class SettingsStore:
             # Clamp to the Pydantic range so a hand-edited DB row can't
             # produce a 422 on every /run call.
             config.default_priority = max(1, min(10, vdp))
+
+        vaa = _int("approval_auto_approve_after")
+        if vaa is not None:
+            config.approval_auto_approve_after = max(0, min(300, vaa))
 
         v7 = _int("subtask_timeout")
         if v7 is not None:

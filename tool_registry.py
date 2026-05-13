@@ -158,7 +158,20 @@ class ToolRegistry:
                 "High-risk tool '%s' queued for approval (id=%s, task=%s)",
                 tool_name, approval_id, task_id,
             )
-            approved = await self._store.wait_for_resolution(approval_id, timeout=300.0)
+            # Read the auto-approve setting fresh on each call so toggling
+            # it via Settings UI takes effect immediately (no agent
+            # restart required). 0 = original behaviour (wait 5 min then
+            # reject), > 0 = wait that many seconds then approve.
+            try:
+                from config import config as _cfg
+                auto_after = float(getattr(_cfg, "approval_auto_approve_after", 0) or 0)
+            except Exception:  # noqa: BLE001
+                auto_after = 0.0
+            approved = await self._store.wait_for_resolution(
+                approval_id,
+                timeout=300.0,
+                auto_approve_after=auto_after,
+            )
             if not approved:
                 return make_result(
                     False,

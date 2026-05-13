@@ -87,24 +87,48 @@ class ApprovalStore:
         return True
 
     async def wait_for_resolution(
-        self, approval_id: str, timeout: float = 300.0
+        self,
+        approval_id: str,
+        timeout: float = 300.0,
+        auto_approve_after: float = 0.0,
     ) -> bool:
         """
         Block until the approval is resolved or timeout expires.
-        Returns True if approved, False if rejected or timed out.
+
+        Args:
+            timeout: Maximum wait when auto_approve_after is 0 — silence
+                     past this point flips status to REJECTED (the safer
+                     default; refusing a tool call is recoverable, running
+                     a destructive one isn't).
+            auto_approve_after: When > 0, overrides timeout. Silence past
+                     this point flips status to APPROVED instead. The user
+                     opts into this via Settings → "Auto-approve after
+                     seconds" knowing it makes the gate fail-permissive.
+
+        Returns True if approved (either by explicit resolve() or by the
+        auto-approve timeout), False if rejected (explicit or
+        reject-timeout).
         """
         async with self._lock:
             approval = self._pending.get(approval_id)
         if not approval:
             return False
 
+        # Pick effective timeout + the action to take when it fires.
+        if auto_approve_after > 0:
+            effective_timeout = auto_approve_after
+            on_timeout_approved = True
+        else:
+            effective_timeout = timeout
+            on_timeout_approved = False
+
         try:
-            await asyncio.wait_for(approval._event.wait(), timeout=timeout)
+            await asyncio.wait_for(approval._event.wait(), timeout=effective_timeout)
         except asyncio.TimeoutError:
             async with self._lock:
                 if approval.status == "pending":
-                    approval.status = "rejected"
-            return False
+                    approval.status = "approved" if on_timeout_approved else "rejected"
+            return on_timeout_approved
 
         return approval.status == "approved"
 
