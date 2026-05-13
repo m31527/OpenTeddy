@@ -1291,7 +1291,11 @@ async def webhook_trigger(
         id=task_id,
         goal=goal,
         context={"webhook_payload": body} if body else {},
-        priority=5,
+        # Respect the user's chat-input default (Settings → Default Task
+        # Priority). Webhooks share the same notion of "default priority"
+        # as the UI — callers who want a different value can still POST
+        # their own to /run instead of using the webhook endpoint.
+        priority=config.default_priority,
         session_id=session_id,
         mode=mode_enum,
     )
@@ -1912,7 +1916,10 @@ async def set_session_db_connect(session_id: str, body: DBConnectRequest) -> dic
                 id=str(uuid.uuid4()),
                 goal=discovery_goal,
                 context={},
-                priority=5,
+                # Internal scaffolding task — keep it at the configured
+                # default so it never jumps ahead of whatever the user
+                # is about to type. They explicitly chose this number.
+                priority=config.default_priority,
                 session_id=session_id,
                 mode=SessionMode.ANALYTIC,
             )

@@ -218,6 +218,18 @@ SETTINGS_META: dict[str, dict[str, Any]] = {
         "min":         1,
         "max":         50,
     },
+    "default_priority": {
+        "label":       "Default Task Priority",
+        "description": "Priority assigned to tasks sent from the chat input when "
+                       "you don't override it. 1 = low (sent tasks queue behind "
+                       "explicit higher-priority work), 10 = highest. Most users "
+                       "should leave this at 1 and let the scheduler do its job; "
+                       "API / webhook callers can still pass an explicit priority "
+                       "in the request body.",
+        "type":        "int",
+        "min":         1,
+        "max":         10,
+    },
     "subtask_timeout": {
         "label":       "Subtask Timeout (seconds)",
         "description": "Wall-clock hard-stop for a subtask. The real safety net "
@@ -320,6 +332,7 @@ def _defaults_from_config() -> dict[str, str]:
         "qwen_max_tokens":          str(config.qwen_max_tokens),
         "skill_match_threshold":    str(getattr(config, "skill_match_threshold", "0.4")),
         "skill_promotion_threshold": str(config.skill_promotion_threshold),
+        "default_priority":          str(getattr(config, "default_priority", 1)),
         "subtask_timeout":           str(config.subtask_timeout),
         "shell_silence_timeout":     str(config.shell_silence_timeout),
         "agent_workspace_dir":       str(config.agent_workspace_dir),
@@ -570,6 +583,12 @@ class SettingsStore:
         v6 = _int("skill_promotion_threshold")
         if v6 is not None:
             config.skill_promotion_threshold = v6
+
+        vdp = _int("default_priority")
+        if vdp is not None:
+            # Clamp to the Pydantic range so a hand-edited DB row can't
+            # produce a 422 on every /run call.
+            config.default_priority = max(1, min(10, vdp))
 
         v7 = _int("subtask_timeout")
         if v7 is not None:

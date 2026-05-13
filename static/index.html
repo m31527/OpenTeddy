@@ -2762,26 +2762,10 @@
       50%       { box-shadow: 0 0 0 6px rgba(204,51,51,0); }
     }
 
-    .priority-field {
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      gap: 0.2rem;
-      flex-shrink: 0;
-    }
-    .priority-field label {
-      font-size: 0.65rem;
-      color: var(--text-muted);
-      font-weight: 500;
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
-    }
-    .priority-field input {
-      width: 50px;
-      text-align: center;
-      padding: 0.38rem 0.3rem;
-      font-size: 0.85rem;
-    }
+    /* Per-send Priority input was removed 2026-05-13. The default now
+       lives in Settings → "Default Task Priority" so the chat row stays
+       clean. Programmatic callers (POST /run, /webhooks/{sid}) can still
+       send `priority: N` to override per task. */
 
     .input-hint {
       font-size: 0.68rem;
@@ -3539,10 +3523,6 @@
             </div>
 
             <div class="chat-input-row">
-              <div class="priority-field">
-                <label data-i18n="priority_label">Priority</label>
-                <input type="number" id="priority" value="5" min="1" max="10" />
-              </div>
               <input type="file" id="fileInput" multiple
                 accept=".csv,.tsv,.json,.xlsx,.xls,.txt,.md,.log,.yaml,.yml,.parquet"
                 onchange="onFilesPicked(event)" style="display:none">
@@ -4112,6 +4092,18 @@
                   </label>
                   <input type="range" id="rng_escalation_failure_limit" min="1" max="10" step="1" value="3"
                     oninput="document.getElementById('val_escalation_failure_limit').textContent=this.value" />
+                </div>
+              </div>
+              <div class="param-row">
+                <div class="param-field">
+                  <!-- Replaces the per-send Priority field that used to sit
+                       next to the chat input. The scheduler reads this on
+                       each /run; API/webhook callers can still override. -->
+                  <label><span data-i18n="default_priority_label">Default Task Priority</span>
+                    <span class="param-value" id="val_default_priority">1</span>
+                  </label>
+                  <input type="range" id="rng_default_priority" min="1" max="10" step="1" value="1"
+                    oninput="document.getElementById('val_default_priority').textContent=this.value" />
                 </div>
               </div>
               <div class="param-row">
@@ -7406,7 +7398,13 @@
       const goalEl   = document.getElementById('goal');
       const goal     = goalEl.value.trim();
       if (!goal) { toast(t('please_describe_task')); return; }
-      const priority = parseInt(document.getElementById('priority').value) || 5;
+      // Priority used to be a per-send number-input next to the chat row.
+      // It now comes from Settings → "Default Task Priority" (cached at
+      // load) so the input row stays minimal. Programmatic /run callers
+      // can still pass an explicit priority in the request body.
+      const priority = (typeof _defaultPriority === 'number' && _defaultPriority >= 1)
+        ? _defaultPriority
+        : 1;
 
       // If the user attached files via the + button, build a manifest
       // block at the top of the goal so Gemma/Qwen see exactly which
@@ -8386,6 +8384,10 @@
     // ── Settings ─────────────────────────────────────────────────────────────
     let _ollamaModels   = [];
     let _settingsLoaded = false;
+    // Cached chat-input default priority. Hydrated from /settings on first
+    // loadSettings() call; until then we fall back to 1 (matches the
+    // backend Task.priority default). Avoids a per-send fetch round-trip.
+    let _defaultPriority = 1;
 
     function toggleSettingsSection(h3) {
       h3.parentElement.classList.toggle('collapsed');
@@ -8472,6 +8474,19 @@
       }
     }
 
+    // Tiny side-fetch that only updates _defaultPriority. Used by
+    // window.onload to keep the priority cache warm without paying for
+    // the full loadSettings() UI hydration (Ollama probe, slider DOM
+    // writes, etc.) when the user hasn't opened the Settings tab.
+    async function hydrateDefaultPriority() {
+      const res  = await fetch(`${API}/settings`);
+      const data = await res.json();
+      if (!data?.success) return;
+      const raw = data.data?.default_priority?.value;
+      const dp  = parseInt(raw ?? '1', 10);
+      if (!Number.isNaN(dp)) _defaultPriority = Math.max(1, Math.min(10, dp));
+    }
+
     async function loadSettings() {
       try {
         const res  = await fetch(`${API}/settings`);
@@ -8521,6 +8536,11 @@
         _setInput('inp_webhook_secret',           s.webhook_secret?.value           ?? '');
         _setSlider('escalation_threshold',      s.escalation_threshold?.value      ?? 0.6);
         _setSlider('escalation_failure_limit',  s.escalation_failure_limit?.value  ?? 3);
+        _setSlider('default_priority',          s.default_priority?.value          ?? 1);
+        // Cache for runTask() — avoid a /settings round-trip per send.
+        // Range 1–10 mirrors the Pydantic constraint on Task.priority.
+        const dp = parseInt(s.default_priority?.value ?? '1', 10);
+        if (!Number.isNaN(dp)) _defaultPriority = Math.max(1, Math.min(10, dp));
         _setSlider('gemma_max_tokens',          s.gemma_max_tokens?.value          ?? 4096);
         _setSlider('qwen_max_tokens',           s.qwen_max_tokens?.value           ?? 4096);
         _setSlider('skill_match_threshold',     s.skill_match_threshold?.value     ?? 0.4);
@@ -9044,6 +9064,7 @@
         qwen_base_url:             document.getElementById('inp_qwen_base_url').value.trim(),
         escalation_threshold:      document.getElementById('rng_escalation_threshold').value,
         escalation_failure_limit:  document.getElementById('rng_escalation_failure_limit').value,
+        default_priority:          document.getElementById('rng_default_priority').value,
         gemma_max_tokens:          document.getElementById('rng_gemma_max_tokens').value,
         qwen_max_tokens:           document.getElementById('rng_qwen_max_tokens').value,
         skill_match_threshold:     document.getElementById('rng_skill_match_threshold').value,
@@ -9199,6 +9220,10 @@
       // break, but we don't need to call it here.
       loadTools();
       checkOllamaModelsForHome();
+      // Pre-warm the chat-input priority default from /settings so the
+      // first /run uses the user's saved value even if they never open
+      // the Settings tab this session. Quiet failure — falls back to 1.
+      hydrateDefaultPriority().catch(() => {});
       pollApprovals();
       // Quietly poll GitHub for a newer OpenTeddy release (cached 1h).
       // Surfaces a sidebar pill if one's available; click → release-notes

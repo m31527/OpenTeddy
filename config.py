@@ -330,6 +330,18 @@ class Config:
         default_factory=lambda: int(os.getenv("API_PORT", "8000"))
     )
 
+    # ── Task scheduling ──────────────────────────────────────────────────────
+    # Default priority used by the chat input when /run does not specify one.
+    # Previously hard-coded to 5 inside the static UI, which felt arbitrary —
+    # the scheduler effectively treats everything as "medium" and the user
+    # had to micro-tune a slider on every send. Settling on 1 as the default
+    # means casual sends land at the back of the queue, while explicit
+    # callers (API / webhook / scheduled tasks) that DO care can still pass
+    # an override 2–10. Range 1–10, clamped by the Pydantic model.
+    default_priority: int = field(
+        default_factory=lambda: int(os.getenv("OPENTEDDY_DEFAULT_PRIORITY", "1"))
+    )
+
     # ── Self-growth ──────────────────────────────────────────────────────────
     # Minimum number of successful task runs before a skill is promoted
     skill_promotion_threshold: int = field(
@@ -472,6 +484,11 @@ class Config:
         v6 = _i("skill_promotion_threshold")
         if v6 is not None:
             self.skill_promotion_threshold = v6
+
+        vdp = _i("default_priority")
+        if vdp is not None:
+            # Clamp 1–10 to match the Pydantic constraint on Task.priority.
+            self.default_priority = max(1, min(10, vdp))
 
         v7 = _i("subtask_timeout")
         if v7 is not None:
