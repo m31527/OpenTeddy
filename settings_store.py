@@ -119,6 +119,22 @@ SETTINGS_META: dict[str, dict[str, Any]] = {
                         "Leave empty to disable web search.",
         "type":        "secret",
     },
+    "llm_mode": {
+        "label":       "LLM Mode",
+        "description": "How OpenTeddy routes work between local + cloud "
+                       "LLMs. 'local' = fully local (Gemma plans, Qwen "
+                       "executes, never touches cloud — privacy / "
+                       "offline). 'mixed' = local-first with cloud "
+                       "safety-net on failure / low confidence (default; "
+                       "fast on easy tasks, robust on hard ones). "
+                       "'cloud' = cloud-first; the executor is bypassed "
+                       "and every subtask is handled by your configured "
+                       "Cloud LLM Provider directly. All three modes "
+                       "share the same memory / session / task storage, "
+                       "so switching modes never loses past work.",
+        "type":        "select",
+        "options":     ["local", "mixed", "cloud"],
+    },
     "escalation_enabled": {
         "label":       "Allow Claude escalation",
         "description": "When OFF, low-confidence / timeout / failure-signal "
@@ -338,6 +354,8 @@ def _defaults_from_config() -> dict[str, str]:
         "deepseek_api_key":         getattr(config, "deepseek_api_key", ""),
         "deepseek_model":           getattr(config, "deepseek_model", "deepseek-chat"),
         "brave_search_api_key":     getattr(config, "brave_search_api_key", ""),
+        # New 3-way LLM mode + legacy bool kept in sync for backward compat
+        "llm_mode":                 getattr(config, "llm_mode", "mixed"),
         "escalation_enabled":       "true" if config.escalation_enabled else "false",
         "streaming_enabled":        "true" if config.streaming_enabled else "false",
         "verification_enabled":     "true" if getattr(config, "verification_enabled", True) else "false",
@@ -411,7 +429,58 @@ class SettingsStore:
             # so we never override a user's intentional choice.
             await self._migrate_stale_defaults(db)
 
+            # One-shot migration: legacy escalation_enabled → llm_mode.
+            # When an upgrade lands the new 3-way setting, existing
+            # users have `escalation_enabled` stored but no `llm_mode`
+            # yet — the INSERT above just wrote the default 'mixed'.
+            # If their explicit choice was OFF (= local-only), we don't
+            # want to silently flip them to 'mixed'. So: if llm_mode is
+            # still at the freshly-inserted default AND escalation was
+            # explicitly OFF, promote to 'local'. Same for 'mixed'.
+            await self._migrate_escalation_to_llm_mode(db)
+
         logger.info("SettingsStore ready (%d default keys).", len(defaults))
+
+    async def _migrate_escalation_to_llm_mode(self, db: aiosqlite.Connection) -> None:
+        """Promote legacy `escalation_enabled` to the new `llm_mode` field.
+
+        Detection rule: if the user already had an `escalation_enabled`
+        row (= they upgraded from a pre-llm_mode build) AND the freshly
+        inserted llm_mode is still at the default 'mixed' AND
+        escalation_enabled was explicitly OFF → flip llm_mode to 'local'
+        so the user's "no cloud calls" preference is preserved.
+
+        We DON'T flip anyone to 'cloud' automatically — that's an
+        explicit opt-in via the new UI, since it changes billing.
+        """
+        # Skip cleanly when the rows aren't there for any reason.
+        try:
+            async with db.execute(
+                "SELECT value FROM app_settings WHERE key='escalation_enabled'"
+            ) as cur:
+                esc_row = await cur.fetchone()
+            async with db.execute(
+                "SELECT value FROM app_settings WHERE key='llm_mode'"
+            ) as cur:
+                mode_row = await cur.fetchone()
+        except Exception:  # noqa: BLE001
+            return
+
+        if not esc_row or not mode_row:
+            return
+
+        esc_off = str(esc_row[0]).strip().lower() in {"0", "false", "no", "off", ""}
+        current_mode = str(mode_row[0]).strip().lower()
+        if esc_off and current_mode == "mixed":
+            await db.execute(
+                "UPDATE app_settings SET value=?, updated_at=? WHERE key='llm_mode'",
+                ("local", _now()),
+            )
+            await db.commit()
+            logger.info(
+                "Migrated legacy escalation_enabled=off → llm_mode='local' "
+                "(preserves user's no-cloud preference)."
+            )
 
     async def _migrate_stale_defaults(self, db: aiosqlite.Connection) -> None:
         """Replace pre-upgrade default values with the current ones.
@@ -555,11 +624,27 @@ class SettingsStore:
         if settings.get("brave_search_api_key"):
             # Same pattern as Anthropic — empty in UI = keep env-var.
             config.brave_search_api_key = settings["brave_search_api_key"]
-        if "escalation_enabled" in settings:
-            config.escalation_enabled = (
-                str(settings["escalation_enabled"]).strip().lower()
-                not in {"0", "false", "no", "off", ""}
-            )
+        # ── 3-way LLM mode (canonical) ────────────────────────────────
+        # Priority: explicit llm_mode wins, else derive from legacy
+        # escalation_enabled (for users on a pre-llm_mode DB row), else
+        # leave at env default.
+        raw_mode = (settings.get("llm_mode") or "").strip().lower()
+        if raw_mode in {"local", "mixed", "cloud"}:
+            config.llm_mode = raw_mode
+        elif "escalation_enabled" in settings:
+            on = (str(settings["escalation_enabled"]).strip().lower()
+                  not in {"0", "false", "no", "off", ""})
+            config.llm_mode = "mixed" if on else "local"
+
+        # Legacy bool is now a PURE derivative of llm_mode. We
+        # deliberately drop the old "explicit escalation_enabled
+        # overrides" path — letting two settings disagree was the
+        # source of subtle bugs (UI shows cloud, code escalates
+        # because the bool stayed on). Anyone wanting "cloud mode
+        # without failure-trigger escalation" can configure that
+        # explicitly later; today this keeps the two fields perfectly
+        # in lock-step.
+        config.escalation_enabled = (config.llm_mode == "mixed")
         if "streaming_enabled" in settings:
             config.streaming_enabled = (
                 str(settings["streaming_enabled"]).strip().lower()

@@ -1133,6 +1133,47 @@
     .escalation-toggle-title { font-size: 0.82rem; font-weight: 600; color: var(--text-primary); }
     .escalation-toggle-hint  { font-size: 0.72rem; color: var(--text-secondary); line-height: 1.5; }
 
+    /* ── LLM Mode 3-way radio cards ────────────────────────────────────
+       Replaces the old "Allow Claude escalation" checkbox. Each card is
+       a labeled radio button styled as a tile, so the trade-off (local
+       / mixed / cloud) is obvious at a glance instead of buried in a
+       boolean. */
+    .llm-mode-group {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 8px;
+      margin-bottom: 0.85rem;
+    }
+    @media (max-width: 600px) {
+      .llm-mode-group { grid-template-columns: 1fr; }
+    }
+    .llm-mode-card {
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      padding: 12px;
+      background: var(--bg-secondary);
+      border: 2px solid transparent;
+      border-radius: 10px;
+      cursor: pointer;
+      user-select: none;
+      transition: border-color 0.15s, background 0.15s;
+    }
+    .llm-mode-card:hover { background: var(--bg-tertiary, var(--bg-secondary)); }
+    .llm-mode-card input[type="radio"] {
+      position: absolute;
+      opacity: 0;
+      pointer-events: none;
+    }
+    .llm-mode-card.selected {
+      border-color: var(--text-primary);
+      background: var(--bg-tertiary, var(--bg-secondary));
+    }
+    .llm-mode-icon  { font-size: 1.4rem; line-height: 1; }
+    .llm-mode-title { font-size: 0.82rem; font-weight: 600; color: var(--text-primary); }
+    .llm-mode-hint  { font-size: 0.7rem;  color: var(--text-secondary); line-height: 1.45; }
+
     /* ── Perf stats (#6) — appears in Settings → Model Settings ───────── */
     .perf-stats-wrap {
       margin-bottom: 0.85rem;
@@ -3850,16 +3891,38 @@
                   <select id="sel_executor_model"><option value="" data-i18n="ollama_offline">⚠️ Ollama offline</option></select>
                 </div>
               </div>
-              <!-- Master kill-switch for Claude escalation. When unchecked,
-                   low-confidence / timeout / failure-signal triggers do not
-                   call Claude — agent surfaces the local error instead. -->
-              <label class="escalation-toggle">
-                <input type="checkbox" id="chk_escalation_enabled" checked />
-                <span class="escalation-toggle-text">
-                  <span class="escalation-toggle-title" data-i18n="escalation_enabled_label">Allow Claude escalation</span>
-                  <span class="escalation-toggle-hint" data-i18n="escalation_enabled_hint">When off, the agent stays fully local and never calls Claude.</span>
-                </span>
-              </label>
+              <!-- ── LLM Mode (3-way) ─────────────────────────────────
+                   Replaces the old "Allow Claude escalation" checkbox.
+                   Three explicit options instead of a bool so users see
+                   the trade-off (privacy vs. quality vs. cost) directly.
+                   All three modes share the same memory / session /
+                   task storage, so switching modes never loses past
+                   work — explicitly documented so users can experiment
+                   without fear. -->
+              <div class="llm-mode-group" id="llm_mode_group" role="radiogroup"
+                   aria-label="LLM Mode">
+                <label class="llm-mode-card" data-mode="local"
+                       onclick="selectLlmMode('local')">
+                  <input type="radio" name="llm_mode" value="local" />
+                  <span class="llm-mode-icon">🔒</span>
+                  <span class="llm-mode-title" data-i18n="llm_mode_local_title">Local only</span>
+                  <span class="llm-mode-hint" data-i18n="llm_mode_local_hint">Gemma plans, Qwen executes. Never calls cloud LLMs. Privacy / offline / no cloud spend.</span>
+                </label>
+                <label class="llm-mode-card selected" data-mode="mixed"
+                       onclick="selectLlmMode('mixed')">
+                  <input type="radio" name="llm_mode" value="mixed" checked />
+                  <span class="llm-mode-icon">⚖️</span>
+                  <span class="llm-mode-title" data-i18n="llm_mode_mixed_title">Mixed <span style="opacity:0.6;font-weight:400">· default</span></span>
+                  <span class="llm-mode-hint" data-i18n="llm_mode_mixed_hint">Local first. Escalates to your cloud LLM only when the local model fails or has low confidence. Best of both worlds.</span>
+                </label>
+                <label class="llm-mode-card" data-mode="cloud"
+                       onclick="selectLlmMode('cloud')">
+                  <input type="radio" name="llm_mode" value="cloud" />
+                  <span class="llm-mode-icon">☁️</span>
+                  <span class="llm-mode-title" data-i18n="llm_mode_cloud_title">Full Cloud LLM</span>
+                  <span class="llm-mode-hint" data-i18n="llm_mode_cloud_hint">Every subtask handled by your configured cloud LLM (Claude / OpenAI / Gemini / …). Max quality, pay-per-call.</span>
+                </label>
+              </div>
               <!-- Stream LLM output — perceived-latency win on small models. -->
               <label class="escalation-toggle">
                 <input type="checkbox" id="chk_streaming_enabled" checked />
@@ -8633,11 +8696,16 @@
         _setInput('inp_deepseek_api_key',   s.deepseek_api_key?.value   ?? '');
         _setInput('inp_deepseek_model',     s.deepseek_model?.value     ?? '');
         syncProviderUI();
-        const escEl = document.getElementById('chk_escalation_enabled');
-        if (escEl) {
-          const v = String(s.escalation_enabled?.value ?? 'true').toLowerCase();
-          escEl.checked = !['0', 'false', 'no', 'off'].includes(v);
+        // ── LLM Mode (3-way) ───────────────────────────────────────
+        // Pull the new canonical setting first; fall back to legacy
+        // escalation_enabled if a fresh DB row hasn't been written yet
+        // (migration covers most cases but defence-in-depth never hurt).
+        let mode = (s.llm_mode?.value || '').toLowerCase();
+        if (!['local', 'mixed', 'cloud'].includes(mode)) {
+          const escVal = String(s.escalation_enabled?.value ?? 'true').toLowerCase();
+          mode = ['0', 'false', 'no', 'off'].includes(escVal) ? 'local' : 'mixed';
         }
+        selectLlmMode(mode);
         const streamEl = document.getElementById('chk_streaming_enabled');
         if (streamEl) {
           const v = String(s.streaming_enabled?.value ?? 'true').toLowerCase();
@@ -8681,6 +8749,22 @@
     }
 
     function _setInput(id, val) { const el = document.getElementById(id); if (el) el.value = val; }
+
+    // Toggle the 3-way LLM mode radio cards. Updates both the radio
+    // input (so the form-serialise picks it up) and the .selected CSS
+    // class (so the active card is visually highlighted). Safe to call
+    // with an unknown mode — falls back to 'mixed' silently.
+    function selectLlmMode(mode) {
+      if (!['local', 'mixed', 'cloud'].includes(mode)) mode = 'mixed';
+      const group = document.getElementById('llm_mode_group');
+      if (!group) return;
+      group.querySelectorAll('.llm-mode-card').forEach(card => {
+        const isSel = card.dataset.mode === mode;
+        card.classList.toggle('selected', isSel);
+        const input = card.querySelector('input[type="radio"]');
+        if (input) input.checked = isSel;
+      });
+    }
     function _setSlider(key, val) {
       const rng = document.getElementById('rng_' + key);
       const lbl = document.getElementById('val_' + key);
@@ -9183,7 +9267,12 @@
         gemini_model:              document.getElementById('inp_gemini_model')?.value.trim() || '',
         deepseek_api_key:          document.getElementById('inp_deepseek_api_key')?.value.trim() || '',
         deepseek_model:            document.getElementById('inp_deepseek_model')?.value.trim() || '',
-        escalation_enabled:        document.getElementById('chk_escalation_enabled').checked ? 'true' : 'false',
+        // Canonical 3-way mode + derived legacy bool for backward compat.
+        // The server keeps both in sync via _migrate_escalation_to_llm_mode
+        // + reload_from_store, but we send both fields so a roll-back to
+        // an older sidecar still respects the user's choice.
+        llm_mode:                  (document.querySelector('input[name="llm_mode"]:checked')?.value || 'mixed'),
+        escalation_enabled:        ((document.querySelector('input[name="llm_mode"]:checked')?.value || 'mixed') === 'mixed') ? 'true' : 'false',
         streaming_enabled:         document.getElementById('chk_streaming_enabled').checked ? 'true' : 'false',
         gemma_base_url:            document.getElementById('inp_gemma_base_url').value.trim(),
         qwen_base_url:             document.getElementById('inp_qwen_base_url').value.trim(),

@@ -665,6 +665,43 @@ class Orchestrator:
 
         On success, appends a verification result if a matching check exists.
         """
+        # ── Cloud mode short-circuit ─────────────────────────────────────────
+        # When Settings → LLM Mode is set to 'cloud', skip Qwen entirely
+        # and hand the subtask straight to escalation.resolve() (= cloud
+        # LLM via the configured provider). Saves the 5-10s Qwen first-
+        # attempt latency on every subtask and prevents the "Qwen wrote
+        # a confident-looking wrong answer" failure mode for users who
+        # explicitly want max quality.
+        #
+        # Session-level local_only still wins via is_cloud_mode() — a
+        # privacy-mode session inside a cloud-mode app stays local.
+        # Planning (Gemma) currently still runs locally; full-cloud
+        # planning is on the roadmap. The user gets a single round-trip
+        # to the cloud per subtask which is the dominant cost saver.
+        try:
+            from config import is_cloud_mode as _is_cloud_mode
+            cloud_routing = _is_cloud_mode()
+        except Exception:  # noqa: BLE001
+            cloud_routing = False
+
+        if cloud_routing:
+            logger.info(
+                "Subtask %s — cloud mode active, bypassing Qwen and routing "
+                "directly to escalation.resolve()",
+                st.id,
+            )
+            try:
+                return await self.escalation.resolve(st, context)
+            except Exception as exc:  # noqa: BLE001
+                # Cloud failed → fall through to local executor as a
+                # safety net rather than failing the whole subtask. The
+                # user picked cloud-first, not cloud-only; falling back
+                # to local is a better UX than a hard error.
+                logger.warning(
+                    "Cloud-mode escalation failed for %s (%s) — falling "
+                    "back to local executor", st.id, exc,
+                )
+
         max_local_retries = getattr(config, 'escalation_failure_limit', 3)
         subtask_timeout   = getattr(config, 'subtask_timeout', 120)
         escalation_threshold = getattr(config, 'escalation_confidence_threshold', 0.6)

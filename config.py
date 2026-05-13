@@ -51,6 +51,26 @@ def is_session_local_only() -> bool:
     return bool(_session_local_only_var.get())
 
 
+# ── LLM mode helpers (read by orchestrator/executor for routing) ─────────
+# These read from the singleton AFTER it's constructed below, so they
+# stay in sync with reload_from_store() — no need to recompute on each
+# settings change.
+def is_local_mode() -> bool:
+    """True iff llm_mode == 'local' (or session-level local-only is set)."""
+    return is_session_local_only() or config.llm_mode == "local"
+
+
+def is_cloud_mode() -> bool:
+    """True iff llm_mode == 'cloud' AND no session-level local-only override.
+    Session privacy guardrail always wins over the global mode."""
+    return config.llm_mode == "cloud" and not is_session_local_only()
+
+
+def is_mixed_mode() -> bool:
+    """True iff llm_mode == 'mixed' (default)."""
+    return config.llm_mode == "mixed"
+
+
 def effective_workspace_dir() -> str:
     """Return the workspace the current async task should use.
 
@@ -169,13 +189,40 @@ class Config:
     brave_search_api_key: str = field(
         default_factory=lambda: os.getenv("BRAVE_SEARCH_API_KEY", "")
     )
-    # Master kill-switch for Claude escalation. When False, low-confidence
-    # / timeout / failure-signal triggers do NOT call Claude — the agent
-    # marks the subtask FAILED and surfaces the local error to the user.
-    # Per-session "Local-only" mode still wins when set, but this flips
-    # the global default. Default True so existing behaviour is preserved.
+    # ── LLM mode (three-way) ────────────────────────────────────────────────
+    # Replaces the old `escalation_enabled` bool with an explicit choice:
+    #
+    #   "local"  → fully local. Gemma plans, Qwen executes, NEVER call cloud.
+    #              Same as legacy escalation_enabled=false. Best for
+    #              air-gapped / privacy / no-cloud-spend workflows.
+    #
+    #   "mixed"  → local-first with cloud safety net. Default. Qwen takes
+    #              the first shot at every subtask; cloud LLM (configured
+    #              via llm_provider) takes over on low confidence,
+    #              repeated failure, or timeout. Same as legacy
+    #              escalation_enabled=true.
+    #
+    #   "cloud"  → cloud-first. The orchestrator's subtask runner bypasses
+    #              Qwen entirely and routes straight to the cloud LLM via
+    #              escalation.resolve(). Planning (Gemma) still runs
+    #              locally — see roadmap for full-cloud planning. Good
+    #              when you want max quality and don't mind the per-call
+    #              cost.
+    #
+    # The legacy `escalation_enabled` field below is derived from this
+    # for backward compat (any code path still reading it gets the
+    # mixed-mode answer in mixed, false otherwise).
+    llm_mode: str = field(
+        default_factory=lambda: os.getenv("OPENTEDDY_LLM_MODE", "mixed").strip().lower()
+    )
+
+    # Derived legacy flag — kept so any code path still checking
+    # config.escalation_enabled keeps working. Auto-synced in
+    # reload_from_store / apply_to_config when llm_mode changes.
     escalation_enabled: bool = field(
-        default_factory=lambda: os.getenv("ESCALATION_ENABLED", "true").strip().lower()
+        default_factory=lambda: os.getenv("OPENTEDDY_LLM_MODE", "mixed").strip().lower() == "mixed"
+        if os.getenv("OPENTEDDY_LLM_MODE")
+        else os.getenv("ESCALATION_ENABLED", "true").strip().lower()
         not in {"0", "false", "no", "off"}
     )
     # Stream LLM tokens to the chat as they generate. Massive perceived
@@ -467,10 +514,27 @@ class Config:
         # "off" tokens as truthy so an accidentally-stored "True" / "yes"
         # from a different code path still works.
         _OFF = {"0", "false", "no", "off", ""}
-        if "escalation_enabled" in settings:
-            self.escalation_enabled = (
-                str(settings["escalation_enabled"]).strip().lower() not in _OFF
-            )
+
+        # ── LLM mode (3-way) — new canonical setting ─────────────────
+        # Priority order:
+        #   1. Explicit llm_mode in DB → use it
+        #   2. Else derive from legacy escalation_enabled (pre-llm_mode DBs)
+        #   3. Else keep current attribute (env-var default)
+        if _s("llm_mode"):
+            raw_mode = settings["llm_mode"].strip().lower()
+            if raw_mode in {"local", "mixed", "cloud"}:
+                self.llm_mode = raw_mode
+            # Out-of-range values are silently clamped to whatever was
+            # already loaded — avoids a settings-corruption restart loop.
+        elif "escalation_enabled" in settings:
+            on = str(settings["escalation_enabled"]).strip().lower() not in _OFF
+            self.llm_mode = "mixed" if on else "local"
+
+        # Legacy bool is now a pure derivative of llm_mode. No more
+        # "explicit escalation_enabled overrides" — see settings_store
+        # for the rationale (two settings disagreeing was the source of
+        # subtle bugs).
+        self.escalation_enabled = (self.llm_mode == "mixed")
         if "streaming_enabled" in settings:
             self.streaming_enabled = (
                 str(settings["streaming_enabled"]).strip().lower() not in _OFF
