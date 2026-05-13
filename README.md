@@ -176,7 +176,7 @@ OpenTeddy/
 ## Install in one line
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/m31527/OpenTeddy/main/install.sh | bash
+curl -fsSL https://openteddy.net/install | bash
 ```
 
 The installer:

@@ -55,7 +55,7 @@ if [[ -z "${VIRTUAL_ENV:-}" ]]; then
 OpenTeddy needs a Python virtualenv with deps installed. Run install.sh
 first:
 
-    curl -fsSL https://raw.githubusercontent.com/m31527/OpenTeddy/main/install.sh | bash
+    curl -fsSL https://openteddy.net/install | bash
 
 Or if you cloned manually:
 

@@ -3,7 +3,7 @@
 # OpenTeddy one-line installer
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/m31527/OpenTeddy/main/install.sh | bash
+#   curl -fsSL https://openteddy.net/install | bash
 #
 # With flags:
 #   curl -fsSL https://...install.sh | bash -s -- --dir ~/projects/openteddy --skip-models
@@ -61,7 +61,7 @@ while [[ $# -gt 0 ]]; do
 OpenTeddy one-line installer.
 
 Quick start:
-  curl -fsSL https://raw.githubusercontent.com/m31527/OpenTeddy/main/install.sh | bash
+  curl -fsSL https://openteddy.net/install | bash
 
 Options (pass via: ... | bash -s -- --flag):
   --dir <path>      Install location (default: \$HOME/OpenTeddy)
@@ -237,5 +237,5 @@ echo "    Settings → Cloud LLM Provider → pick Anthropic / OpenAI / Gemini /
 echo
 echo "  Updating later:"
 echo "    cd $INSTALL_DIR && git pull && source .venv/bin/activate && pip install -r requirements.txt"
-echo "    Or just re-run: curl -fsSL https://raw.githubusercontent.com/m31527/OpenTeddy/main/install.sh | bash"
+echo "    Or just re-run: curl -fsSL https://openteddy.net/install | bash"
 echo
