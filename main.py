@@ -1184,9 +1184,25 @@ async def debug_workspace(session_id: Optional[str] = None) -> dict:
                 })
         except Exception:  # noqa: BLE001
             pass
+    # Classify the override: 'auto' = system-generated per-session subdir
+    # under {global}/sessions/, 'user' = anything else the user picked
+    # explicitly, None = no override (using global default). The UI uses
+    # this so an auto-isolated session doesn't get the amber "⭐ custom
+    # workspace" badge meant for explicit overrides.
+    workspace_kind: Optional[str] = None
+    if session_override:
+        try:
+            session_root = os.path.join(global_ws, "sessions") + os.sep
+            workspace_kind = (
+                "auto" if effective_ws.startswith(session_root) else "user"
+            )
+        except Exception:  # noqa: BLE001
+            workspace_kind = "user"
+
     return {
         "agent_workspace_dir":   global_ws,
         "session_workspace_dir": session_override,
+        "workspace_kind":        workspace_kind,   # 'auto' | 'user' | None
         "effective_workspace":   effective_ws,
         "exists": exists,
         "uvicorn_cwd":  os.getcwd(),

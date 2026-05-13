@@ -323,6 +323,26 @@ class Config:
     # in one place while `docker_project_detect` looked in another.
     agent_workspace_dir: str = field(default_factory=_resolve_default_workspace)
 
+    # ── Per-session workspace isolation ─────────────────────────────────────
+    # When True (default), every NEW session created via /run or /sessions
+    # gets its own subdirectory under {agent_workspace_dir}/sessions/<id>/
+    # so its files don't bleed into other sessions. Before this default
+    # shipped, a new session asking "analyse this CSV" would happily pick
+    # up files left over from a previous session that happened to be in
+    # the shared root — confusing the agent and producing wrong answers
+    # on real-world workflows (user-reported 2026-05-14).
+    #
+    # Existing sessions are NEVER auto-migrated (their workspace_dir
+    # stays whatever it was), so this only affects sessions created
+    # after the upgrade. Users who prefer the old "shared root" model
+    # (e.g. iterating on one long-running project across sessions) can
+    # turn this OFF in Settings.
+    session_workspace_isolation: bool = field(
+        default_factory=lambda: os.getenv(
+            "SESSION_WORKSPACE_ISOLATION", "true"
+        ).strip().lower() not in {"0", "false", "no", "off"}
+    )
+
     # ── Token limits ────────────────────────────────────────────────────────
     gemma_max_tokens: int = field(
         default_factory=lambda: int(os.getenv("GEMMA_MAX_TOKENS", "4096"))
@@ -609,6 +629,11 @@ class Config:
             # Always store as absolute — keeps every downstream resolution
             # consistent regardless of what cwd uvicorn happens to be in.
             self.agent_workspace_dir = os.path.abspath(settings["agent_workspace_dir"])
+
+        if "session_workspace_isolation" in settings:
+            self.session_workspace_isolation = (
+                str(settings["session_workspace_isolation"]).strip().lower() not in _OFF
+            )
 
         # Notification credentials — strings only (port parsed as int).
         for k in ("telegram_bot_token", "telegram_default_chat_id",

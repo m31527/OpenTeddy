@@ -208,13 +208,59 @@ class Tracker:
     async def create_session(
         self, session_id: str, title: str, mode: str = "code",
     ) -> None:
+        """Create a session row. When config.session_workspace_isolation
+        is on (the default), also pre-populate the workspace_dir column
+        with a per-session subdir and mkdir it on disk so the agent has
+        a clean isolated workspace from the very first turn.
+
+        Existing sessions are not affected — this only runs for the
+        INSERT path of a brand-new id (INSERT OR IGNORE no-ops on
+        duplicate ids, and we only mkdir if the row actually inserted).
+        """
         now = datetime.utcnow().isoformat()
-        await self.db.execute(
-            "INSERT OR IGNORE INTO sessions(id, title, mode, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (session_id, title, mode, now, now),
+
+        # Decide isolation up-front so the SQL stays one insert. NULL
+        # workspace_dir means "fall back to global" — same as legacy
+        # sessions, which we deliberately don't migrate.
+        from config import config as _cfg
+        import os as _os
+
+        isolated_ws: Optional[str] = None
+        if getattr(_cfg, "session_workspace_isolation", True):
+            short_id = session_id.replace("-", "")[:8]
+            isolated_ws = _os.path.join(
+                _os.path.abspath(_cfg.agent_workspace_dir),
+                "sessions",
+                short_id,
+            )
+
+        cur = await self.db.execute(
+            "INSERT OR IGNORE INTO sessions(id, title, mode, "
+            "workspace_dir, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (session_id, title, mode, isolated_ws, now, now),
         )
         await self.db.commit()
+
+        # mkdir only when the INSERT actually wrote a new row (rowcount
+        # > 0 — INSERT OR IGNORE on a duplicate id returns 0). Avoids
+        # accidentally re-creating a directory for an existing session
+        # whose user has since deleted it on purpose.
+        if isolated_ws and cur.rowcount and cur.rowcount > 0:
+            try:
+                _os.makedirs(isolated_ws, exist_ok=True)
+                logger.info(
+                    "Session %s isolated workspace: %s",
+                    session_id, isolated_ws,
+                )
+            except Exception as exc:  # noqa: BLE001
+                # Non-fatal: the agent will get a "no such directory"
+                # on its first shell call and surface that instead of
+                # us blowing up the session-create RPC.
+                logger.warning(
+                    "Failed to mkdir session workspace %s: %s",
+                    isolated_ws, exc,
+                )
 
     async def list_sessions(self, limit: int = 50) -> List[dict]:
         async with self.db.execute(

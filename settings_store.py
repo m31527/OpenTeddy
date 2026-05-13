@@ -286,6 +286,18 @@ SETTINGS_META: dict[str, dict[str, Any]] = {
                        "Relative paths resolve against the project root.",
         "type":        "text",
     },
+    "session_workspace_isolation": {
+        "label":       "Per-session workspace isolation",
+        "description": "When ON (default), every NEW session gets its "
+                       "own subdirectory under "
+                       "{agent_workspace_dir}/sessions/<id>/ so files "
+                       "produced by one session don't leak into another. "
+                       "OFF reverts to the legacy shared-root behaviour "
+                       "(useful when you're iterating on one long-running "
+                       "project across many sessions). Existing sessions "
+                       "are never auto-migrated either way.",
+        "type":        "bool",
+    },
 
     # ── Notification credentials (Slice 1: agent-as-service) ──────────────
     "telegram_bot_token": {
@@ -372,6 +384,7 @@ def _defaults_from_config() -> dict[str, str]:
         "subtask_timeout":           str(config.subtask_timeout),
         "shell_silence_timeout":     str(config.shell_silence_timeout),
         "agent_workspace_dir":       str(config.agent_workspace_dir),
+        "session_workspace_isolation": "true" if getattr(config, "session_workspace_isolation", True) else "false",
         "gemma_temperature":         str(config.gemma_temperature),
         "qwen_temperature":          str(config.qwen_temperature),
         "telegram_bot_token":        str(config.telegram_bot_token),
@@ -716,6 +729,12 @@ class SettingsStore:
             # Resolve to absolute once here — see config.py for the rationale.
             import os as _os
             config.agent_workspace_dir = _os.path.abspath(settings["agent_workspace_dir"])
+
+        if "session_workspace_isolation" in settings:
+            config.session_workspace_isolation = (
+                str(settings["session_workspace_isolation"]).strip().lower()
+                not in {"0", "false", "no", "off", ""}
+            )
 
         # Notification credentials. All strings; blanks are meaningful
         # (= "not configured", tools will return a clear error).

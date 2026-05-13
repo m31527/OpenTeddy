@@ -3974,6 +3974,17 @@
                   <span class="escalation-toggle-hint" data-i18n="streaming_enabled_hint">Show tokens as the model generates them. Big perceived-speed win on small thinking models.</span>
                 </span>
               </label>
+              <!-- Per-session workspace isolation (added 2026-05-14). When
+                   ON (default), new sessions don't see files left by other
+                   sessions — each gets {agent_workspace_dir}/sessions/<id>/
+                   as a clean cwd. Existing sessions are never auto-migrated. -->
+              <label class="escalation-toggle">
+                <input type="checkbox" id="chk_session_workspace_isolation" checked />
+                <span class="escalation-toggle-text">
+                  <span class="escalation-toggle-title" data-i18n="session_workspace_isolation_label">Per-session workspace isolation</span>
+                  <span class="escalation-toggle-hint" data-i18n="session_workspace_isolation_hint">Each new session gets its own subdir so files from other sessions never bleed in. Turn off if you'd rather have one shared root.</span>
+                </span>
+              </label>
               <!-- ── Cloud LLM Provider switcher ────────────────────
                    The provider selector comes FIRST, then the matching
                    vendor's key+model row shows below. Picking a vendor
@@ -4969,10 +4980,16 @@
         const n    = data.entry_count ?? 0;
         const overridden = !!data.session_workspace_dir;
 
+        // 'auto' = system-isolated per-session subdir → don't show the
+        // amber ⭐ "user customised" badge, that wording is misleading
+        // for the default case. 'user' = explicit pick → keep the badge.
+        const kind = data.workspace_kind || (overridden ? 'user' : null);
+        const isUserOverride = (kind === 'user');
+
         pathEl.textContent = path;
         metaEl.textContent = `${n} items${data.exists ? '' : ' · ⚠ missing'}`;
-        iconEl.textContent = overridden ? '' : '📂';  // ⭐ added via CSS ::before
-        bar.classList.toggle('is-override', overridden);
+        iconEl.textContent = isUserOverride ? '' : '📂';  // ⭐ added via CSS ::before
+        bar.classList.toggle('is-override', isUserOverride);
 
         bar.title =
           `Effective workspace:  ${path}\n` +
@@ -8754,6 +8771,11 @@
           const v = String(s.streaming_enabled?.value ?? 'true').toLowerCase();
           streamEl.checked = !['0', 'false', 'no', 'off'].includes(v);
         }
+        const isoEl = document.getElementById('chk_session_workspace_isolation');
+        if (isoEl) {
+          const v = String(s.session_workspace_isolation?.value ?? 'true').toLowerCase();
+          isoEl.checked = !['0', 'false', 'no', 'off'].includes(v);
+        }
         _setInput('inp_gemma_base_url', s.gemma_base_url?.value ?? '');
         _setInput('inp_qwen_base_url',  s.qwen_base_url?.value  ?? '');
         _setInput('inp_agent_workspace_dir', s.agent_workspace_dir?.value ?? './agent-workspace');
@@ -9329,6 +9351,7 @@
         llm_mode:                  (document.querySelector('input[name="llm_mode"]:checked')?.value || 'mixed'),
         escalation_enabled:        ((document.querySelector('input[name="llm_mode"]:checked')?.value || 'mixed') === 'mixed') ? 'true' : 'false',
         streaming_enabled:         document.getElementById('chk_streaming_enabled').checked ? 'true' : 'false',
+        session_workspace_isolation: document.getElementById('chk_session_workspace_isolation').checked ? 'true' : 'false',
         gemma_base_url:            document.getElementById('inp_gemma_base_url').value.trim(),
         qwen_base_url:             document.getElementById('inp_qwen_base_url').value.trim(),
         escalation_threshold:      document.getElementById('rng_escalation_threshold').value,
