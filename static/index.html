@@ -5762,9 +5762,23 @@
                 parseServerTs(tk.completed_at) - parseServerTs(tk.created_at)
               ))}</div>`
             : '';
+          // Restore the artifact chip row from the persisted JSON column.
+          // Before this fix the chips were only kept in an in-memory JS
+          // array, so switching sessions / closing the tab / opening from
+          // another device wiped them — and with them the 👁 preview
+          // button. Now they round-trip through tasks.artifacts.
+          const artifactsHTML = (Array.isArray(tk.artifacts) && tk.artifacts.length)
+            ? renderArtifactList(tk.artifacts.map(x => ({
+                path:  x.path,
+                rel:   x.relative_path || x.name || x.path,
+                name:  x.name || (x.path || '').split('/').pop(),
+                size:  x.size_bytes || 0,
+                tool:  x.tool || '',
+              })))
+            : '';
           const body = tk.summary
-            ? `<div class="md-body">${renderMarkdown(tk.summary)}</div>${elapsedFooter}`
-            : `<span style="color:var(--text-muted)">(${escHtml(tk.status || 'no summary')})</span>${elapsedFooter}`;
+            ? `<div class="md-body">${renderMarkdown(tk.summary)}</div>${artifactsHTML}${elapsedFooter}`
+            : `<span style="color:var(--text-muted)">(${escHtml(tk.status || 'no summary')})</span>${artifactsHTML}${elapsedFooter}`;
           a.innerHTML = body;
           chat.appendChild(a);
           // Re-render any ```chart blocks that were in the saved summary.

@@ -1177,12 +1177,7 @@ class Executor:
                             try:
                                 import os as _os
                                 if _os.path.isfile(file_path):
-                                    await self._push_event({
-                                        "event":     "artifact",
-                                        "task_id":   task_id,
-                                        # subtask_id lets the verifier
-                                        # (#2) bucket artifacts per-subtask.
-                                        "subtask_id": subtask_id,
+                                    artifact_info = {
                                         "tool":      tool_name,
                                         "path":      file_path,
                                         "relative_path": inner.get("relative_path", ""),
@@ -1190,7 +1185,29 @@ class Executor:
                                                         or inner.get("bytes_written")
                                                         or _os.path.getsize(file_path),
                                         "name":      _os.path.basename(file_path),
+                                    }
+                                    await self._push_event({
+                                        "event":     "artifact",
+                                        "task_id":   task_id,
+                                        # subtask_id lets the verifier
+                                        # (#2) bucket artifacts per-subtask.
+                                        "subtask_id": subtask_id,
+                                        **artifact_info,
                                     })
+                                    # Persist to the tasks.artifacts JSON
+                                    # column so loadChatHistory can re-render
+                                    # the 📎 + 👁 buttons after a tab close
+                                    # / device switch / browser reload. Best-
+                                    # effort: append_task_artifact swallows
+                                    # its own errors so a tracker hiccup
+                                    # can't fail the actual tool call.
+                                    try:
+                                        from tracker import Tracker  # noqa: F401  (typing)
+                                        await self.tracker.append_task_artifact(
+                                            task_id, artifact_info,
+                                        )
+                                    except Exception:  # noqa: BLE001
+                                        pass
                             except Exception:  # noqa: BLE001
                                 pass
 

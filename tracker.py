@@ -10,7 +10,7 @@ import json
 import logging
 import uuid
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import aiosqlite
 
@@ -45,6 +45,27 @@ def _estimate_cost(model: str, tokens_in: int, tokens_out: int) -> float:
         if prefix in model_lower:
             return round(tokens_in * p_in + tokens_out * p_out, 8)
     return 0.0  # Ollama / unknown — local, no cost
+
+
+def _task_row_to_dict(row: Any) -> dict:
+    """Convert a tasks-table row to a JSON-serialisable dict.
+
+    Parses the `artifacts` TEXT column (a JSON-encoded list) into a
+    real Python list so callers get structured data, not a raw string.
+    Falls back to [] for malformed / NULL rows so the API contract
+    "artifacts is always a list" holds even on a corrupt DB row.
+    """
+    d = dict(row)
+    raw = d.get("artifacts")
+    if raw:
+        try:
+            parsed = json.loads(raw)
+            d["artifacts"] = parsed if isinstance(parsed, list) else []
+        except Exception:  # noqa: BLE001
+            d["artifacts"] = []
+    else:
+        d["artifacts"] = []
+    return d
 
 
 class Tracker:
@@ -103,6 +124,14 @@ class Tracker:
             "ALTER TABLE sessions ADD COLUMN db_kind  TEXT NOT NULL DEFAULT ''",
             "ALTER TABLE sessions ADD COLUMN db_url   TEXT NOT NULL DEFAULT ''",
             "ALTER TABLE sessions ADD COLUMN db_label TEXT NOT NULL DEFAULT ''",
+            # Persisted task artifacts as a JSON array of {path, name,
+            # size_bytes, tool, relative_path, ...}. Needed so a closed
+            # tab / device switch / browser-reload doesn't lose the 👁
+            # preview affordance — pre-2026-05-14 artifacts lived only
+            # in the WebSocket stream + a JS in-memory array, so coming
+            # back to a session re-rendered the agent message WITHOUT
+            # the chip + preview button. Read+rendered by loadChatHistory.
+            "ALTER TABLE tasks ADD COLUMN artifacts TEXT NOT NULL DEFAULT '[]'",
         ]
         for sql in migrations:
             try:
@@ -184,7 +213,7 @@ class Tracker:
             "SELECT * FROM tasks WHERE id=?", (task_id,)
         ) as cur:
             row = await cur.fetchone()
-            return dict(row) if row else None
+            return _task_row_to_dict(row) if row else None
 
     async def list_tasks(
         self, limit: int = 50, session_id: Optional[str] = None,
@@ -201,7 +230,54 @@ class Tracker:
                 "SELECT * FROM tasks ORDER BY created_at DESC LIMIT ?", (limit,)
             ) as cur:
                 rows = await cur.fetchall()
-        return [dict(r) for r in rows]
+        return [_task_row_to_dict(r) for r in rows]
+
+    async def append_task_artifact(
+        self, task_id: str, info: dict,
+    ) -> None:
+        """Append an artifact descriptor to the task's persisted list.
+
+        Read-modify-write — fine at our scale because the executor's
+        artifact emission is serialised per-task (each /run call drives
+        one orchestrator loop, asyncio is cooperative, and tool calls
+        within a task happen one at a time). De-dups by path so a
+        retried tool can't double-record.
+
+        Best-effort: any failure here is swallowed because losing
+        history artifact state must NEVER fail the actual task.
+        """
+        try:
+            async with self.db.execute(
+                "SELECT artifacts FROM tasks WHERE id=?", (task_id,)
+            ) as cur:
+                row = await cur.fetchone()
+            if not row:
+                return
+            raw = row[0] or "[]"
+            try:
+                lst = json.loads(raw)
+                if not isinstance(lst, list):
+                    lst = []
+            except Exception:  # noqa: BLE001
+                lst = []
+            path = info.get("path") or ""
+            # De-dup: same producer can fire across subtask retries.
+            existing_paths = {
+                a.get("path") for a in lst if isinstance(a, dict)
+            }
+            if path and path in existing_paths:
+                return
+            lst.append(info)
+            await self.db.execute(
+                "UPDATE tasks SET artifacts=? WHERE id=?",
+                (json.dumps(lst), task_id),
+            )
+            await self.db.commit()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "append_task_artifact failed for task %s (%s) — skipped",
+                task_id, exc,
+            )
 
     # ── Session CRUD ──────────────────────────────────────────────────────────
 
