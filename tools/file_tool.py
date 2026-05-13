@@ -104,6 +104,176 @@ async def list_directory(path: str) -> Dict[str, Any]:
         return make_result(False, error=str(exc), duration_ms=_ms(start))
 
 
+async def pdf_extract_text(
+    path: str,
+    max_pages: int = 50,
+    start_page: int = 0,
+) -> Dict[str, Any]:
+    """Extract text from a PDF, page by page, and return one big string.
+
+    The agent calls this when the user attaches a PDF and asks a question
+    about it. Once the text is in the tool-result the executor can
+    reason over it like any other text file.
+
+    Args:
+        path:       PDF location, relative to the session workspace or
+                    absolute (same rules as read_file).
+        max_pages:  Hard cap on pages extracted in one call. Default 50
+                    keeps a typical 30-page report in scope while
+                    protecting against a 1000-page tome blowing the
+                    executor's context window. Bump it explicitly when
+                    you know the PDF is bigger.
+        start_page: 0-indexed page to start at. Combine with max_pages
+                    to page through a large PDF in chunks (e.g. call
+                    with start_page=50, max_pages=50 for pages 50-99).
+
+    Returns (in result):
+        path, total_pages, extracted_pages (= count actually read),
+        start_page, end_page, metadata (title/author/etc if present),
+        text (single string, pages joined with "--- Page N ---" markers
+        so the model can cite page numbers in its answer),
+        truncated (True if we hit the char_cap below).
+
+    Image-only PDFs (no embedded text layer — e.g. scanned docs) return
+    success=True but text="" or near-empty; we surface a hint in that
+    case so the model can tell the user it needs an OCR pre-pass
+    instead of silently answering nothing.
+    """
+    start = time.monotonic()
+    # ~300K chars ≈ 75K tokens at 4 chars/token. Beyond that, dumping the
+    # whole thing into a single tool result risks blowing the executor's
+    # context. The agent can call again with a higher start_page for
+    # later sections.
+    CHAR_CAP = 300_000
+
+    try:
+        # Local import so the rest of file_tool.py stays usable even if
+        # pypdf is somehow missing from the install (e.g. sidecar shipped
+        # without the dep). Returns a clear, actionable error instead of
+        # a confusing ImportError at registration time.
+        try:
+            from pypdf import PdfReader
+        except ImportError:
+            return make_result(
+                False,
+                error=("pypdf not installed. Run: pip install pypdf>=4.0.0 "
+                       "(or rebuild the sidecar with the updated "
+                       "requirements.txt)."),
+                duration_ms=_ms(start),
+            )
+
+        p = _resolve_path(path)
+        if not p.exists():
+            return make_result(False, error=f"File not found: {p}",
+                               duration_ms=_ms(start))
+        if not p.is_file():
+            return make_result(False, error=f"Path is not a file: {p}",
+                               duration_ms=_ms(start))
+        if p.suffix.lower() != ".pdf":
+            # Soft check — pypdf would fail with a less helpful message
+            # on a mis-renamed file. Better to fail fast with a hint.
+            return make_result(
+                False,
+                error=f"Not a .pdf file: {p.name}. Use read_file for "
+                       f"plain-text formats.",
+                duration_ms=_ms(start),
+            )
+
+        # strict=False: tolerate slightly-malformed PDFs (Acrobat's own
+        # output is shockingly often non-spec-compliant). pypdf still
+        # raises on truly broken files, which we catch below.
+        reader = PdfReader(str(p), strict=False)
+
+        total_pages = len(reader.pages)
+        # Defensive arg clamping — callers can hand us garbage.
+        start_page = max(0, int(start_page))
+        max_pages  = max(1, min(int(max_pages), 500))  # 500 abs upper bound
+        end_page   = min(total_pages, start_page + max_pages)
+
+        if start_page >= total_pages:
+            return make_result(
+                False,
+                error=(f"start_page={start_page} is past end of document "
+                       f"(total_pages={total_pages}). Use start_page=0 to "
+                       f"begin from the first page."),
+                duration_ms=_ms(start),
+            )
+
+        # Page-by-page extract with a per-page try so one malformed page
+        # doesn't kill the whole call. The agent gets whatever we could
+        # read, plus a note about which pages failed.
+        chunks: list[str] = []
+        failed_pages: list[int] = []
+        total_chars = 0
+        truncated = False
+        for i in range(start_page, end_page):
+            try:
+                page_text = reader.pages[i].extract_text() or ""
+            except Exception as exc:  # noqa: BLE001
+                failed_pages.append(i + 1)
+                page_text = f"[extraction failed: {exc}]"
+            # 1-indexed in the marker for human readability — matches
+            # what PDF viewers show.
+            chunks.append(f"--- Page {i + 1} ---\n{page_text.strip()}")
+            total_chars += len(page_text)
+            if total_chars >= CHAR_CAP:
+                truncated = True
+                break
+
+        # Metadata is genuinely useful for the agent (title, author,
+        # creation date) when answering "who wrote this" / "when was
+        # this published" questions. pypdf returns None / strings; we
+        # coerce to a flat dict of strs and drop empties so the result
+        # stays tidy.
+        meta: dict[str, str] = {}
+        try:
+            info = reader.metadata or {}
+            for raw_key, raw_val in info.items():
+                if raw_val is None:
+                    continue
+                # Keys come back as "/Title", "/Author", etc. Strip the
+                # leading slash + lowercase so downstream JSON is clean.
+                key = str(raw_key).lstrip("/").lower()
+                meta[key] = str(raw_val)
+        except Exception:  # noqa: BLE001
+            # Some PDFs have malformed metadata that pypdf rejects.
+            # That's not fatal — just skip metadata.
+            pass
+
+        joined = "\n\n".join(chunks)
+        # Heuristic: if we read pages but got essentially no text, it's
+        # almost certainly an image-only PDF. Tell the agent so it can
+        # tell the user instead of fabricating an answer from nothing.
+        stripped_text = joined.replace("--- Page", "").strip()
+        # Subtract roughly the marker overhead.
+        approx_text_chars = max(0, len(stripped_text) - 30 * len(chunks))
+        likely_image_only = approx_text_chars < 50 and (end_page - start_page) >= 1
+
+        result = {
+            "path":            str(p),
+            "total_pages":     total_pages,
+            "extracted_pages": end_page - start_page,
+            "start_page":      start_page,
+            "end_page":        end_page,
+            "metadata":        meta,
+            "text":            joined,
+            "truncated":       truncated,
+        }
+        if failed_pages:
+            result["failed_pages"] = failed_pages
+        if likely_image_only:
+            result["hint"] = (
+                "This PDF appears to be image-only (scanned, no text "
+                "layer). Tell the user the file needs OCR — pdf_extract_text "
+                "can only read embedded text."
+            )
+
+        return make_result(True, result=result, duration_ms=_ms(start))
+    except Exception as exc:  # noqa: BLE001
+        return make_result(False, error=f"PDF read failed: {exc}",
+                           duration_ms=_ms(start))
+
+
 async def delete_file(path: str) -> Dict[str, Any]:
     """Delete a file. HIGH risk — requires approval."""
     start = time.monotonic()
@@ -177,6 +347,50 @@ _SCHEMA_LIST: Dict[str, Any] = {
     },
 }
 
+_SCHEMA_PDF_EXTRACT: Dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "pdf_extract_text",
+        "description": (
+            "Extract text from a PDF file and return it as a single "
+            "string with '--- Page N ---' markers between pages. Use "
+            "this when the user uploads a PDF and asks a question "
+            "about its contents. For multi-hundred-page PDFs, call "
+            "repeatedly with increasing start_page to page through. "
+            "Image-only PDFs (no embedded text layer) return empty "
+            "text plus a hint; tell the user OCR is needed instead "
+            "of fabricating an answer."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "PDF path. Relative paths resolve "
+                                   "against the session workspace "
+                                   "(e.g. 'uploads/report.pdf').",
+                },
+                "max_pages": {
+                    "type": "integer",
+                    "description": "Max pages to read in one call (default 50, "
+                                   "hard cap 500). Lower this for huge PDFs "
+                                   "to keep the result under the context "
+                                   "window.",
+                    "default": 50,
+                },
+                "start_page": {
+                    "type": "integer",
+                    "description": "0-indexed first page to extract. Use "
+                                   "to page through a large PDF (e.g. "
+                                   "0,50,100…).",
+                    "default": 0,
+                },
+            },
+            "required": ["path"],
+        },
+    },
+}
+
 _SCHEMA_DELETE: Dict[str, Any] = {
     "type": "function",
     "function": {
@@ -195,8 +409,11 @@ _SCHEMA_DELETE: Dict[str, Any] = {
 # ── Export ─────────────────────────────────────────────────────────────────────
 
 FILE_TOOLS: List[Tuple[Any, Dict[str, Any], RiskLevel]] = [
-    (read_file,      _SCHEMA_READ,   "low"),
-    (write_file,     _SCHEMA_WRITE,  "high"),
-    (list_directory, _SCHEMA_LIST,   "low"),
-    (delete_file,    _SCHEMA_DELETE, "high"),
+    (read_file,        _SCHEMA_READ,        "low"),
+    (write_file,       _SCHEMA_WRITE,       "high"),
+    (list_directory,   _SCHEMA_LIST,        "low"),
+    (delete_file,      _SCHEMA_DELETE,      "high"),
+    # Read-only — same risk class as read_file. Lets the agent answer
+    # "what does this PDF say about X" without an approval round-trip.
+    (pdf_extract_text, _SCHEMA_PDF_EXTRACT, "low"),
 ]

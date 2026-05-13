@@ -38,3 +38,10 @@ numpy>=1.24.0
 # directly without asking the user to convert to CSV.
 openpyxl>=3.1.0
 xlrd>=2.0.0
+
+# PDF reader — powers the pdf_extract_text tool so the agent can answer
+# "what does this PDF say about X" without the user manually copy-pasting.
+# Pure-Python, no native deps, PyInstaller-friendly. Image-only PDFs
+# (scanned docs without an OCR layer) still need an OCR pre-pass — out
+# of scope here; this handles the 90% case of text-bearing PDFs.
+pypdf>=4.0.0

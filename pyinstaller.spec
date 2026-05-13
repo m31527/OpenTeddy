@@ -60,6 +60,12 @@ for pkg in [
     "httpx",             # ssl certs handling
     "httpcore",
     "h11", "h2",
+    "pypdf",             # pdf_extract_text tool — pypdf is pure Python
+                         # but ships ~55 submodules including _codecs/*
+                         # (CID-encoding tables CJK PDFs depend on).
+                         # Without collect_all the sidecar misses some
+                         # submodules and extraction on Chinese /
+                         # Japanese / Korean PDFs returns mojibake.
 ]:
     try:
         d, b, h = collect_all(pkg)
