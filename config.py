@@ -219,8 +219,12 @@ class Config:
     # Derived legacy flag — kept so any code path still checking
     # config.escalation_enabled keeps working. Auto-synced in
     # reload_from_store / apply_to_config when llm_mode changes.
+    # Semantics: "may escalation.resolve() actually run?"
+    #   local → No (privacy)
+    #   mixed → Yes (failure fallback)
+    #   cloud → Yes (primary path)
     escalation_enabled: bool = field(
-        default_factory=lambda: os.getenv("OPENTEDDY_LLM_MODE", "mixed").strip().lower() == "mixed"
+        default_factory=lambda: os.getenv("OPENTEDDY_LLM_MODE", "mixed").strip().lower() != "local"
         if os.getenv("OPENTEDDY_LLM_MODE")
         else os.getenv("ESCALATION_ENABLED", "true").strip().lower()
         not in {"0", "false", "no", "off"}
@@ -530,11 +534,16 @@ class Config:
             on = str(settings["escalation_enabled"]).strip().lower() not in _OFF
             self.llm_mode = "mixed" if on else "local"
 
-        # Legacy bool is now a pure derivative of llm_mode. No more
-        # "explicit escalation_enabled overrides" — see settings_store
-        # for the rationale (two settings disagreeing was the source of
-        # subtle bugs).
-        self.escalation_enabled = (self.llm_mode == "mixed")
+        # Legacy bool is now a pure derivative of llm_mode. Semantics:
+        # "may escalation.resolve() actually call the cloud LLM?"
+        #   local → No (privacy guardrail)
+        #   mixed → Yes (it's the failure fallback)
+        #   cloud → Yes (it's the PRIMARY execution path — bug fix
+        #               for the earlier "only mixed" derivation, which
+        #               left cloud mode tripping _escalation_blocked()
+        #               and returning a disabled-message instead of
+        #               actually answering)
+        self.escalation_enabled = (self.llm_mode != "local")
         if "streaming_enabled" in settings:
             self.streaming_enabled = (
                 str(settings["streaming_enabled"]).strip().lower() not in _OFF

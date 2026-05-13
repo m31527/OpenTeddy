@@ -636,15 +636,15 @@ class SettingsStore:
                   not in {"0", "false", "no", "off", ""})
             config.llm_mode = "mixed" if on else "local"
 
-        # Legacy bool is now a PURE derivative of llm_mode. We
-        # deliberately drop the old "explicit escalation_enabled
-        # overrides" path — letting two settings disagree was the
-        # source of subtle bugs (UI shows cloud, code escalates
-        # because the bool stayed on). Anyone wanting "cloud mode
-        # without failure-trigger escalation" can configure that
-        # explicitly later; today this keeps the two fields perfectly
-        # in lock-step.
-        config.escalation_enabled = (config.llm_mode == "mixed")
+        # Legacy bool is now a PURE derivative of llm_mode with the
+        # semantics "may escalation.resolve() actually run?":
+        #   local → No (privacy guardrail)
+        #   mixed → Yes (it's the failure fallback)
+        #   cloud → Yes (it's the PRIMARY execution path)
+        # The "only mixed = True" derivation I had before was wrong —
+        # it caused cloud mode to be blocked by _escalation_blocked()
+        # which reads this bool. Keep the two fields in lock-step.
+        config.escalation_enabled = (config.llm_mode != "local")
         if "streaming_enabled" in settings:
             config.streaming_enabled = (
                 str(settings["streaming_enabled"]).strip().lower()
