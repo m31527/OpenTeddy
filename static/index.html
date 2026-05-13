@@ -8532,7 +8532,16 @@
       if (tps >= 20) return 'medium';
       return 'slow';
     }
-    async function loadPerfStats() {
+    // NOTE: this function used to be named loadPerfStats() too. Because
+    // JS hoists function declarations and the LAST definition wins, the
+    // duplicate name silently overwrote the Usage-tab loadPerfStats()
+    // defined ~400 lines above. Result: switching to Usage called THIS
+    // one instead, which writes to #perfStatsTable (Settings → Model
+    // Benchmarks card) and never touches #perfModeGrid /
+    // #perfSlowestBody — so those stayed at their initial "—" markup
+    // forever. Renamed to loadBenchmarkStats so each function has a
+    // single, distinct caller graph.
+    async function loadBenchmarkStats() {
       const wrap   = document.getElementById('perfStatsTable');
       const banner = document.getElementById('perfSuggestBanner');
       if (!wrap) return;
@@ -8601,8 +8610,11 @@
         const data = await res.json();
         if (!data.success) { toast('Settings load error: ' + data.error, true); return; }
         const s = data.data;
-        // Refresh perf stats alongside settings (cheap, read-only).
-        loadPerfStats().catch(() => {});
+        // Refresh model-benchmark stats alongside Settings (cheap,
+        // read-only). This populates the "Model Benchmarks" card in
+        // Settings — separate from the Usage-tab perf card, which is
+        // refreshed by loadPerfStats() when you switch to that tab.
+        loadBenchmarkStats().catch(() => {});
         _setInput('inp_claude_model',      s.claude_model?.value      ?? '');
         _setInput('inp_anthropic_api_key', s.anthropic_api_key?.value ?? '');
         // Cloud LLM provider trio for each of the 4 OpenAI-compat
