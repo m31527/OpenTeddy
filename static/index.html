@@ -4096,14 +4096,25 @@
               </div>
               <div class="param-row">
                 <div class="param-field">
-                  <!-- Replaces the per-send Priority field that used to sit
-                       next to the chat input. The scheduler reads this on
-                       each /run; API/webhook callers can still override. -->
+                  <!-- Reserved for a future priority-scheduler. The value
+                       is persisted on every /run and recorded in the
+                       tasks.priority column, but no current code path
+                       reads it back to reorder execution. API/webhook
+                       callers can still pass an explicit priority so any
+                       existing integrations keep working unchanged.
+                       Surfaced honestly in the UI via the hint below so
+                       users don't expect a "make this go faster" knob. -->
                   <label><span data-i18n="default_priority_label">Default Task Priority</span>
                     <span class="param-value" id="val_default_priority">1</span>
                   </label>
                   <input type="range" id="rng_default_priority" min="1" max="10" step="1" value="1"
                     oninput="document.getElementById('val_default_priority').textContent=this.value" />
+                  <div class="escalation-toggle-hint" data-i18n="default_priority_hint"
+                       style="margin-top: 0.4rem;">
+                    Reserved for a future scheduler. Currently stored on each task
+                    but has no runtime effect — leave at 1 unless you're integrating
+                    with an external tool that expects this column.
+                  </div>
                 </div>
               </div>
               <div class="param-row">

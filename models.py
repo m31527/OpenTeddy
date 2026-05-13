@@ -57,11 +57,10 @@ class TaskRequest(BaseModel):
     goal: str = Field(..., description="High-level goal in natural language.")
     context: Dict[str, Any] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=datetime.utcnow)
-    # Default 1 (low). Was 5 historically — but most chat-input sends are
-    # "do this when you can" and the scheduler benefits from explicit
-    # high-priority callers (API, webhook, scheduled triggers) winning
-    # over interactive sends. Bumped down 2026-05-13. UI lets the user
-    # override the chat-input default via Settings → default_priority.
+    # Default 1. Currently a no-op — no scheduler reads it back; see
+    # config.default_priority for the full story. Default lowered from
+    # 5 → 1 on 2026-05-13 when the per-send Priority input was removed
+    # from the chat row; future scheduler will inherit this baseline.
     priority: int = Field(default=1, ge=1, le=10)
     session_id: Optional[str] = Field(
         default=None,
@@ -153,7 +152,7 @@ class AgentMessage(BaseModel):
 class RunRequest(BaseModel):
     goal: str
     context: Dict[str, Any] = Field(default_factory=dict)
-    # See Task.priority above — default lowered 5 → 1 in 2026-05-13.
+    # See Task.priority above (no scheduler yet). Default 1.
     priority: int = Field(default=1, ge=1, le=10)
     session_id: Optional[str] = None
     task_id: Optional[str] = Field(

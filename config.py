@@ -330,14 +330,21 @@ class Config:
         default_factory=lambda: int(os.getenv("API_PORT", "8000"))
     )
 
-    # ── Task scheduling ──────────────────────────────────────────────────────
-    # Default priority used by the chat input when /run does not specify one.
-    # Previously hard-coded to 5 inside the static UI, which felt arbitrary —
-    # the scheduler effectively treats everything as "medium" and the user
-    # had to micro-tune a slider on every send. Settling on 1 as the default
-    # means casual sends land at the back of the queue, while explicit
-    # callers (API / webhook / scheduled tasks) that DO care can still pass
-    # an override 2–10. Range 1–10, clamped by the Pydantic model.
+    # ── Task scheduling (currently a no-op — kept for forward-compat) ───────
+    # Default priority recorded on tasks created from the chat input. Was
+    # hard-coded to 5 in the static UI, which forced every send through a
+    # number-input the user effectively never changed.
+    #
+    # HONEST STATUS: no current code path reads tasks.priority back to
+    # reorder execution. /run dispatches every request as a plain
+    # `asyncio.create_task` in arrival order, and no scheduler / polling
+    # worker exists. The field stays on the API surface (a) so existing
+    # webhook / API callers that already send `priority` don't break, and
+    # (b) so the column is populated for a future priority-aware
+    # scheduler — schema-side it's already in place.
+    #
+    # Range 1–10, clamped by the Pydantic Task model and again in
+    # reload_from_store() so a hand-edited DB row can't crash /run.
     default_priority: int = field(
         default_factory=lambda: int(os.getenv("OPENTEDDY_DEFAULT_PRIORITY", "1"))
     )

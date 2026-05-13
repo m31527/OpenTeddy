@@ -220,12 +220,16 @@ SETTINGS_META: dict[str, dict[str, Any]] = {
     },
     "default_priority": {
         "label":       "Default Task Priority",
-        "description": "Priority assigned to tasks sent from the chat input when "
-                       "you don't override it. 1 = low (sent tasks queue behind "
-                       "explicit higher-priority work), 10 = highest. Most users "
-                       "should leave this at 1 and let the scheduler do its job; "
-                       "API / webhook callers can still pass an explicit priority "
-                       "in the request body.",
+        "description": "Reserved for a future priority-aware scheduler. The "
+                       "value is written to the tasks.priority column on every "
+                       "/run, but NO current code path reads it back to reorder "
+                       "execution — tasks fire as a plain asyncio.create_task "
+                       "in arrival order. Kept in the API surface so existing "
+                       "integrations that already send 'priority' in their "
+                       "request body don't break, and so the column is "
+                       "populated when the real scheduler ships. Leave at 1 "
+                       "unless you're integrating with an external tool that "
+                       "reads this column directly.",
         "type":        "int",
         "min":         1,
         "max":         10,
