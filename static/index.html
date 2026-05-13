@@ -1465,12 +1465,24 @@
     .modal-close:hover { background: var(--bg-secondary); }
 
     /* ── Workspace bar (inside chat-input-area) ──────────────────────────── */
+    /* Session-context row — groups workspace bar, DB chip, and any
+       attachment chips into a single flex line above the textarea.
+       Pre-2026-05-14 they each lived on their own line and the DB
+       chip dangled left-aligned, looking disconnected from everything
+       else. flex-wrap keeps narrow viewports happy. */
+    .session-context-row {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+      margin-bottom: 0.5rem;
+    }
     .workspace-bar {
       display: flex;
       align-items: center;
       gap: 0.5rem;
-      max-width: 800px;
-      margin: 0 auto 0.5rem auto;
+      flex: 1 1 320px;      /* grows to fill, shrinks down to ~320px before wrapping */
+      min-width: 0;
       padding: 0.35rem 0.7rem;
       font-size: 0.76rem;
       color: var(--text-secondary);
@@ -3547,32 +3559,29 @@
             </div>
           </div>
           <div class="chat-input-area">
-            <!-- Workspace bar — shows the effective working directory
-                 for this session and lets the user change it without
-                 using prompt(). The "Change…" button opens a proper
-                 folder-picker modal. Sits just above attachment chips
-                 so it's visible whenever the user is about to send a
-                 task. -->
-            <div class="workspace-bar" id="workspaceBar" data-i18n-title="workspace_title" title="Working directory for this session.">
-              <span class="workspace-bar-icon" id="workspaceBarIcon">📂</span>
-              <span class="workspace-bar-label" data-i18n="working_in">Working in:</span>
-              <span class="workspace-bar-path" id="workspaceBarPath">—</span>
-              <span class="workspace-bar-meta" id="workspaceBarMeta"></span>
-              <button type="button" class="workspace-bar-btn" id="workspaceBarBtn"
-                onclick="openWorkspacePicker()" data-i18n="change_workspace">Change…</button>
-            </div>
+            <!-- Session-context row: workspace path + (optional) DB chip
+                 share a single flex line so they read as one cohesive
+                 "what this session is operating against" header. Both
+                 are inline-flex children of .session-context-row; on
+                 narrow viewports the chip wraps below the bar. -->
+            <div class="session-context-row">
+              <div class="workspace-bar" id="workspaceBar"
+                   data-i18n-title="workspace_title"
+                   title="Working directory for this session.">
+                <span class="workspace-bar-icon" id="workspaceBarIcon">📂</span>
+                <span class="workspace-bar-label" data-i18n="working_in">Working in:</span>
+                <span class="workspace-bar-path" id="workspaceBarPath">—</span>
+                <span class="workspace-bar-meta" id="workspaceBarMeta"></span>
+                <button type="button" class="workspace-bar-btn" id="workspaceBarBtn"
+                  onclick="openWorkspacePicker()" data-i18n="change_workspace">Change…</button>
+              </div>
 
-            <!-- Attachment chips — populated as the user adds files via
-                 the + button. Each chip carries the server-returned
-                 rel_path so runTask() can pass the list to the agent. -->
-            <div id="attachmentChips" class="attach-chips"></div>
-
-            <!-- Per-session DB connection chip. Hidden by default; shown
-                 by syncDbChip() after a successful Connect database flow,
-                 cleared on disconnect. Click → reopens the connect modal
-                 in "edit" state; the ✕ → POST /sessions/{id}/db_connect
-                 DELETE then hide. -->
-            <div style="margin: 0.3rem 0;">
+              <!-- Per-session DB connection chip. Hidden by default;
+                   shown by syncDbChip() after a successful Connect
+                   database flow, cleared on disconnect. Sits beside
+                   the workspace bar so the two session-scope indicators
+                   live together. Click → reopens the connect modal in
+                   "edit" state; the ✕ → DELETE then hide. -->
               <span class="db-chip" id="dbChip" hidden
                     onclick="openDbConnectModal()"
                     data-i18n-title="db_chip_title"
@@ -3586,6 +3595,13 @@
                         title="Disconnect database">✕</button>
               </span>
             </div>
+
+            <!-- Attachment chips — populated as the user adds files via
+                 the + button. Each chip carries the server-returned
+                 rel_path so runTask() can pass the list to the agent.
+                 :empty hides the row entirely so it never reserves
+                 vertical space when no files are attached. -->
+            <div id="attachmentChips" class="attach-chips"></div>
 
             <div class="chat-input-row">
               <!-- Belt-and-braces: list both file-extension (.pdf) AND MIME
