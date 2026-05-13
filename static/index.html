@@ -1174,6 +1174,16 @@
     .llm-mode-title { font-size: 0.82rem; font-weight: 600; color: var(--text-primary); }
     .llm-mode-hint  { font-size: 0.7rem;  color: var(--text-secondary); line-height: 1.45; }
 
+    /* Faded look applied to the Orchestrator/Executor field row when
+       Cloud mode is selected — fields still readable + editable (so the
+       user can re-pick before switching back) but visually de-emphasised
+       so it's obvious they're inactive. */
+    .cloud-mode-inactive {
+      opacity: 0.45;
+      pointer-events: none;
+      transition: opacity 0.15s;
+    }
+
     /* ── Perf stats (#6) — appears in Settings → Model Settings ───────── */
     .perf-stats-wrap {
       margin-bottom: 0.85rem;
@@ -3867,7 +3877,13 @@
               <div class="model-list" id="modelList">
                 <div style="color:var(--text-muted);font-size:0.82rem" data-i18n="ollama_loading">Loading…</div>
               </div>
-              <div class="row" style="margin-bottom:0.85rem">
+              <!-- Wrapped in #localModelFields so selectLlmMode() can
+                   visually fade these out when Cloud mode is picked — the
+                   user still sees what they had picked but the field is
+                   clearly inactive. We don't disable + clear because
+                   switching back to Local/Mixed should restore the
+                   previous choice without a re-pick. -->
+              <div id="localModelFields" class="row" style="margin-bottom:0.85rem">
                 <div class="field">
                   <label data-i18n="orchestrator_label">Orchestrator Model (Gemma)</label>
                   <select id="sel_orchestrator_model" onchange="checkOrchestratorRecommended()"><option value="" data-i18n="ollama_offline">⚠️ Ollama offline</option></select>
@@ -3890,6 +3906,17 @@
                   <label data-i18n="executor_label">Executor Model (Qwen)</label>
                   <select id="sel_executor_model"><option value="" data-i18n="ollama_offline">⚠️ Ollama offline</option></select>
                 </div>
+              </div>
+              <!-- Shown by selectLlmMode() only when llm_mode='cloud'.
+                   Explains why the two dropdowns above look greyed out
+                   so users don't think their Ollama setup is broken. -->
+              <div id="cloudModeNotice" hidden
+                   style="margin-bottom:0.85rem;padding:0.55rem 0.75rem;background:rgba(56,189,248,0.08);border-left:2px solid #0284c7;color:#075985;font-size:0.74rem;line-height:1.5;border-radius:4px">
+                <span data-i18n="cloud_mode_notice">
+                  ☁️ Cloud mode is active. Orchestrator + Executor models above are NOT used —
+                  planning and every subtask go to your configured Cloud LLM Provider directly.
+                  You don't need Ollama running.
+                </span>
               </div>
               <!-- ── LLM Mode (3-way) ─────────────────────────────────
                    Replaces the old "Allow Claude escalation" checkbox.
@@ -8754,6 +8781,12 @@
     // input (so the form-serialise picks it up) and the .selected CSS
     // class (so the active card is visually highlighted). Safe to call
     // with an unknown mode — falls back to 'mixed' silently.
+    //
+    // Also fades the Orchestrator/Executor model row when 'cloud' is
+    // picked + reveals the "you don't need Ollama" banner. We don't
+    // disable / clear the dropdowns because switching back to Local /
+    // Mixed should restore the user's previous picks without re-doing
+    // the choice.
     function selectLlmMode(mode) {
       if (!['local', 'mixed', 'cloud'].includes(mode)) mode = 'mixed';
       const group = document.getElementById('llm_mode_group');
@@ -8764,6 +8797,12 @@
         const input = card.querySelector('input[type="radio"]');
         if (input) input.checked = isSel;
       });
+
+      const isCloud = (mode === 'cloud');
+      const localRow = document.getElementById('localModelFields');
+      const notice   = document.getElementById('cloudModeNotice');
+      if (localRow) localRow.classList.toggle('cloud-mode-inactive', isCloud);
+      if (notice)   notice.hidden = !isCloud;
     }
     function _setSlider(key, val) {
       const rng = document.getElementById('rng_' + key);

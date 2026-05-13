@@ -588,7 +588,10 @@ class Orchestrator:
             f"Available skills: {json.dumps(skill_names)}\n\n"
             "Output the sub-task plan now."
         )
-        raw_plan = await self._gemma_complete(
+        # Routes to cloud LLM when llm_mode='cloud' so the user with
+        # no Ollama installed can still get a plan. Otherwise stays on
+        # Gemma. See _orchestrator_complete for fallback behaviour.
+        raw_plan = await self._orchestrator_complete(
             prompt, system_prompt,
             task_id=req.id,
             task_description=f"[plan] {req.goal[:100]}",
@@ -1180,12 +1183,13 @@ class Orchestrator:
             f"工具執行記錄：\n{tool_log}\n\n"
             "請根據以上記錄生成完成報告。"
         )
-        result = await self._gemma_complete(
+        # Same cloud-aware routing as planning — see _orchestrator_complete.
+        result = await self._orchestrator_complete(
             prompt, system_prompt,
             task_id=task_id,
             task_description=f"[summary] {goal[:100]}",
         )
-        # Fallback if Gemma returns empty
+        # Fallback if Gemma / cloud returns empty
         if not result or result.strip() in ("[]", ""):
             lines = [f"任務已完成：{goal}", "", tool_log[:1000]]
             return "\n".join(lines)
@@ -1277,6 +1281,63 @@ class Orchestrator:
                 logger.debug("Confirmation check '%s' failed (non-fatal): %s", cmd, exc)
 
         return "\n".join(output_parts) if len(output_parts) > 1 else ""
+
+    async def _orchestrator_complete(
+        self, prompt: str, system: Optional[str] = None,
+        task_id: str = "", task_description: str = "[orchestrator]",
+    ) -> str:
+        """Orchestrator-side text completion that respects llm_mode.
+
+        Cloud mode → route to the same provider escalation uses, so the
+        user truly doesn't need Ollama installed. Local / Mixed → keep
+        the existing Gemma-via-Ollama path. On cloud failure (bad key,
+        rate-limit, network blip) we fall back to Gemma so a transient
+        cloud issue doesn't brick planning entirely — the user can see
+        the warning in logs and fix it without losing the task.
+        """
+        from config import is_cloud_mode
+        if not is_cloud_mode():
+            return await self._gemma_complete(
+                prompt, system, task_id=task_id, task_description=task_description,
+            )
+
+        provider = self.escalation.provider
+        import time as _time
+        start = _time.monotonic()
+        try:
+            resp = await provider.complete_text(
+                user_message=prompt,
+                system=system or _PLAN_SYSTEM_BASE,
+                max_tokens=int(getattr(config, "gemma_max_tokens", 4096) or 4096),
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "Cloud-mode orchestrator call failed (%s) — falling back to "
+                "Gemma. Check Settings → Cloud LLM Provider key.", exc,
+            )
+            return await self._gemma_complete(
+                prompt, system, task_id=task_id, task_description=task_description,
+            )
+
+        duration_ms = int((_time.monotonic() - start) * 1000)
+
+        # Mirror the Gemma path's usage record so the Usage tab + cost
+        # accounting still see this call. Best-effort: tracker failures
+        # don't break planning.
+        try:
+            await self.tracker.record_usage(
+                task_id=task_id,
+                model=provider.model_name,
+                model_provider=provider.provider_name,
+                tokens_in=resp.usage.input_tokens,
+                tokens_out=resp.usage.output_tokens,
+                task_description=task_description,
+                duration_ms=duration_ms,
+            )
+        except Exception:  # noqa: BLE001
+            pass
+
+        return resp.text
 
     async def _gemma_complete(
         self, prompt: str, system: Optional[str] = None,
