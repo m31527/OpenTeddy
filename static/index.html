@@ -4642,9 +4642,12 @@
         <span class="version-tag" id="updateModalVersion"></span>
       </div>
       <div class="update-modal-body" id="updateModalBody">
-        <!-- Two views — "release notes" before user clicks Upgrade,
-             "progress + live log" after. Toggled by openUpdateModal /
-             onUpdateApplyClick. -->
+        <!-- Three views — selected by openUpdateModal() based on context:
+             1. Notes (default): release notes + buttons
+             2. Progress: live install log (OSS git-pull path only)
+             3. Desktop-instructions: shown inside Tauri because git-pull
+                doesn't make sense for a bundled .app — link out to the
+                GitHub Release page + step-by-step DMG replacement guide. -->
         <div id="updateNotesView">
           <div class="md-body" id="updateNotesContent"></div>
         </div>
@@ -4658,6 +4661,28 @@
             <span class="update-step-name" data-i18n="update_step_restarting">Reloading backend…</span>
           </div>
           <div class="update-log" id="updateLog"></div>
+        </div>
+        <!-- Tauri-only: explains why "Upgrade now" doesn't live-patch
+             a bundled .app and walks the user through the DMG swap. -->
+        <div id="updateDesktopView" hidden style="padding: 4px 0;">
+          <div style="font-size:0.84rem;line-height:1.6;color:var(--text-secondary)">
+            <p data-i18n="update_desktop_intro" style="margin:0 0 0.8rem">
+              The desktop app ships as a notarised bundle, so it can't
+              live-patch itself like the web build does. Here's how to
+              upgrade:
+            </p>
+            <ol style="padding-left:1.25rem;margin:0 0 0.8rem">
+              <li data-i18n="update_desktop_step1">Click <b>Open download page</b> below — your browser will open the GitHub Release.</li>
+              <li data-i18n="update_desktop_step2">Download the new <code>.dmg</code> (ARM64 for Apple Silicon, x86_64 for Intel).</li>
+              <li data-i18n="update_desktop_step3">Open the .dmg and drag <b>OpenTeddy.app</b> to <b>Applications</b>, overwriting the old one.</li>
+              <li data-i18n="update_desktop_step4">Quit and relaunch OpenTeddy.</li>
+            </ol>
+            <p style="margin:0;font-size:0.76rem;color:var(--text-muted)" data-i18n="update_desktop_safety">
+              Your sessions, memory, settings, and DB connections live in
+              <code>~/Library/Application Support/OpenTeddy</code> — replacing the
+              .app keeps everything intact.
+            </p>
+          </div>
         </div>
       </div>
       <div class="update-modal-foot" id="updateModalFoot">
@@ -9120,8 +9145,22 @@
       // previous (failed) apply attempt.
       document.getElementById('updateNotesView').hidden    = false;
       document.getElementById('updateProgressView').hidden = true;
+      // Desktop instructions panel — shown only inside the Tauri shell
+      // because /update/apply (git pull + pip install) doesn't make
+      // sense for a bundled .app. Surfaced alongside the release notes
+      // so the user reads both before clicking the button.
+      const deskView = document.getElementById('updateDesktopView');
+      if (deskView) deskView.hidden = !_IN_TAURI;
       document.getElementById('updateModalApply').disabled = false;
-      document.getElementById('updateModalApply').textContent = t('update_apply') || 'Upgrade now →';
+      // Button label flips per context. Desktop users get a button
+      // that opens the GitHub Release in their browser (Tauri's
+      // shell.open via the existing teddy.open_external bridge);
+      // web users keep the in-place "Upgrade now" that triggers git
+      // pull + pip install.
+      document.getElementById('updateModalApply').textContent =
+        _IN_TAURI
+          ? (t('update_open_download') || 'Open download page →')
+          : (t('update_apply') || 'Upgrade now →');
       document.getElementById('updateNotesContent').innerHTML =
         renderMarkdown(_updateState.notes || '_No release notes._');
       // Reset the steps + log
@@ -9150,6 +9189,32 @@
     async function onUpdateApplyClick() {
       const applyBtn = document.getElementById('updateModalApply');
       const laterBtn = document.getElementById('updateModalLater');
+
+      // ── Desktop branch ──────────────────────────────────────────────
+      // Inside Tauri we never call /update/apply (git pull + pip install
+      // can't touch a notarised .app bundle). Instead, postMessage the
+      // release URL up to the shell, which uses Tauri's shell.open to
+      // launch the user's default browser. The desktop-view in the
+      // modal already explains the manual steps; here we just open the
+      // page and close. Falls back to direct window.open() if we're
+      // somehow in Tauri without the parent bridge (shouldn't happen).
+      if (_IN_TAURI) {
+        const url = _updateState.url ||
+          `https://github.com/m31527/OpenTeddy/releases/latest`;
+        try {
+          if (window.parent && window.parent !== window) {
+            window.parent.postMessage({ type: 'teddy.open_external', url }, '*');
+          } else {
+            window.open(url, '_blank', 'noopener');
+          }
+        } catch (_) {
+          window.open(url, '_blank', 'noopener');
+        }
+        closeUpdateModal();
+        return;
+      }
+
+      // ── Web (OSS git-pull) branch ───────────────────────────────────
       applyBtn.disabled = true;
       laterBtn.disabled = true;
       // Swap views: hide notes, show progress.
