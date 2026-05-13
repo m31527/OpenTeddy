@@ -173,17 +173,46 @@ OpenTeddy/
 └── .env.example       # Environment variable template
 ```
 
-## Quick Start
+## Install in one line
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/m31527/OpenTeddy/main/install.sh | bash
+```
+
+The installer:
+- checks Python 3.10+, git, curl
+- detects Ollama (warn-only if missing — cloud LLMs still work)
+- `git clone`s OpenTeddy to `~/OpenTeddy`
+- creates `.venv` + `pip install -r requirements.txt`
+- pulls the two default Ollama models (`gemma3:4b`, `qwen2.5:3b`) if Ollama is present
+- prints next-steps instructions
+
+It's **idempotent** — re-run any time to pull the latest source + refresh deps. All work scoped to `$HOME/OpenTeddy`, no `sudo`, no secondary scripts fetched.
+
+Want to audit before running? `curl -fsSL <url> -o install.sh && less install.sh && bash install.sh` is encouraged. The script also accepts `--dry-run` to preview what it would do without changing anything.
+
+After install:
+
+```bash
+cd ~/OpenTeddy
+./run.sh --open      # boots uvicorn on :8000 + opens browser
+```
+
+Customisation flags: `--dir <path>`, `--force`, `--skip-models`. See `./install.sh --help`.
+
+## Quick Start (manual)
+
+If you'd rather install by hand:
 
 ### 1. Prerequisites
 
-- Python 3.11+
-- [Ollama](https://ollama.ai) running locally:
+- Python 3.10+
+- [Ollama](https://ollama.ai) running locally (optional — skip this if you'll use cloud LLMs only):
   ```bash
   ollama pull gemma3:4b
   ollama pull qwen2.5:3b
   ```
-- An Anthropic API key (used for escalation and skill generation)
+- (Optional) An Anthropic / OpenAI / Gemini / Deepseek / OpenRouter API key — configure later via Settings → Cloud LLM Provider
 
 ### 2. Install
 
