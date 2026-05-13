@@ -3523,8 +3523,13 @@
             </div>
 
             <div class="chat-input-row">
+              <!-- Belt-and-braces: list both file-extension (.pdf) AND MIME
+                   type (application/pdf) so every browser variant picks
+                   PDF as selectable. Safari < 17 and some Linux file
+                   dialogs only honour MIME types and would grey out PDFs
+                   when given a pure-extension list. -->
               <input type="file" id="fileInput" multiple
-                accept=".csv,.tsv,.json,.xlsx,.xls,.txt,.md,.log,.yaml,.yml,.parquet,.pdf"
+                accept=".csv,.tsv,.json,.xlsx,.xls,.txt,.md,.log,.yaml,.yml,.parquet,.pdf,application/pdf,text/csv,application/json"
                 onchange="onFilesPicked(event)" style="display:none">
               <!-- Attach-source menu. Previously the + was a direct
                    file-picker trigger; now it opens a small popup so the
