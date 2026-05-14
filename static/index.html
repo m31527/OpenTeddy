@@ -4832,6 +4832,41 @@
     let _wsClosing     = false;   // distinguish manual close vs unexpected
     const _WS_BACKOFF_MAX_MS = 30_000;
 
+    // Cached backend version string (e.g. "0.3.0"). Hydrated by
+    // _refreshSidebarVersion() on each WS connect so it survives reconnects
+    // and survives an in-place upgrade. The sidebar's wsLabel renders
+    // "Connected (v0.3.0)" once this is known; before that it's just
+    // "Connected" (no parentheses, avoids "(v?)" flicker).
+    let _backendVersion = '';
+
+    async function _refreshSidebarVersion() {
+      try {
+        const r = await fetch(`${API}/version`, { cache: 'no-store' });
+        if (!r.ok) return;
+        const d = await r.json();
+        const v = String(d.version || '').trim();
+        if (!v) return;
+        _backendVersion = v;
+        // Repaint the label NOW so the user sees the version without
+        // needing another WS round-trip. Only repaint if we're still
+        // showing the connected state — don't fight a disconnect msg.
+        const badge = document.getElementById('wsBadge');
+        const l = document.getElementById('wsLabel');
+        if (badge && badge.classList.contains('connected') && l) {
+          l.textContent = _formatConnectedLabel();
+        }
+      } catch (_) { /* offline — silent */ }
+    }
+
+    // Renders the WS "Connected" label with an optional "(v1.0.0)"
+    // suffix when we've successfully fetched the backend version.
+    // Single place to change the format if we later want to also show
+    // git commit hash or build flavor.
+    function _formatConnectedLabel() {
+      const base = t('ws_connected') || 'Connected';
+      return _backendVersion ? `${base} (v${_backendVersion})` : base;
+    }
+
     function initWS() {
       if (_wsRetryTimer) { clearTimeout(_wsRetryTimer); _wsRetryTimer = null; }
       const proto = location.protocol === 'https:' ? 'wss' : 'ws';
@@ -4844,8 +4879,13 @@
       _ws = new WebSocket(`${proto}://${location.host}/ws${sinceQS}`);
       _ws.onopen  = () => {
         document.getElementById('wsBadge').classList.add('connected');
-        const l = document.getElementById('wsLabel'); if (l) l.textContent = t('ws_connected');
+        const l = document.getElementById('wsLabel');
+        if (l) l.textContent = _formatConnectedLabel();
         _wsBackoffMs = 1000;   // healthy connect → reset backoff
+        // Fetch /version once and cache so the sidebar shows "Connected (v1.0.0)".
+        // We do this on every onopen (cheap, idempotent) so a reconnect
+        // after an upgrade picks up the new number without a page reload.
+        _refreshSidebarVersion();
       };
       _ws.onclose = () => {
         document.getElementById('wsBadge').classList.remove('connected');
