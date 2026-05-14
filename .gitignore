@@ -55,3 +55,17 @@ desktop/
 # Agent workspace — runtime scratch dir for git clones, file writes,
 # uploaded user data. Not part of the source tree.
 agent-workspace/
+
+# Claude Code local-only state. settings.local.json is the per-machine
+# allowlist of permitted bash/tool calls (different on every developer
+# machine); worktrees/ holds Claude's temporary isolated checkouts. Both
+# get accidentally committed if a contributor runs `git add .` without
+# thinking — and once tracked they create perpetual dirty-tree noise
+# that even blocks release.sh's pre-flight clean check. Keep the rest
+# of .claude/ (memory, commands, etc.) tracked when projects choose to
+# share them — only these two paths are auto-generated local cruft.
+.claude/settings.local.json
+.claude/worktrees/
+
+# ChromaDB local vector store — recreated at runtime from tasks.
+memory_db/
