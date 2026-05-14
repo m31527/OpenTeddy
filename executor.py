@@ -616,8 +616,44 @@ class Executor:
         # — exactly the failure mode that ate 8 hours on a real task.
         # Cap each tool NAME at MAX_PER_TOOL_NAME calls per subtask;
         # past that we synthesize a refusal so the model has to commit.
+        #
+        # The default 5 catches the loop case but is way too tight for
+        # legitimate exploration workflows — auditing a new Next.js
+        # project routinely needs to read 8-12 different files (README,
+        # layout.tsx, page.tsx, globals.css, package.json, tsconfig,
+        # eslint config, …). Cap-hitting on file #6 made the model
+        # think it was stuck → `rm -rf project && recreate` loop on a
+        # real user task. Read-only inspection tools therefore get a
+        # much higher cap; state-mutating tools (write_file,
+        # shell_exec_write, python_exec, …) keep the original 5.
         tool_name_counts: Dict[str, int] = {}
         MAX_PER_TOOL_NAME = 5
+        # Allowlist: read-only "exploration" tools where 5 distinct
+        # calls is way too few. Each entry maps tool_name → its cap.
+        # Anything missing here falls back to MAX_PER_TOOL_NAME.
+        _PER_TOOL_NAME_OVERRIDES: Dict[str, int] = {
+            # File-system inspection
+            "read_file":          12,
+            "list_directory":     12,
+            # Document / data extraction (read-only, often hit many
+            # different files in one analytic flow)
+            "pdf_extract_text":   10,
+            "csv_describe":       10,
+            # DB introspection — auditing a schema needs many describes
+            "db_list_tables":     10,
+            "db_describe_table":  15,
+            "db_query":           12,
+            # Web / network look-ups
+            "web_search":         10,
+            # Shell read-only commands the user reported hitting the cap
+            # on (ls, cat, grep …). Idempotent; multiple distinct calls
+            # are fine, just not the same one repeatedly (that's caught
+            # by the exact-args dedup above).
+            "shell_exec_readonly": 10,
+        }
+
+        def _cap_for(_name: str) -> int:
+            return _PER_TOOL_NAME_OVERRIDES.get(_name, MAX_PER_TOOL_NAME)
 
         # ── D: stuck-loop circuit breaker ────────────────────────────
         # If a subtask accumulates this many tool failures in total, we
@@ -957,19 +993,22 @@ class Executor:
                 # ── B cap check: per-tool-name limit ────────────────
                 # Already-executed tn_prev = N means we've seen this
                 # tool name N times before → this is the (N+1)-th call.
-                # Refuse the 6th onwards (5 calls is the cap).
-                if tn_prev >= MAX_PER_TOOL_NAME:
+                # Read-only inspection tools get a generous cap via
+                # _PER_TOOL_NAME_OVERRIDES; everything else uses the
+                # default 5.
+                cap = _cap_for(tool_name)
+                if tn_prev >= cap:
                     logger.warning(
                         "Tool-name cap (#B): %s called %d times in subtask "
-                        "%s — refusing further executions, forcing finalize.",
-                        tool_name, tn_prev + 1, subtask_id,
+                        "%s (cap=%d) — refusing further executions, forcing finalize.",
+                        tool_name, tn_prev + 1, subtask_id, cap,
                     )
                     tool_result = {
                         "success": False,
                         "error": (
                             f"⛔ TOOL OVERUSE: You have called `{tool_name}` "
                             f"{tn_prev + 1} times in this subtask — that's "
-                            f"way past the {MAX_PER_TOOL_NAME}-call limit. "
+                            f"way past the {cap}-call limit. "
                             "Stop trying new variations and emit your final "
                             "answer NOW with whatever you've already learned. "
                             "If you genuinely cannot complete the task with "
