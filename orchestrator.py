@@ -284,6 +284,81 @@ def _is_local_only() -> bool:
     return is_session_local_only()
 
 
+# ── Empty-artifact hallucination guard (#A) ─────────────────────────────
+# Small models on long-context tool-use tasks routinely "complete"
+# work by writing a plausible summary instead of actually producing
+# the requested file. The deliverable judge (line ~786 area in
+# _run_subtask) catches THIS-FILE-IS-WRONG cases, but is silent when
+# NO file was produced at all. _looks_like_file_producing_task is the
+# heuristic that decides whether the absence of artifacts should be
+# treated as a failure.
+#
+# Conservative by design: explain/describe/tell-me tasks are skipped
+# entirely (they're answer-shaped, not file-shaped), and we require
+# BOTH a strong production verb AND a concrete artifact noun /
+# extension. So "explain how to build a website" won't trigger.
+_FILE_PRODUCTION_VERBS = (
+    # English
+    "build", "create", "implement", "write", "generate", "render",
+    "export", "develop", "produce", "make", "save", "scaffold",
+    # 中文
+    "建立", "建構", "建造", "撰寫", "產生", "產出", "輸出",
+    "開發", "編寫", "做出", "寫一", "寫個", "寫成",
+)
+_ARTIFACT_NOUNS = (
+    # English (multi-char so they don't collide with verb roots)
+    "file", "script", "code", "report", " app", "application",
+    "website", "web app", "page", "dashboard", "module",
+    "function", "class ", "test ", "config", "component",
+    "deck", "slide", "presentation", "spreadsheet", "csv",
+    # 中文
+    "檔案", "腳本", "程式", "程序", "代碼", "代码",
+    "報告", "报告", "報表", "报表",
+    "網頁", "网页", "網站", "网站", "應用", "应用",
+    "頁面", "页面", "儀表板", "仪表板",
+)
+_ARTIFACT_EXTENSIONS = (
+    ".py", ".js", ".ts", ".tsx", ".jsx", ".html", ".htm", ".css",
+    ".csv", ".json", ".yaml", ".yml", ".md", ".sh", ".sql",
+    ".java", ".go", ".rs", ".cpp", ".hpp", ".rb", ".php",
+    ".swift", ".kt", ".scala", ".dart", ".toml", ".dockerfile",
+)
+# Answer-shaped task starts — exclude these entirely. Match on the
+# first ~30 chars so we catch "describe how..." but not "write a
+# function that describes...".
+_ANSWER_TASK_STARTS = (
+    "explain", "describe", "summarise", "summarize", "tell me",
+    "what is", "what are", "how does", "how do",
+    "解釋", "解释", "說明", "说明", "描述",
+    "告訴我", "告诉我", "請問", "请问",
+)
+
+
+def _looks_like_file_producing_task(description: Optional[str]) -> bool:
+    """True iff the subtask description strongly implies a file should
+    appear on disk. Used to detect hallucinated successes — see the
+    callsite in _run_subtask for the full rationale.
+
+    Returns False on missing / answer-shaped descriptions so the guard
+    stays conservative.
+    """
+    if not description:
+        return False
+    text = description.strip()
+    lower = text.lower()
+    # Answer-shaped tasks → skip. They're allowed to "complete" with
+    # text only.
+    head = lower[:40]
+    if any(head.startswith(start) for start in _ANSWER_TASK_STARTS):
+        return False
+    has_verb = any(v in lower for v in _FILE_PRODUCTION_VERBS)
+    if not has_verb:
+        return False
+    has_noun = any(n in lower for n in _ARTIFACT_NOUNS)
+    has_ext = any(ext in lower for ext in _ARTIFACT_EXTENSIONS)
+    return has_noun or has_ext
+
+
 class Orchestrator:
     """Gemma-powered orchestrator that plans, dispatches, and aggregates."""
 
@@ -783,6 +858,43 @@ class Orchestrator:
                 # Last shot at retry — bumps the failure counter and
                 # falls through to the loop's retry path.
                 artifacts = self.executor.pop_subtask_artifacts(st.id)
+
+                # ── #A: empty-artifact hallucination guard ───────────
+                # Catches the "Qwen claimed success without writing
+                # anything" failure mode the deliverable judge below
+                # CAN'T catch (the judge needs a file to look at).
+                # User-reported on macOS desktop: "build a GitHub
+                # trending web app" returned a confident success
+                # summary with workspace size = 0 bytes.
+                #
+                # Heuristic: code/analytic mode + description has a
+                # strong production verb + concrete artifact noun (or
+                # a known file extension) + zero new artifacts.
+                # Conservative — answer-type subtasks ("explain X",
+                # "describe Y") are explicitly skipped so they don't
+                # get false-failed.
+                if (mode in ("code", "analytic")
+                        and not artifacts
+                        and _looks_like_file_producing_task(st.description)):
+                    logger.info(
+                        "Subtask %s should have produced a file but "
+                        "workspace got 0 new artifacts — clamping "
+                        "confidence and retrying.",
+                        st.id,
+                    )
+                    st.status = TaskStatus.FAILED
+                    st.error = (
+                        "Task description suggested building / creating "
+                        "a concrete file, but no file was produced "
+                        "(workspace got 0 new artifacts). The model "
+                        "may have answered with prose instead of "
+                        "writing the artifact. Retrying with stronger "
+                        "guidance, then escalating if it fails again."
+                    )
+                    st.confidence = 0.3
+                    await self.tracker.update_subtask(st)
+                    continue  # → next retry attempt, eventually escalates
+
                 deliverable = await self._verify_deliverable(st, artifacts)
                 if deliverable:
                     judge_text, judge_ok = deliverable
