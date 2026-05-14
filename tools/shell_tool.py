@@ -503,6 +503,47 @@ def _autoquote_workspace_path(command: str, workspace: Optional[str]) -> str:
     return "".join(out)
 
 
+def _augmented_subprocess_env() -> Dict[str, str]:
+    """Return a copy of os.environ with extra PATH entries appended.
+
+    Why: a Tauri .app launched from macOS Finder / LaunchServices
+    inherits PATH = "/usr/bin:/bin:/usr/sbin:/sbin" — none of the
+    locations where Homebrew / Docker Desktop / asdf / nvm actually
+    put user CLIs. The bundled Python sidecar inherits this same
+    crippled PATH, and every shell_exec then can't find docker, brew,
+    node, python3 (the user-installed one), psql, gh, etc.
+
+    The user-visible symptom is the maddening "docker: command not
+    found" loop the agent falls into on macOS even though Docker is
+    obviously installed. This function fixes that for every subprocess
+    we spawn by extending PATH with the standard macOS CLI locations.
+
+    No-op on systems where these paths are missing — non-existent
+    entries on PATH are harmless. Linux + container deploys get the
+    same call too; the extra entries simply don't resolve there.
+    """
+    env = dict(os.environ)
+    extra_paths = [
+        "/opt/homebrew/bin",        # Apple Silicon Homebrew (M1+)
+        "/opt/homebrew/sbin",
+        "/usr/local/bin",           # Intel Homebrew + Docker Desktop CLI
+        "/usr/local/sbin",
+        "/usr/local/share/dotnet",  # .NET via official installer
+        os.path.expanduser("~/.cargo/bin"),    # rustup / cargo
+        os.path.expanduser("~/.local/bin"),    # pipx, uv-installed CLIs
+        "/Applications/Docker.app/Contents/Resources/bin",  # Docker Desktop
+    ]
+    current = env.get("PATH", "")
+    parts = current.split(os.pathsep) if current else []
+    seen = set(parts)
+    for p in extra_paths:
+        if p and p not in seen:
+            parts.append(p)
+            seen.add(p)
+    env["PATH"] = os.pathsep.join(parts)
+    return env
+
+
 def _truncate_output(text: str) -> str:
     """Truncate stdout/stderr to avoid overwhelming the model context."""
     lines = text.split("\n")
@@ -823,6 +864,13 @@ async def execute_shell(
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=effective_dir,
+            # macOS desktop fix: Tauri inherits a minimal PATH from
+            # LaunchServices that doesn't include /opt/homebrew/bin or
+            # /usr/local/bin where docker / brew / nvm-node / psql /
+            # gh actually live. _augmented_subprocess_env() patches
+            # these in so the agent can actually find them. No-op on
+            # Linux servers where the paths don't exist.
+            env=_augmented_subprocess_env(),
         )
         stdout_bytes, stderr_bytes, reason = await _drain_with_silence_timeout(
             proc,
