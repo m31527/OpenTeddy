@@ -434,6 +434,75 @@ def _docker_timeout(cmd: str, default: int) -> int:
     return default
 
 
+def _autoquote_workspace_path(command: str, workspace: Optional[str]) -> str:
+    """Wrap the workspace path in single quotes if it appears unquoted.
+
+    Why this exists: on macOS the Tauri data dir is
+        ~/Library/Application Support/OpenTeddy/agent-workspace
+    which has a space in "Application Support". The orchestrator LLM
+    routinely emits the absolute path verbatim WITHOUT quoting, then
+    bash splits the command on whitespace and we get one of:
+        argv = ['ls', '-la', '/Users/.../Application',
+                'Support/OpenTeddy/agent-workspace/sessions/<id>/']
+    and the model sees "No such file or directory" — twice — for paths
+    that obviously exist. It then loops retrying until the tool-name
+    cap (6× shell_exec) fires and the whole subtask aborts.
+
+    Behaviour:
+      - No-op when the workspace path contains no spaces (the common
+        case on Linux + the OSS web server install).
+      - No-op when the path already appears single-quoted, double-
+        quoted, or backslash-space-escaped — we don't double-wrap.
+      - Otherwise: substring-replace the bare workspace path with the
+        single-quoted version. Bash treats `'/a b'/sub` as `/a b/sub`,
+        so concatenated absolute paths still work cleanly.
+
+    Defence-in-depth only: the model SHOULD quote paths, the
+    orchestrator system prompt also encourages it, and shell_tool
+    already passes cwd= to subprocess so RELATIVE-path commands are
+    immune. This handles the absolute-path case.
+    """
+    if not workspace or " " not in workspace:
+        return command
+    if workspace not in command:
+        return command
+    # Backslash-escape-space form (e.g. `Application\ Support`): if the
+    # LLM did the work itself, no-op the entire command.
+    escaped = workspace.replace(" ", "\\ ")
+    if escaped in command:
+        return command
+
+    # Quote-aware walker: only wrap occurrences that sit OUTSIDE any
+    # existing single- or double-quoted region. Prevents the case where
+    # an LLM already wrapped the path in double quotes — we'd otherwise
+    # turn `cat "<ws>/x.txt"` into `cat "'<ws>'/x.txt"` which bash reads
+    # as the literal string with embedded quote characters, not a path.
+    out = []
+    i = 0
+    n = len(command)
+    ws_len = len(workspace)
+    in_squote = False
+    in_dquote = False
+    while i < n:
+        c = command[i]
+        if c == "'" and not in_dquote:
+            in_squote = not in_squote
+            out.append(c)
+            i += 1
+        elif c == '"' and not in_squote:
+            in_dquote = not in_dquote
+            out.append(c)
+            i += 1
+        elif (not in_squote and not in_dquote
+              and command.startswith(workspace, i)):
+            out.append(f"'{workspace}'")
+            i += ws_len
+        else:
+            out.append(c)
+            i += 1
+    return "".join(out)
+
+
 def _truncate_output(text: str) -> str:
     """Truncate stdout/stderr to avoid overwhelming the model context."""
     lines = text.split("\n")
@@ -729,6 +798,18 @@ async def execute_shell(
     # Late import of config so tests can override it without module reload.
     from config import config as _cfg
     silence_timeout = float(getattr(_cfg, "shell_silence_timeout", 90) or 0)
+
+    # ── Workspace-with-spaces auto-quote (macOS / desktop fix) ─────────────
+    # Tauri's data dir on macOS lives under ~/Library/Application Support/
+    # which has a space in it. The LLM cheerfully writes paths like
+    #   ls -la /Users/sean/Library/Application Support/.../sessions/abc
+    # which bash splits into 3 args (`/Users/...Library/Application`,
+    # `Support/.../sessions/abc`, plus `-la`). The model then sees
+    # "No such file" and loops retrying until the tool-name cap kicks in.
+    # Fix: detect the workspace path inside the command, and if it's not
+    # already wrapped in quotes / escaped, single-quote it. Bash happily
+    # concatenates `'/x y'/sub` → `/x y/sub`.
+    command = _autoquote_workspace_path(command, effective_dir)
 
     compose_note = _docker_compose_context_note(command, effective_dir)
     if compose_note:
