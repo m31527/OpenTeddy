@@ -284,6 +284,73 @@ def _is_local_only() -> bool:
     return is_session_local_only()
 
 
+# ── Response-framing language detection ─────────────────────────────────
+# Server-side label strings the orchestrator wraps around tool logs +
+# confirmation blocks USED to be Chinese-only (the project started as
+# a zh-TW codebase). User reports seeing those Chinese labels even when
+# they typed in English — confusing. Fix: pick the framing language
+# from the user's GOAL text, not a global setting. So:
+#   English goal  → "[Subtask 0]", "Status:", "Confirmation status"
+#   Chinese goal  → "[子任務 0]", "狀態:", "確認狀態"
+#
+# Heuristic: CJK chars vs total alpha+CJK chars. > 30% CJK → Chinese.
+# This handles "build me a 報告 dashboard" reasonably (mostly English →
+# English framing). Tiny goals (e.g. "ls") default to English.
+def _framing_lang(goal: str) -> str:
+    if not goal:
+        return "en"
+    cjk = 0
+    total = 0
+    for ch in goal:
+        if "一" <= ch <= "鿿":
+            cjk += 1
+            total += 1
+        elif ch.isalpha():
+            total += 1
+    if total < 3:
+        return "en"
+    return "zh" if cjk / total > 0.30 else "en"
+
+
+# Labels rendered into the user-visible summary + confirmation block.
+# Keep keys identical across locales so the call sites stay flat.
+_FRAMING: Dict[str, Dict[str, str]] = {
+    "en": {
+        "subtask_prefix":    "Subtask",
+        "status":            "Status",
+        "result":            "Result",
+        "error":             "Error",
+        "no_output":         "no output",
+        "task_completed":    "Task completed",
+        "confirmation_header": "\n\n---\n📋 **Confirmation status**",
+        "container_status":  "Container status (this task)",
+        "docker_status":     "Docker container status",
+        "workspace_contents": "Workspace contents",
+        "installed_pkgs":    "Installed packages (top 20)",
+        "node_packages":     "Node packages",
+    },
+    "zh": {
+        "subtask_prefix":    "子任務",
+        "status":            "狀態",
+        "result":            "結果",
+        "error":             "錯誤",
+        "no_output":         "無輸出",
+        "task_completed":    "任務已完成",
+        "confirmation_header": "\n\n---\n📋 **確認狀態**",
+        "container_status":  "本任務容器狀態",
+        "docker_status":     "Docker 容器狀態",
+        "workspace_contents": "工作目錄內容",
+        "installed_pkgs":    "已安裝套件（前20個）",
+        "node_packages":     "Node 套件",
+    },
+}
+
+
+def _L(goal: str, key: str) -> str:
+    """Look up a framing label in the user's goal language."""
+    return _FRAMING[_framing_lang(goal)][key]
+
+
 # ── Empty-artifact hallucination guard (#A) ─────────────────────────────
 # Small models on long-context tool-use tasks routinely "complete"
 # work by writing a plausible summary instead of actually producing
@@ -478,14 +545,24 @@ class Orchestrator:
             all_skills = await self.skill_factory.list_all_skills()
             new_skills  = [s.name for s in all_skills if s.success_count == 0]
 
-            # 4. Build structured tool log from all subtask records
+            # 4. Build structured tool log from all subtask records.
+            # Framing labels switch on the user's goal language so an
+            # English-typing user doesn't see Chinese "子任務 0 / 狀態:"
+            # leaking into the final summary (those labels go into the
+            # LLM-summary prompt and the model mirrors them verbatim).
+            _g = req.goal or ""
             tool_log_lines: List[str] = []
             for st in subtasks:
-                tool_log_lines.append(f"[子任務 {st.order}] {st.description}")
-                tool_log_lines.append(f"  狀態: {st.status.value}")
-                tool_log_lines.append(f"  結果: {(st.result or '無輸出')[:500]}")
+                tool_log_lines.append(
+                    f"[{_L(_g, 'subtask_prefix')} {st.order}] {st.description}"
+                )
+                tool_log_lines.append(f"  {_L(_g, 'status')}: {st.status.value}")
+                tool_log_lines.append(
+                    f"  {_L(_g, 'result')}: "
+                    f"{(st.result or _L(_g, 'no_output'))[:500]}"
+                )
                 if st.error:
-                    tool_log_lines.append(f"  錯誤: {st.error}")
+                    tool_log_lines.append(f"  {_L(_g, 'error')}: {st.error}")
             tool_log_text = "\n".join(tool_log_lines)
 
             had_escalation = any(
@@ -1303,7 +1380,7 @@ class Orchestrator:
         )
         # Fallback if Gemma / cloud returns empty
         if not result or result.strip() in ("[]", ""):
-            lines = [f"任務已完成：{goal}", "", tool_log[:1000]]
+            lines = [f"{_L(goal, 'task_completed')}: {goal}", "", tool_log[:1000]]
             return "\n".join(lines)
         return result
 
@@ -1355,26 +1432,26 @@ class Orchestrator:
                 if scoped_cmd:
                     break
             if scoped_cmd:
-                confirmation_cmds.append(("本任務容器狀態", scoped_cmd))
+                confirmation_cmds.append((_L(goal, "container_status"), scoped_cmd))
             else:
-                confirmation_cmds.append(("Docker 容器狀態", "docker ps"))
+                confirmation_cmds.append((_L(goal, "docker_status"), "docker ps"))
         if any(_has_word(goal_lower, kw) for kw in ["clone", "git", "repository", "repo"]):
             # Use the effective workspace, not `~/` — listing the user's
             # whole home dir was leaking personal files into the summary.
             from config import effective_workspace_dir
             ws = effective_workspace_dir()
             confirmation_cmds.append(
-                ("工作目錄內容", f"ls -la {ws!r} 2>/dev/null || ls -la .")
+                (_L(goal, "workspace_contents"), f"ls -la {ws!r} 2>/dev/null || ls -la .")
             )
         if any(_has_word(goal_lower, kw) for kw in ["install", "pip", "package"]):
-            confirmation_cmds.append(("已安裝套件（前20個）", "pip list 2>/dev/null | head -20"))
+            confirmation_cmds.append((_L(goal, "installed_pkgs"), "pip list 2>/dev/null | head -20"))
         if any(_has_word(goal_lower, kw) for kw in ["npm", "node", "yarn"]):
-            confirmation_cmds.append(("Node 套件", "ls node_modules 2>/dev/null | head -10 || echo 'node_modules not found'"))
+            confirmation_cmds.append((_L(goal, "node_packages"), "ls node_modules 2>/dev/null | head -10 || echo 'node_modules not found'"))
 
         if not confirmation_cmds:
             return ""
 
-        output_parts: List[str] = ["\n\n---\n📋 **確認狀態**"]
+        output_parts: List[str] = [_L(goal, "confirmation_header")]
         for label, cmd in confirmation_cmds:
             try:
                 proc = await asyncio.create_subprocess_shell(
