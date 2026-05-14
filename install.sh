@@ -23,10 +23,15 @@ REPO_URL="https://github.com/m31527/OpenTeddy.git"
 DEFAULT_DIR="$HOME/OpenTeddy"
 MIN_PY_MAJOR=3
 MIN_PY_MINOR=10
-# Defaults match config.py: gemma_model + qwen_model. Pulling them so a
-# fresh install can run tasks out-of-the-box without the user having to
-# guess which models to download.
-DEFAULT_MODELS=("gemma3:4b" "qwen2.5:3b")
+# Defaults match config.py: gemma_model + qwen_model. Pulling them so
+# a fresh install can run tasks out-of-the-box without the user having
+# to guess which models to download.
+#
+# 2026-05-14: bumped to the newer Gemma 4 + Qwen 3.5 series. If either
+# tag isn't on the Ollama catalogue yet (or got renamed upstream), the
+# `ollama pull` below is best-effort — install still completes with a
+# clear warn so the user can retry manually with the correct tag.
+DEFAULT_MODELS=("gemma4:e2b" "qwen3.5:2b")
 
 # ── Flags ─────────────────────────────────────────────────────────────────
 INSTALL_DIR="${OPENTEDDY_DIR:-$DEFAULT_DIR}"
@@ -66,7 +71,7 @@ Quick start:
 Options (pass via: ... | bash -s -- --flag):
   --dir <path>      Install location (default: \$HOME/OpenTeddy)
   --force           Overwrite an existing non-git directory
-  --skip-models     Don't pull default Ollama models (gemma3:4b, qwen2.5:3b)
+  --skip-models     Don't pull default Ollama models (gemma4:e2b, qwen3.5:2b)
   --dry-run         Print what would happen, change nothing
   --debug           Verbose shell trace (set -x)
   -h, --help        This message
@@ -189,7 +194,7 @@ else
 fi
 
 # ── Default models (Ollama-only step) ─────────────────────────────────────
-# Pulling the two defaults config.py expects (gemma3:4b + qwen2.5:3b) means
+# Pulling the two defaults config.py expects (gemma4:e2b + qwen3.5:2b) means
 # `./run.sh` after install can serve real tasks without the user having to
 # guess what to pull. Skipped when Ollama isn't installed (warned already)
 # or --skip-models was passed (for users who already have other models).

@@ -184,7 +184,7 @@ The installer:
 - detects Ollama (warn-only if missing — cloud LLMs still work)
 - `git clone`s OpenTeddy to `~/OpenTeddy`
 - creates `.venv` + `pip install -r requirements.txt`
-- pulls the two default Ollama models (`gemma3:4b`, `qwen2.5:3b`) if Ollama is present
+- pulls the two default Ollama models (`gemma4:e2b`, `qwen3.5:2b`) if Ollama is present
 - prints next-steps instructions
 
 It's **idempotent** — re-run any time to pull the latest source + refresh deps. All work scoped to `$HOME/OpenTeddy`, no `sudo`, no secondary scripts fetched.
@@ -209,8 +209,8 @@ If you'd rather install by hand:
 - Python 3.10+
 - [Ollama](https://ollama.ai) running locally (optional — skip this if you'll use cloud LLMs only):
   ```bash
-  ollama pull gemma3:4b
-  ollama pull qwen2.5:3b
+  ollama pull gemma4:e2b
+  ollama pull qwen3.5:2b
   ```
 - (Optional) An Anthropic / OpenAI / Gemini / Deepseek / OpenRouter API key — configure later via Settings → Cloud LLM Provider
 
@@ -359,9 +359,9 @@ without a server restart.
 | `ANTHROPIC_API_KEY` | — | Required only if escalation is enabled. Anthropic API key. |
 | `CLAUDE_MODEL` | `claude-opus-4-6` | Claude model for escalation. |
 | `GEMMA_BASE_URL` | `http://localhost:11434` | Ollama base URL for the orchestrator. |
-| `GEMMA_MODEL` | `gemma3:4b` | Orchestrator model tag. |
+| `GEMMA_MODEL` | `gemma4:e2b` | Orchestrator model tag. |
 | `QWEN_BASE_URL` | `http://localhost:11434` | Ollama base URL for the executor. |
-| `QWEN_MODEL` | `qwen2.5:3b` | Executor model tag. |
+| `QWEN_MODEL` | `qwen3.5:2b` | Executor model tag. |
 | `BRAVE_SEARCH_API_KEY` | — | Optional. Powers the Chat-mode `web_search` tool. Free tier covers 2,000 queries/month at [api-dashboard.search.brave.com](https://api-dashboard.search.brave.com/). Without it, the local model answers from training data and warns the user about staleness. |
 | `DB_PATH` | `openteddy.db` | SQLite database path. |
 | `MEMORY_DB_PATH` | `./memory_db` | ChromaDB directory. |

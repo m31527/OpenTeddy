@@ -115,7 +115,7 @@ class Config:
         default_factory=lambda: os.getenv("GEMMA_BASE_URL", "http://localhost:11434")
     )
     gemma_model: str = field(
-        default_factory=lambda: os.getenv("GEMMA_MODEL", "gemma3:4b")
+        default_factory=lambda: os.getenv("GEMMA_MODEL", "gemma4:e2b")
     )
 
     # Qwen 3 Executor (local Ollama or remote)
@@ -123,7 +123,7 @@ class Config:
         default_factory=lambda: os.getenv("QWEN_BASE_URL", "http://localhost:11434")
     )
     qwen_model: str = field(
-        default_factory=lambda: os.getenv("QWEN_MODEL", "qwen2.5:3b")
+        default_factory=lambda: os.getenv("QWEN_MODEL", "qwen3.5:2b")
     )
 
     # Claude upgrade / escalation
