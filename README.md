@@ -23,6 +23,16 @@ commercial-LLM escalation to finish what local can't.
 
 🌐 **Web:** [https://openteddy.net/](https://openteddy.net/) &nbsp;·&nbsp; 📦 **Source:** [github.com/m31527/OpenTeddy](https://github.com/m31527/OpenTeddy)
 
+### 📥 Download
+
+| | |
+|:-:|:-:|
+| 🍎 **macOS desktop** | [`OpenTeddy-1.0.1-aarch64.dmg`](https://openteddy.net/download/mac) (105 MB, Apple Silicon, signed + notarized) |
+| 🐧 **Linux / WSL2** | `curl -fsSL https://openteddy.net/install \| bash` |
+| 🐳 **Docker** | see [Docker Deployment](#docker-deployment) below |
+
+[View all releases ↗](https://github.com/m31527/OpenTeddy/releases)
+
 </div>
 
 ---
@@ -54,8 +64,12 @@ Claude Pro auto-renewing.
 
 ## Highlights
 
-- **Local-first** — planning (Gemma) and execution (Qwen) run on your machine via Ollama; Claude is only called when local models struggle.
-- **Auto-escalation to Claude** — timeouts, low confidence, repeated failures, hard-failure signals in tool output (e.g. `unhealthy` containers, `ERROR 1045`), or failed health checks all trigger Claude intervention automatically.
+- **Three LLM modes, one toggle** — *Local only* / *Mixed* (default — local with cloud safety net) / *Full Cloud LLM* (skip Ollama entirely, route every subtask through your cloud provider). Pick per-app in Settings; per-session "Local only" override always wins for privacy-sensitive work.
+- **Five cloud LLM providers** — Anthropic Claude / OpenAI / Google Gemini / Deepseek / OpenRouter, swappable from Settings at runtime. Usage tab attributes spend per provider.
+- **Auto-escalation safety net** — timeouts, low confidence, repeated failures, hard-failure signals in tool output (`unhealthy` containers, `ERROR 1045`, `command not found`), or "the task asked for a file but the model produced zero" all trigger cloud-LLM intervention automatically.
+- **PDF analysis** — drop a `.pdf` into chat, ask questions; the agent extracts text page-by-page (CJK supported) and can cite page numbers. Image-only PDFs are flagged honestly rather than fabricated.
+- **Connect a database to any session** — Postgres / MySQL / SQLite / MSSQL / Oracle / DuckDB via SQLAlchemy. Two-step Test → Connect modal. Destructive SQL (`DELETE` / `DROP` / `TRUNCATE` / `UPDATE`) is hard-blocked on every code path — defence in depth.
+- **Per-session workspace isolation** — each new session gets its own `agent-workspace/sessions/<id>/`; files from one session never bleed into another. Toggleable in Settings.
 - **Self-growing skills** — repeated tasks are promoted into reusable Python skills, cutting LLM calls over time.
 - **Streaming UI** — both the orchestrator's planning and the executor's answer stream token-by-token via WebSocket — no more staring at a spinner while the model thinks.
 - **Per-step deliverable verification** — LLM-as-judge confirms each produced file actually matches the goal, catching the "wrote a report *about* the game instead of the game" failure mode. Toggleable for big-model setups where extra calls are too costly.
@@ -64,7 +78,10 @@ Claude Pro auto-renewing.
 - **Web search built in** — Chat mode exposes the `web_search` tool (Brave Search API) so the local model can ground answers in current data instead of hallucinating recent events / version numbers / today's prices.
 - **Reconnect-safe streaming** — the WebSocket carries a 600-event ring buffer so a flaky network or a tab refresh replays the missed events instead of leaving the UI stuck.
 - **Web dashboard** — submit tasks, watch tool calls stream live, review pending approvals, manage memory, render Markdown/GFM tables, embed Chart.js datalabels in HTML reports, see live "Saved $X vs GPT-4" in the sidebar, and tune settings.
+- **Persistent artifact chips** — files produced by a task keep their 📎 download + 👁 preview buttons after switching sessions, closing the tab, or opening from another device.
+- **Performance observability** — Usage tab shows per-mode (Chat / Code / Analytic) time-to-result stats (mean / p50 / p95 / max) plus your slowest 10 tasks. Screenshot it into a bug report when something looks off.
 - **Capabilities tab** — built-in Tools and learned Skills merged into one filterable list with type badges, so users see "what can my agent do?" in one place. Skills graduate from `TESTING` to `ACTIVE` automatically; the count grows as the install matures.
+- **Auto-approve countdown** — opt-in setting that turns the high-risk approval gate fail-permissive after N seconds, with a visible amber timer so you have time to Deny if the agent's about to do something unexpected. Default: off.
 - **Native macOS desktop client** — Tauri 2.x shell with onboarding wizard (Ollama install + tier-based model pull), language picker, mode-locked sessions, full window-drag regions, auto-update against GitHub Releases, and one-click diagnostics download. See [`desktop/`](desktop/).
 - **Optional cloud account** — sign in with Google to enable cross-device sync (skills, memory, settings) and licence-gated premium content. Anonymous Firebase auth runs from day one; the upgrade is opt-in. The OSS web UI stays Firebase-free — auth lives only in the desktop shell.
 - **Lifetime licensing via Lemon Squeezy** — one-time $99 unlocks the polished signed desktop, cloud sync, and (future) premium skill packs. Open-source core stays free forever for everyone. Webhook-driven licence activation: the sidebar pill flips from "Get Lifetime" to your account email within ~1 sec of payment clearing.
@@ -92,8 +109,9 @@ User Goal
 ┌───────────────────────────────────────────────────┐
 │  Executor  (Qwen via Ollama, function calling)     │
 │  • Runs a matching Skill if available              │
-│  • Uses tools: shell, file, http, db, gcp, package,│
-│    csv_describe, python_exec, generate_report      │
+│  • Uses tools: shell, file (incl. pdf_extract_text),│
+│    http, db, gcp, package, csv_describe,           │
+│    python_exec, generate_report, web_search        │
 │  • Streams answer tokens; parallelises low-risk    │
 │    tool calls; caps per-tool-name retries          │
 │  • Compresses old turns when context fills up      │
@@ -136,7 +154,9 @@ not just fast enough to look impressive on a single tool call:
 | **Per-step deliverable verification** | After each successful subtask, an LLM-as-judge reviews the produced HTML/MD/code file. If it looks like a *description of* the goal rather than the actual deliverable (the "Snake Game report" failure pattern), the subtask is forced to retry with feedback. |
 | **Context watchdog** | When the prompt size approaches `num_ctx`, the executor compresses earlier turns into a recap and pins discovery memos to the system prompt — keeping recent tool context intact instead of letting Ollama silently truncate. |
 | **Discovery memos** | Useful one-off facts learned from tool calls (e.g. "the workspace already contains `data.csv` with columns X/Y/Z") are pinned to the system prompt so the model doesn't re-discover them every round. |
-| **Per-tool-name cap** | Each tool name is capped at 5 calls per subtask — stops the model from re-running `csv_describe` on the same file ten times. |
+| **Per-tool-name cap (tiered)** | Read-only inspection tools (`read_file`, `list_directory`, `db_query`, `db_describe_table`, `csv_describe`, `pdf_extract_text`, `web_search`, `shell_exec_readonly`) get a cap of 10–15. State-mutating tools (`write_file`, `python_exec`, `shell_exec_write`, …) stay at 5 — they're the ones that actually loop. |
+| **Empty-artifact guard** | When a code/analytic subtask description mentions building / creating / writing a concrete file but workspace got 0 new artifacts, confidence is clamped and the loop forces a retry (eventually escalates). Catches "small model wrote a confident summary without actually producing the deliverable" — the deliverable judge can't catch this case because it has no file to look at. |
+| **macOS PATH augmentation** | Shell subprocesses get `/opt/homebrew/bin`, `/usr/local/bin`, `~/.cargo/bin`, `/Applications/Docker.app/Contents/Resources/bin`, … appended to PATH. Tauri's minimal LaunchServices PATH would otherwise leave the agent with `docker: command not found` on a Mac that obviously has Docker installed. |
 | **Circuit breaker** | After 5 cumulative tool failures the loop is forced to commit to a final answer instead of looping forever. |
 | **Common error hints** | Twelve frequent stack-trace patterns (`ModuleNotFoundError`, `KeyError`, `PermissionError`, …) are matched against tool stderr and converted into one-line hints so the model corrects itself instead of repeating the same mistake. |
 | **WS reconnect + replay** | The dashboard WebSocket carries a 600-event ring buffer keyed by sequence number — a refreshed tab or a wifi blip replays missed events on reconnect. |
@@ -287,7 +307,12 @@ OpenTeddy tries to keep every task local. Claude is called **only** when the loc
 | Deliverable verifier returns `FAIL` | `orchestrator._verify_deliverable` | confidence clamped to 0.3 → retry, then escalate |
 | Circuit breaker tripped (5 cumulative tool failures) | `executor._qwen_execute` | forces final-answer commit; escalation kicks in if confidence is still low |
 
-This keeps cost low for everyday work while still guaranteeing you get a real answer when the local model cannot deliver one. All triggers can be globally disabled via `ESCALATION_ENABLED=false` (or the per-session "Local-only" toggle in the UI).
+This keeps cost low for everyday work while still guaranteeing you get a real answer when the local model cannot deliver one. Two ways to opt out:
+
+- **Settings → LLM Mode → Local only** — global, applies to every session
+- **Per-session "Local only" toggle** in the session row — overrides the global mode for that specific session, so you can run a private analysis inside a Cloud-mode app without the data ever leaving your machine
+
+Set `OPENTEDDY_LLM_MODE=local` in `.env` if you want the local-only choice baked in across restarts.
 
 ## Self-Growth Mechanism
 
@@ -367,15 +392,24 @@ without a server restart.
 | `MEMORY_DB_PATH` | `./memory_db` | ChromaDB directory. |
 | `SKILLS_DIR` | `skills` | Directory for skill files. |
 
+### LLM Mode (canonical)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `OPENTEDDY_LLM_MODE` | `mixed` | One of `local` / `mixed` / `cloud`. `local` = Gemma plans, Qwen executes, never call cloud. `mixed` = local-first with cloud safety net on failure. `cloud` = every subtask handled directly by the configured cloud LLM (Ollama not required). The legacy `ESCALATION_ENABLED` below is auto-derived from this. |
+| `LLM_PROVIDER` | `anthropic` | Which cloud LLM provider escalation + Cloud mode route to. One of `anthropic` / `openrouter` / `openai` / `gemini` / `deepseek`. |
+
 ### Escalation
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ESCALATION_ENABLED` | `true` | Master kill-switch for Claude. When `false`, low-confidence / timeout / failure-signal triggers stay local and surface a failure to the user instead of calling Claude. |
+| `ESCALATION_ENABLED` | `true` | Legacy kill-switch — now auto-derived from `OPENTEDDY_LLM_MODE` (`local` → False, `mixed` / `cloud` → True). Setting this directly still works for backward compat. |
 | `ESCALATION_THRESHOLD` | `0.6` | Min Qwen confidence before escalation. |
 | `ESCALATION_FAILURE_LIMIT` | `3` | Max consecutive failures before escalation. |
-| `SUBTASK_TIMEOUT` | `120` | Seconds before a subtask is treated as hung. |
+| `SUBTASK_TIMEOUT` | `900` | Wall-clock seconds before a subtask is treated as hung. Real hang detection is via `SHELL_SILENCE_TIMEOUT`; this is just the ceiling. |
+| `SHELL_SILENCE_TIMEOUT` | `180` | Kill a shell command after this many seconds of no stdout/stderr output. Long-but-active commands (docker build, pip install) stay alive as long as they're printing progress. |
 | `SKILL_PROMOTION_THRESHOLD` | `5` | Successes needed to promote a skill. |
+| `APPROVAL_AUTO_APPROVE_AFTER` | `0` | Seconds after which a high-risk approval auto-resolves to **approved**. 0 = off (the safer default — wait for explicit click). |
 
 ### Performance toggles (loop hardening)
 
@@ -429,13 +463,25 @@ What you get on top of the web UI:
 cd desktop
 npm install
 npx tauri dev          # hot-reload dev (still needs uvicorn running separately)
-./scripts/build_macos.sh             # package: desktop/dist/OpenTeddy-<ver>-<arch>.dmg
-./scripts/build_macos.sh --target universal   # universal2 (arm64 + x86_64)
+
+# Iteration: dev build (filename gets a "dev-" prefix so you can't
+# accidentally mistake it for a public release)
+./scripts/build_macos.sh
+
+# Ship: real release — builds + signs + notarizes + git-tags + uploads
+# to GitHub Releases in one shot. Requires APPLE_DEV_ID +
+# APPLE_NOTARY_PROFILE in desktop/.notarize.env.
+./scripts/release.sh 1.0.2
+./scripts/release.sh 1.0.2 --dry-run   # walk through without acting
 ```
 
-The packaged `.dmg` is **unsigned** until an Apple Developer ID is wired up —
-first-run users need to right-click → Open, or:
-`xattr -dr com.apple.quarantine /Applications/OpenTeddy.app`.
+The shipping `.dmg` (from `release.sh`) is **signed with our Apple
+Developer ID and notarized by Apple**, so the published builds work
+with one double-click on any Mac — no Gatekeeper warnings, no
+`xattr` workaround needed. (Self-built `.dmg`s from
+`build_macos.sh` without the notarize env set are ad-hoc signed and
+will hit Gatekeeper on machines other than the one that built
+them — that's expected for dev iteration.)
 
 ## Platform Support
 
