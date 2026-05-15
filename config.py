@@ -420,6 +420,20 @@ class Config:
         default_factory=lambda: int(os.getenv("APPROVAL_AUTO_APPROVE_AFTER", "0"))
     )
 
+    # How long (seconds) to wait for the user to click before flipping
+    # an unanswered HIGH-risk approval to REJECTED. Was 300 (5 min)
+    # historically — bumped to 1800 (30 min) so users get a real lunch-
+    # break window. Range 60 s – 7200 s (2h) — clamped in
+    # reload_from_store() to keep abusive values from creating zombie
+    # approvals that pin asyncio tasks forever.
+    #
+    # Independent of approval_auto_approve_after: when auto-approve is
+    # > 0, that wins (fires earlier, marks as APPROVED). When it's 0,
+    # this is the deadline that marks REJECTED.
+    approval_wait_timeout: int = field(
+        default_factory=lambda: int(os.getenv("APPROVAL_WAIT_TIMEOUT", "1800"))
+    )
+
     # ── Task scheduling (currently a no-op — kept for forward-compat) ───────
     # Default priority recorded on tasks created from the chat input. Was
     # hard-coded to 5 in the static UI, which forced every send through a
@@ -616,6 +630,13 @@ class Config:
             # could deadlock waiting on a phantom approval that's about
             # to flip to auto-approve anyway.
             self.approval_auto_approve_after = max(0, min(300, vaa))
+
+        vwt = _i("approval_wait_timeout")
+        if vwt is not None:
+            # Clamp 60–7200 — under 60s the gate becomes useless (you
+            # can't realistically click in time); over 2h means a
+            # forgotten approval pins resources indefinitely.
+            self.approval_wait_timeout = max(60, min(7200, vwt))
 
         v7 = _i("subtask_timeout")
         if v7 is not None:

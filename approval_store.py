@@ -89,7 +89,7 @@ class ApprovalStore:
     async def wait_for_resolution(
         self,
         approval_id: str,
-        timeout: float = 300.0,
+        timeout: float = 1800.0,
         auto_approve_after: float = 0.0,
     ) -> bool:
         """
@@ -100,6 +100,15 @@ class ApprovalStore:
                      past this point flips status to REJECTED (the safer
                      default; refusing a tool call is recoverable, running
                      a destructive one isn't).
+
+                     Default 1800 s (30 min) — bumped 2026-05-15 from the
+                     original 300 s. 5 minutes was genuinely too short
+                     for the "grabbed coffee / answered the door / on a
+                     phone call" scenarios users were hitting. 30 min
+                     covers a normal lunch break while still freeing
+                     resources eventually if the user walks away for the
+                     day. Tunable via Settings → "Approval wait timeout".
+
             auto_approve_after: When > 0, overrides timeout. Silence past
                      this point flips status to APPROVED instead. The user
                      opts into this via Settings → "Auto-approve after

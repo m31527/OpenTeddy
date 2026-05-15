@@ -239,13 +239,26 @@ SETTINGS_META: dict[str, dict[str, Any]] = {
         "description": "When > 0, HIGH-risk tool approval prompts "
                        "(shell_exec_write, delete_file, etc.) auto-approve "
                        "if you don't click within this many seconds. 0 = "
-                       "disabled (current behaviour: wait forever / reject "
-                       "after 5 min). Use 15–60 s for routine workflows; "
-                       "keep at 0 when you want explicit oversight on every "
+                       "disabled (the safer default — wait for explicit "
+                       "click, eventually reject if Approval wait timeout "
+                       "expires). Use 15–60 s for routine workflows; keep "
+                       "at 0 when you want explicit oversight on every "
                        "destructive action.",
         "type":        "int",
         "min":         0,
         "max":         300,
+    },
+    "approval_wait_timeout": {
+        "label":       "Approval wait timeout (seconds)",
+        "description": "How long an unanswered HIGH-risk approval sits "
+                       "before flipping to REJECTED. Was 300 s (5 min) "
+                       "originally — bumped to 1800 s (30 min) default so "
+                       "you can grab lunch without losing tasks. Range 60 "
+                       "to 7200 s. Doesn't apply when Auto-approve after "
+                       "is set (that timeout wins).",
+        "type":        "int",
+        "min":         60,
+        "max":         7200,
     },
     "default_priority": {
         "label":       "Default Task Priority",
@@ -381,6 +394,7 @@ def _defaults_from_config() -> dict[str, str]:
         "skill_promotion_threshold": str(config.skill_promotion_threshold),
         "default_priority":          str(getattr(config, "default_priority", 1)),
         "approval_auto_approve_after": str(getattr(config, "approval_auto_approve_after", 0)),
+        "approval_wait_timeout":       str(getattr(config, "approval_wait_timeout", 1800)),
         "subtask_timeout":           str(config.subtask_timeout),
         "shell_silence_timeout":     str(config.shell_silence_timeout),
         "agent_workspace_dir":       str(config.agent_workspace_dir),
@@ -709,6 +723,10 @@ class SettingsStore:
         vaa = _int("approval_auto_approve_after")
         if vaa is not None:
             config.approval_auto_approve_after = max(0, min(300, vaa))
+
+        vwt = _int("approval_wait_timeout")
+        if vwt is not None:
+            config.approval_wait_timeout = max(60, min(7200, vwt))
 
         v7 = _int("subtask_timeout")
         if v7 is not None:

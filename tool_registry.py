@@ -165,11 +165,13 @@ class ToolRegistry:
             try:
                 from config import config as _cfg
                 auto_after = float(getattr(_cfg, "approval_auto_approve_after", 0) or 0)
+                wait_to = float(getattr(_cfg, "approval_wait_timeout", 1800) or 1800)
             except Exception:  # noqa: BLE001
                 auto_after = 0.0
+                wait_to = 1800.0
             approved = await self._store.wait_for_resolution(
                 approval_id,
-                timeout=300.0,
+                timeout=wait_to,
                 auto_approve_after=auto_after,
             )
             if not approved:

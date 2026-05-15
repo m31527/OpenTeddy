@@ -4250,6 +4250,21 @@
                     trust the current task.
                   </div>
                 </div>
+                <div class="param-field">
+                  <!-- How long an unanswered approval sits before flipping
+                       to REJECTED. Was 5 min historically, now 30 min
+                       default. Doesn't apply when Auto-approve after is
+                       set (that one wins). -->
+                  <label><span data-i18n="approval_wait_timeout_label">Approval wait timeout (seconds)</span>
+                    <span class="param-value" id="val_approval_wait_timeout">1800</span>
+                  </label>
+                  <input type="range" id="rng_approval_wait_timeout" min="60" max="7200" step="60" value="1800"
+                    oninput="document.getElementById('val_approval_wait_timeout').textContent=this.value" />
+                  <div class="escalation-toggle-hint" data-i18n="approval_wait_timeout_hint"
+                       style="margin-top: 0.4rem;">
+                    How long an unanswered approval waits before auto-rejecting. Default 1800 s (30 min). Doesn't apply when Auto-approve after &gt; 0 (that wins).
+                  </div>
+                </div>
               </div>
               <div class="param-row">
                 <div class="param-field">
@@ -8870,6 +8885,7 @@
         _setSlider('escalation_failure_limit',  s.escalation_failure_limit?.value  ?? 3);
         _setSlider('default_priority',          s.default_priority?.value          ?? 1);
         _setSlider('approval_auto_approve_after', s.approval_auto_approve_after?.value ?? 0);
+        _setSlider('approval_wait_timeout',       s.approval_wait_timeout?.value       ?? 1800);
         // Cache for runTask() — avoid a /settings round-trip per send.
         // Range 1–10 mirrors the Pydantic constraint on Task.priority.
         const dp = parseInt(s.default_priority?.value ?? '1', 10);
@@ -9477,6 +9493,7 @@
         escalation_failure_limit:  document.getElementById('rng_escalation_failure_limit').value,
         default_priority:          document.getElementById('rng_default_priority').value,
         approval_auto_approve_after: document.getElementById('rng_approval_auto_approve_after').value,
+        approval_wait_timeout:       document.getElementById('rng_approval_wait_timeout').value,
         gemma_max_tokens:          document.getElementById('rng_gemma_max_tokens').value,
         qwen_max_tokens:           document.getElementById('rng_qwen_max_tokens').value,
         skill_match_threshold:     document.getElementById('rng_skill_match_threshold').value,
