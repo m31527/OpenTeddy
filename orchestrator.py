@@ -263,19 +263,63 @@ _PLAN_STRICT_HEADER = """\
 """
 
 
+# ── Intent-first decomposition header (Issue #1, 2026-05-16) ────────────────
+# Prepended to every plan-system prompt regardless of mode/tier. The user-
+# observed problem: when a goal contains a numbered "Deliverables:" list
+# or a "Acceptance Criteria:" bullet block, Gemma mirrors that structure
+# 1:1 into subtasks (8 deliverables → 8 subtasks), even when the actual
+# intent collapses to "build a Next.js app" = 1 subtask.
+#
+# Fix: force a step-0 "name the intent in one sentence" before any
+# decomposition. Chain-of-thought style reasoning — Gemma at 2B-4B
+# parameter scale is much better at not-over-decomposing when forced
+# to compress to a single sentence first.
+_PLAN_INTENT_FIRST_HEADER = """\
+【規劃前必做兩步 — 順序很重要】
+
+步驟 1：先用「一句話」寫出使用者真正想要什麼。
+  - 忽略 Deliverables / Acceptance Criteria 等清單細節
+  - 把「list 形式的需求」收斂成單一意圖
+  - 範例：
+      用戶輸入: "Build a web app... 1. site... 2. backend... 3. display..."
+      意圖一句話: "做一個展示 GitHub trending repo 的 web 應用"
+
+步驟 2：根據步驟 1 那一句話的「最小必要 subtask」拆解：
+  - 多數情境只需要 1-2 個 subtask
+  - 只在任務有「獨立階段且彼此 strong ordering」時才用 3-5 個
+    (例如 "clone repo → docker compose up → 驗證健康")
+  - **絕對不要 1:1 鏡射使用者的 numbered list**
+  - 若 deliverables 都屬於同一個「實作階段」→ 合併成 1 個 subtask
+
+關鍵：使用者列出「5 個 deliverables」≠ 你要拆出「5 個 subtask」。
+那 5 個通常是「實作該軟體要包含的功能特性」，全部屬於同一個
+"create the codebase" subtask。
+
+──────────────────────────────────────────────────────────────────
+
+"""
+
+
 def _plan_prompt_for_mode(mode: str, model_name: str = "") -> str:
     """Pick the plan-system prompt that matches the session's mode and
-    bend its strictness to the model's tier (Adaptive Prompts #1)."""
+    bend its strictness to the model's tier (Adaptive Prompts #1).
+
+    Every prompt is prepended with the intent-first decomposition header
+    (Issue #1) so over-decomposition of structured user inputs gets
+    collapsed BEFORE the model starts listing subtasks. Applies to all
+    tiers — Gemma 4 e2b through Claude all benefit from being asked to
+    write the user's intent in one sentence first.
+    """
     from model_profile import model_tier
     base = _PLAN_SYSTEM_CHAT if mode == "chat" else (
         _PLAN_SYSTEM_ANALYTIC if mode == "analytic" else _PLAN_SYSTEM_CODE
     )
     tier = model_tier(model_name)
     if tier == "strict":
-        return _PLAN_STRICT_HEADER + base
+        return _PLAN_INTENT_FIRST_HEADER + _PLAN_STRICT_HEADER + base
     # Mid-range and large models keep the existing prompt — the JSON
     # contract is already restrictive enough; loosening it doesn't help.
-    return base
+    return _PLAN_INTENT_FIRST_HEADER + base
 
 
 def _is_local_only() -> bool:
@@ -390,6 +434,26 @@ _ARTIFACT_EXTENSIONS = (
     ".java", ".go", ".rs", ".cpp", ".hpp", ".rb", ".php",
     ".swift", ".kt", ".scala", ".dart", ".toml", ".dockerfile",
 )
+# Multi-word command phrases that are unambiguously side-effect-producing
+# regardless of what surrounds them in the goal. Catches user-reported
+# "I say tell me what's this project and docker build ..." where the
+# verb+noun pair didn't match (no concrete artifact noun) but the
+# explicit shell phrase makes the production intent obvious.
+# Lowercased; matched via substring-in-string for speed (these are
+# all distinctive enough that false positives are very unlikely —
+# nobody writes "tell me about the history of docker build" expecting
+# pure prose).
+_EXECUTION_PHRASES = (
+    "docker build", "docker run", "docker compose up", "docker compose build",
+    "docker-compose up", "docker-compose build",
+    "npm run build", "npm install", "yarn install", "yarn build",
+    "pnpm install", "pnpm build",
+    "pip install", "uv install", "uv pip install", "uv run",
+    "make build", "make install",
+    "go build", "go install", "cargo build", "cargo install", "cargo run",
+    "git clone", "git pull", "git push",
+    "terraform apply", "kubectl apply",
+)
 # Answer-shaped task starts — exclude these entirely. Match on the
 # first ~30 chars so we catch "describe how..." but not "write a
 # function that describes...".
@@ -406,24 +470,52 @@ def _looks_like_file_producing_task(description: Optional[str]) -> bool:
     appear on disk. Used to detect hallucinated successes — see the
     callsite in _run_subtask for the full rationale.
 
-    Returns False on missing / answer-shaped descriptions so the guard
-    stays conservative.
+    Issue #2A fix (2026-05-17): strong-signal-precedes ordering.
+    Previously this checked the answer-shaped-start blacklist FIRST,
+    which mis-classified goals like "I say tell me what's this project
+    and docker build and tell me the service URL(s)" as pure-answer
+    tasks → skipped the guard entirely. User-reported case where
+    Mixed mode failed to escalate because the empty-artifact check
+    never ran.
+
+    New order:
+      1. Compute production-verb + artifact-noun/ext signals first
+      2. If BOTH are present → return True (strong signal wins, even
+         if the goal starts with "tell me / explain / describe")
+      3. Otherwise apply the answer-shape blacklist as before — pure
+         "explain X" / "what is Y" tasks still skip the guard
     """
     if not description:
         return False
     text = description.strip()
     lower = text.lower()
-    # Answer-shaped tasks → skip. They're allowed to "complete" with
-    # text only.
+
+    has_verb = any(v in lower for v in _FILE_PRODUCTION_VERBS)
+    has_noun = any(n in lower for n in _ARTIFACT_NOUNS)
+    has_ext = any(ext in lower for ext in _ARTIFACT_EXTENSIONS)
+    has_exec_phrase = any(p in lower for p in _EXECUTION_PHRASES)
+
+    # Strong signal #1: production verb + concrete artifact / file ext
+    # → treat as file-producing regardless of how the goal opens.
+    if has_verb and (has_noun or has_ext):
+        return True
+
+    # Strong signal #2: explicit multi-word execution phrase
+    # ("docker build", "npm install", "git clone", …) — these have
+    # unmistakable side effects on disk / container state, so any goal
+    # mentioning them is a production task even when it ALSO contains
+    # "tell me / explain" wrappers (compound goals are common).
+    if has_exec_phrase:
+        return True
+
+    # Otherwise the answer-shape blacklist applies — "explain X" /
+    # "describe Y" without any production signal genuinely IS an
+    # answer task.
     head = lower[:40]
     if any(head.startswith(start) for start in _ANSWER_TASK_STARTS):
         return False
-    has_verb = any(v in lower for v in _FILE_PRODUCTION_VERBS)
-    if not has_verb:
-        return False
-    has_noun = any(n in lower for n in _ARTIFACT_NOUNS)
-    has_ext = any(ext in lower for ext in _ARTIFACT_EXTENSIONS)
-    return has_noun or has_ext
+
+    return False  # weak signal and no answer-shape match either
 
 
 class Orchestrator:

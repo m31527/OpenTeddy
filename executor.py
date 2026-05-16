@@ -1096,6 +1096,21 @@ class Executor:
                 # MySQL/Docker errors). If any match, we'll clamp confidence
                 # at the end so Claude escalation kicks in even if Qwen
                 # self-reports high confidence.
+                #
+                # Coverage guarantee (Issue #2B, verified 2026-05-17):
+                # `json.dumps(tool_result)` serialises the WHOLE dict —
+                # including `result.stdout`, `result.stderr`, top-level
+                # `error`, and any other field a tool happens to emit.
+                # So a `command not found` showing up in stderr fires
+                # the regex just as reliably as one in stdout. Tested
+                # against shell_tool returning the 4 canonical shapes:
+                #   - docker not found (stderr only)            → CLAMP
+                #   - container unhealthy (stdout from docker ps) → CLAMP
+                #   - yaml parse error (stderr from compose)     → CLAMP
+                #   - clean success (no signals anywhere)        → pass
+                # DON'T regress by switching to a stdout-only scan when
+                # refactoring this block.
+                #
                 # IMPORTANT: skip pure file-read tools — their output is
                 # *data*, not log lines, so a CSV row containing the words
                 # "command not found" or "no such file" inside a customer
