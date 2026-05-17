@@ -218,7 +218,20 @@ cd ~/OpenTeddy
 ./run.sh --open      # boots uvicorn on :8000 + opens browser
 ```
 
-Customisation flags: `--dir <path>`, `--force`, `--skip-models`. See `./install.sh --help`.
+`./run.sh` auto-activates `.venv`, pings the Ollama daemon, then runs `uvicorn main:app --reload` so editing source hot-reloads the backend. Common flags:
+
+```bash
+./run.sh                    # local-only on 127.0.0.1:8000 (the safe default)
+./run.sh --open             # also opens http://localhost:8000 in your browser
+./run.sh --port 8001        # bind a different port
+./run.sh --host 0.0.0.0     # ⚠ expose to LAN / Tailscale / other machines
+./run.sh --no-reload        # production-style — don't watch for file changes
+./run.sh --help             # full flag list
+```
+
+> ⚠️ **`--host 0.0.0.0` opens the agent to every machine on your network.** The agent has `shell_exec_write` / `delete_file` and other powerful tools — anything on the LAN that can reach the port can drive it. Only use `0.0.0.0` when you trust every device on the network (private home LAN / Tailscale tailnet / dedicated server behind a firewall). For public servers, put it behind nginx / Caddy / Cloudflare Tunnel with auth.
+
+Customisation flags for the **installer**: `--dir <path>`, `--force`, `--skip-models`. See `./install.sh --help`.
 
 ## Quick Start (manual)
 

@@ -83,6 +83,21 @@ cp .env.example .env
 
 ### 4. 啟動
 
+最方便的方式是用內建的 `./run.sh`——會自動 activate `.venv`、檢查 Ollama、跑 `uvicorn main:app --reload`：
+
+```bash
+./run.sh                    # 預設只綁 127.0.0.1:8000（安全預設）
+./run.sh --open             # 同時開瀏覽器
+./run.sh --port 8001        # 換 port
+./run.sh --host 0.0.0.0     # ⚠ 開放給整個區網 / Tailscale / 其他機器
+./run.sh --no-reload        # production 風格——不監看檔案改動
+./run.sh --help             # 看完整 flags
+```
+
+> ⚠️ **`--host 0.0.0.0` 等於把 agent 開放給所有同網段的機器**。Agent 有 `shell_exec_write` / `delete_file` 之類強力工具——區網內任何能連到該 port 的裝置都能驅動它。只有在你信任網段上每一台機器（私人家用網段 / Tailscale tailnet / 防火牆後的專屬伺服器）才用 `0.0.0.0`。公網伺服器請放在 nginx / Caddy / Cloudflare Tunnel 後面並加上認證。
+
+不想用 `run.sh`？直接：
+
 ```bash
 uvicorn main:app --reload
 # 儀表板： http://localhost:8000
