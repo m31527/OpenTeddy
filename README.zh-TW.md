@@ -40,7 +40,7 @@
 - **永跑指令防呆** — shell tool 自動拒絕 `tail -f`、`journalctl -f`、`watch …`，並把 `docker compose up` 自動加上 `-d`，restart-crash 容器的 log 串流不會把 subtask 卡死。
 - **內建 web search** — Chat mode 開啟 `web_search` 工具（Brave Search API），地端模型可以查最新資料而不是亂編訓練 cutoff 後的事件。
 - **斷線可恢復的 WS** — 600 筆 ring buffer + `?since=` 重播，網路抖一下、刷新分頁都不會卡 UI。
-- **技能會自己長出來** — 重複的任務會被升級成可重用的 Python 技能，越用越快。
+- **技能會自己長出來** — 透過 ChromaDB embedding 偵測重複的 goal pattern（不依賴小模型自我反思），當過去有 N 個語意相近的 goal 達標時自動合成技能名稱+描述，交給 Claude 寫成 Python 函式。可在 Settings 調整門檻（預設 3 次重複、相似度 0.75）。
 - **Web 儀表板** — 提交任務、即時看工具呼叫、審核敏感指令、管理記憶、即時顯示「已省 $X vs GPT-4」，還有 GFM 表格 + Chart.js 數值標籤 HTML 報表。
 - **Capabilities tab** — 內建 Tools 跟自動長出來的 Skills 合併在同一個可篩選列表，type badge 標明來源；技能用越多自動從 TESTING 升 ACTIVE。
 - **macOS 原生客戶端** — Tauri 2.x 殼，引導精靈（Ollama 一鍵安裝 + 機器分級拉模型）、語言切換器、模式鎖定、可自由拖動的視窗、自動更新、診斷下載。詳見 [`desktop/`](desktop/)。
@@ -108,10 +108,10 @@ uvicorn main:app --reload
 
 | 作業系統 | 狀態 | 備註 |
 |----------|------|------|
-| **macOS**（Intel / Apple Silicon） | ✅ 完全支援 | 主要開發環境 |
-| **Linux** | ✅ 完全支援 | 任何有 Python 3.11+ 與 Ollama 的發行版 |
-| **Windows（原生）** | ⚠️ 部分支援，建議改用 WSL2 | 見下方注意事項 |
-| **Windows（WSL2）** | ✅ 完全支援 | 等同於 Linux，Windows 使用者推薦此路徑 |
+| **macOS**（Apple Silicon） | ✅ 原生桌面版 `.dmg`（已簽章＋公證）+ OSS web | 主要開發環境 |
+| **Linux** (x86_64) | ✅ 原生桌面版 `.AppImage` / `.deb` *(v1.0.3 新增)* + OSS web | 透過 GitHub Actions Ubuntu 22.04 runner 自動建置，AppImage 適用任何 glibc 2.34+ 的發行版 |
+| **Windows（原生）** | ⚠️ 部分支援，建議改用 WSL2 | 見下方注意事項。原生桌面版安裝程式尚在規劃中 |
+| **Windows（WSL2）** | ✅ 完全支援（OSS web） | 等同於 Linux，Windows 使用者推薦此路徑 |
 
 ### Windows 原生環境的注意事項
 

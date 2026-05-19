@@ -330,11 +330,44 @@ Set `OPENTEDDY_LLM_MODE=local` in `.env` if you want the local-only choice baked
 
 ## Self-Growth Mechanism
 
-1. When Qwen executes a subtask it suggests a **skill name** if a reusable function would have helped.
-2. The Executor calls `SkillFactory.generate_skill()` in the background.
-3. Claude writes the skill as an `async def run(input_data: dict) -> str` function and saves it to `skills/<name>.py`.
-4. The skill starts in **TESTING** status. After `SKILL_PROMOTION_THRESHOLD` successful invocations it is promoted to **ACTIVE**.
-5. Future tasks automatically match and invoke active skills — no LLM call needed.
+OpenTeddy learns by spotting **patterns in your usage**, not by asking the
+local model to introspect about itself. The mechanism:
+
+1. **Embedding-based pattern detection** — after each successful task,
+   the orchestrator searches ChromaDB for past `task_result` memories
+   whose embedding is semantically close to the just-finished goal.
+   When ≥ `SKILL_AUTO_DETECT_MIN_REPEATS` (default **3**) past goals
+   score ≥ `SKILL_AUTO_DETECT_SIMILARITY` (default **0.75**) — that's a
+   recurring pattern.
+2. **Cluster → skill synthesis** — the recurring goals are bundled into
+   a small prompt to your configured orchestrator LLM (Gemma locally,
+   or your cloud provider in Cloud mode), which returns a JSON
+   `{name, description}` capturing the reusable function.
+3. **Code generation** — `SkillFactory.generate_skill(name, description)`
+   asks Claude (or whichever cloud LLM is configured) to write the
+   `async def run(input_data: dict) -> str` function and saves it to
+   `skills/<name>.py`.
+4. **Promotion** — the skill starts in `TESTING`. After
+   `SKILL_PROMOTION_THRESHOLD` (default 5) successful invocations it's
+   promoted to `ACTIVE`.
+5. **Future task matching** — future goals that match an `ACTIVE`
+   skill at ≥ `SKILL_MATCH_THRESHOLD` (default 0.4) invoke it
+   directly, skipping the LLM tool-call round entirely.
+
+### Why this design
+
+The original mechanism asked the executor LLM to set
+`skill_needed`/`skill_description` in its JSON output. Empirically, 2-3B
+parameter models almost never produce that kind of metacognitive
+self-flag — verified on a real install with > 100 tasks and zero
+auto-generated skills. The embedding approach moves the "is this
+recurring" judgment from the model's introspection (unreliable) to a
+deterministic similarity check against memory (reliable).
+
+Tunable knobs live in Settings → Parameter Settings, or via the
+`SKILL_AUTO_DETECT_*` env vars in `.env`. Set `min_repeats=0` to
+disable auto-detection entirely (skills can still be created manually
+via `POST /skills/generate?name=…&description=…`).
 
 ## Pricing & licensing
 
@@ -422,7 +455,10 @@ without a server restart.
 | `ESCALATION_FAILURE_LIMIT` | `3` | Max consecutive failures before escalation. |
 | `SUBTASK_TIMEOUT` | `900` | Wall-clock seconds before a subtask is treated as hung. Real hang detection is via `SHELL_SILENCE_TIMEOUT`; this is just the ceiling. |
 | `SHELL_SILENCE_TIMEOUT` | `180` | Kill a shell command after this many seconds of no stdout/stderr output. Long-but-active commands (docker build, pip install) stay alive as long as they're printing progress. |
-| `SKILL_PROMOTION_THRESHOLD` | `5` | Successes needed to promote a skill. |
+| `SKILL_PROMOTION_THRESHOLD` | `5` | Successes needed to promote a `TESTING` skill to `ACTIVE`. |
+| `SKILL_AUTO_DETECT_MIN_REPEATS` | `3` | Min number of past goals that must match the current goal (above the similarity floor) before OpenTeddy synthesises a new skill. Set to `0` to disable auto-detection entirely. |
+| `SKILL_AUTO_DETECT_SIMILARITY` | `0.75` | Cosine-similarity floor (0.0-1.0) for counting a past task as "recurring". Calibrated against ChromaDB's default MiniLM embedder; bump to ~0.9 if you see weird skills getting generated, drop to ~0.65 if expected patterns aren't being caught. |
+| `SKILL_MATCH_THRESHOLD` | `0.4` | Min similarity to match an existing `ACTIVE` skill against a new goal — skips the LLM round entirely on match. |
 | `APPROVAL_AUTO_APPROVE_AFTER` | `0` | Seconds after which a high-risk approval auto-resolves to **approved**. 0 = off (the safer default — wait for explicit click). |
 
 ### Performance toggles (loop hardening)
