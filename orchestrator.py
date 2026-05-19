@@ -594,6 +594,36 @@ class Orchestrator:
         await self.tracker.create_task(req)
         await self.tracker.update_task_status(req.id, TaskStatus.RUNNING)
 
+        # ── 0. Intent classifier (fast-path for pure-chat goals) ──────
+        # Before paying for plan → execute → summary on goals that
+        # legitimately don't need tools (questions, explanations,
+        # opinions), classify the goal in ~100ms and short-circuit
+        # straight to a single-LLM-turn answer. Cuts ~25 seconds off
+        # the latency for "what is X" style questions that were
+        # previously running a full empty tool loop.
+        #
+        # Conservative: only fires when the classifier is confident
+        # (>= 0.7) AND says BOTH needs_tools=False AND is_pure_chat=True.
+        # Any uncertainty falls through to the normal plan→execute flow.
+        if getattr(config, "intent_classifier_enabled", True):
+            try:
+                intent = await self._classify_intent(req.goal, session_mode)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Intent classifier failed (non-fatal): %s", exc)
+                intent = None
+            if (intent
+                    and not intent.get("needs_tools", True)
+                    and intent.get("is_pure_chat", False)
+                    and float(intent.get("confidence", 0.0)) >= 0.7):
+                logger.info(
+                    "Fast-path engaged: intent=chat conf=%.2f reason=%r",
+                    intent["confidence"],
+                    intent.get("rationale", "")[:80],
+                )
+                return await self._fast_chat_response(
+                    req, session_mode, intent,
+                )
+
         try:
             # 1. Plan (with optional memory context)
             subtasks = await self._plan(req)
@@ -1490,6 +1520,189 @@ class Orchestrator:
             lines = [f"{_L(goal, 'task_completed')}: {goal}", "", tool_log[:1000]]
             return "\n".join(lines)
         return result
+
+    # ── Intent classifier (fast-path for pure-chat goals) ────────────────────
+    # Run at the top of orchestrator.run() — classifies the user's goal as
+    # "needs tools / pure chat" via a single Gemma call (~100ms on a local
+    # model, longer on cloud). When the classifier is confident and says
+    # the goal doesn't need tools, the run() loop short-circuits to a
+    # single-turn _fast_chat_response(), saving 5-30s of empty subtask /
+    # tool loop work on every "what is X" / "explain Y" / "how does Z"
+    # question. Conservative — when in doubt, fall back to full flow.
+    _INTENT_CLASSIFIER_SYSTEM = (
+        "You classify a user goal into routing decisions for an AI agent. "
+        "Reply with ONE JSON object and nothing else (no markdown fences, "
+        "no prose):\n"
+        '{"needs_tools": <bool>, "is_pure_chat": <bool>, '
+        '"confidence": <0.0-1.0>, "rationale": "<short>"}\n\n'
+        "needs_tools=true  → goal genuinely needs shell / file / db / http / "
+        "code execution (build something, install, deploy, analyse a file, "
+        "query a DB, scrape a URL, …).\n"
+        "needs_tools=false → goal is answerable from training data + "
+        "memory alone (explain, describe, define, compare concepts, recommend, "
+        "what / how / why / which questions about general knowledge).\n"
+        "is_pure_chat=true → conversational / informational; output is "
+        "going to be prose, not files or side effects.\n"
+        "confidence: 0.5-1.0. Below 0.7 means \"not sure\" — caller will "
+        "default to the full tool loop rather than risk skipping needed work.\n\n"
+        "Examples:\n"
+        '- "Build a Next.js GitHub trending app" → {"needs_tools": true, "is_pure_chat": false, "confidence": 0.95, "rationale": "build implies file creation"}\n'
+        '- "What is OpenTeddy?" → {"needs_tools": false, "is_pure_chat": true, "confidence": 0.95, "rationale": "pure info question"}\n'
+        '- "Explain how docker compose works" → {"needs_tools": false, "is_pure_chat": true, "confidence": 0.92, "rationale": "explanation only"}\n'
+        '- "Analyze sales.csv" → {"needs_tools": true, "is_pure_chat": false, "confidence": 0.9, "rationale": "needs file access"}\n'
+        '- "What\'s a good model for code generation?" → {"needs_tools": false, "is_pure_chat": true, "confidence": 0.9, "rationale": "opinion / recommendation"}\n'
+        '- "Install pandas" → {"needs_tools": true, "is_pure_chat": false, "confidence": 0.9, "rationale": "pip install side effect"}\n'
+        '- "Tell me what frameworks this app uses" → {"needs_tools": true, "is_pure_chat": false, "confidence": 0.8, "rationale": "needs to read project files"}'
+    )
+
+    async def _classify_intent(
+        self, goal: str, session_mode: str,
+    ) -> Optional[Dict[str, Any]]:
+        """Single-shot intent classification. Returns a dict with
+        needs_tools, is_pure_chat, confidence, rationale — or None on
+        any parse / network failure (caller defaults to full flow).
+
+        Uses _orchestrator_complete so the call routes through the
+        currently-active provider (local Gemma in mixed / local mode,
+        cloud LLM in cloud mode) without separate plumbing.
+        """
+        if not goal or not goal.strip():
+            return None
+        prompt = f"Session mode hint: {session_mode}\nUser goal: {goal.strip()}"
+        try:
+            raw = await self._orchestrator_complete(
+                prompt,
+                self._INTENT_CLASSIFIER_SYSTEM,
+                task_description="[intent-classify]",
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("intent classify LLM call failed: %s", exc)
+            return None
+        # Be tolerant of extra prose / code fences — small models
+        # sometimes can't help themselves even with explicit instructions.
+        import re as _re
+        match = _re.search(r"\{[\s\S]*\}", raw or "")
+        if not match:
+            return None
+        try:
+            data = json.loads(match.group())
+        except json.JSONDecodeError:
+            return None
+        return {
+            # Safe defaults — when a key is missing, prefer "do the full
+            # work" over "skip tools".
+            "needs_tools":   bool(data.get("needs_tools", True)),
+            "is_pure_chat":  bool(data.get("is_pure_chat", False)),
+            "confidence":    float(data.get("confidence", 0.5) or 0.5),
+            "rationale":     str(data.get("rationale", ""))[:200],
+        }
+
+    async def _fast_chat_response(
+        self,
+        req: TaskRequest,
+        session_mode: str,
+        intent: Dict[str, Any],
+    ) -> TaskResult:
+        """Pure-chat fast path: bypass plan + execute + summary entirely,
+        answer the goal in a single LLM turn. Used when _classify_intent
+        flagged the goal as needs_tools=False with high confidence.
+
+        We still:
+          - Persist a synthetic single-SubTask for tracker schema
+            integrity (DB queries assume every task has subtasks)
+          - Write to long-term memory so the conversation thread is
+            preserved
+          - Fire the skill auto-detection check (a recurring chat
+            question is just as valid a skill candidate as a recurring
+            tool task)
+        """
+        # Pull memory context the same way _plan does so the answer
+        # benefits from session history.
+        memory_ctx = ""
+        if self.memory is not None and self.memory.is_available:
+            try:
+                memory_ctx = await self.memory.get_context_for_task(
+                    req.goal, session_id=req.session_id,
+                )
+            except Exception:  # noqa: BLE001
+                pass
+
+        system = (
+            "You are OpenTeddy, a helpful and concise AI assistant. "
+            "The user asked a question that doesn't require running "
+            "tools — answer directly. Keep the response tight and "
+            "useful; use markdown for structure where it helps."
+        )
+        if memory_ctx:
+            system += "\n\n--- Relevant memory ---\n" + memory_ctx
+
+        # Stream so the user gets tokens as they generate — same UX as
+        # the full-loop chat-mode finalize step.
+        answer = await self._orchestrator_complete(
+            req.goal,
+            system,
+            task_id=req.id,
+            task_description=f"[fast-chat] {req.goal[:100]}",
+        )
+        if not answer or not answer.strip():
+            # Defensive: empty response shouldn't happen but let the
+            # full flow handle it rather than returning blank.
+            logger.warning(
+                "Fast-path returned empty answer — falling back to full flow"
+            )
+            raise RuntimeError("fast-path empty response")
+
+        # Synthetic subtask record. Confidence carries the classifier's
+        # confidence so the Usage tab perf stats can distinguish fast-
+        # path tasks from full-loop ones.
+        fake_st = SubTask(
+            parent_task_id=req.id,
+            description=req.goal,
+            agent=AgentRole.EXECUTOR,
+            order=0,
+            status=TaskStatus.COMPLETED,
+            result=answer.strip(),
+            confidence=float(intent.get("confidence", 0.9)),
+        )
+        try:
+            await self.tracker.create_subtask(fake_st)
+            await self.tracker.update_subtask(fake_st)
+            await self.tracker.update_task_status(
+                req.id, TaskStatus.COMPLETED, answer.strip(),
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Fast-path tracker write failed: %s", exc)
+
+        # Memory write — same as full flow's step 5.
+        if self.memory is not None:
+            try:
+                await self.memory.summarize_and_store(
+                    task_id=req.id,
+                    goal=req.goal,
+                    final_output=answer,
+                    session_id=req.session_id,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Memory store (fast-path) failed: %s", exc)
+
+        # Skill detection still fires — a recurring "what is X" pattern
+        # is a legitimate skill candidate (could become a cached info
+        # response).
+        if (self.memory is not None
+                and self.memory.is_available
+                and not _is_local_only()):
+            asyncio.create_task(
+                self._maybe_promote_pattern_to_skill(req)
+            )
+
+        return TaskResult(
+            task_id=req.id,
+            status=TaskStatus.COMPLETED,
+            summary=answer.strip(),
+            subtasks=[fake_st],
+            skills_used=[],
+            new_skills_created=[],
+        )
 
     # ── Skill auto-detection (embedding-based) ────────────────────────────────
     # Why this exists: the original mechanism required Qwen to emit

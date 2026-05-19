@@ -467,6 +467,22 @@ class Config:
         default_factory=lambda: float(os.getenv("SKILL_MATCH_THRESHOLD", "0.4"))
     )
 
+    # ── Intent classifier (fast-path for pure-chat goals) ──────────────────
+    # Added 2026-05-19. Before paying for the full plan → execute → summary
+    # loop on goals that obviously don't need tools ("what is X", "explain
+    # how Y works", "recommend a Z"), classify the goal in ~100ms and
+    # short-circuit to a single-turn LLM response.
+    #
+    # Set to False to disable entirely — every task then goes through the
+    # full loop (the pre-2026-05-19 behaviour). Useful if you're seeing
+    # the classifier mis-route a goal that DOES need tools as pure chat,
+    # or just want predictable timing.
+    intent_classifier_enabled: bool = field(
+        default_factory=lambda: os.getenv(
+            "INTENT_CLASSIFIER_ENABLED", "true"
+        ).strip().lower() not in {"0", "false", "no", "off"}
+    )
+
     # ── Skill auto-detection (embedding-based pattern promotion) ─────────────
     # Pre-2026-05-18 skill creation depended entirely on Qwen self-flagging
     # `skill_needed` in its JSON output, which 2-3B models almost never do
@@ -641,6 +657,11 @@ class Config:
         v6 = _i("skill_promotion_threshold")
         if v6 is not None:
             self.skill_promotion_threshold = v6
+
+        if "intent_classifier_enabled" in settings:
+            self.intent_classifier_enabled = (
+                str(settings["intent_classifier_enabled"]).strip().lower() not in _OFF
+            )
 
         vsd = _i("skill_auto_detect_min_repeats")
         if vsd is not None:

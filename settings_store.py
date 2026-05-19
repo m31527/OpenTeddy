@@ -234,6 +234,19 @@ SETTINGS_META: dict[str, dict[str, Any]] = {
         "min":         1,
         "max":         50,
     },
+    "intent_classifier_enabled": {
+        "label":       "Intent classifier (fast-path for chat questions)",
+        "description": "Before running the full plan → execute → summary "
+                       "loop on a goal, classify it via a fast LLM call. "
+                       "If the goal clearly doesn't need tools ('what is "
+                       "X', 'explain Y'), bypass the tool loop entirely "
+                       "and answer in one turn — typically 25 seconds "
+                       "faster for chat-style questions. Turn off if you "
+                       "see the classifier mis-routing goals that DO need "
+                       "tools, or just want every task to follow the same "
+                       "path for predictable timing.",
+        "type":        "bool",
+    },
     "skill_auto_detect_min_repeats": {
         "label":       "Skill auto-detect — min repeats",
         "description": "After a successful task, scan past task memories "
@@ -417,6 +430,7 @@ def _defaults_from_config() -> dict[str, str]:
         "qwen_max_tokens":          str(config.qwen_max_tokens),
         "skill_match_threshold":    str(getattr(config, "skill_match_threshold", "0.4")),
         "skill_promotion_threshold": str(config.skill_promotion_threshold),
+        "intent_classifier_enabled":   "true" if getattr(config, "intent_classifier_enabled", True) else "false",
         "skill_auto_detect_min_repeats": str(getattr(config, "skill_auto_detect_min_repeats", 3)),
         "skill_auto_detect_similarity":  str(getattr(config, "skill_auto_detect_similarity", 0.85)),
         "default_priority":          str(getattr(config, "default_priority", 1)),
@@ -740,6 +754,12 @@ class SettingsStore:
         v6 = _int("skill_promotion_threshold")
         if v6 is not None:
             config.skill_promotion_threshold = v6
+
+        if "intent_classifier_enabled" in settings:
+            config.intent_classifier_enabled = (
+                str(settings["intent_classifier_enabled"]).strip().lower()
+                not in {"0", "false", "no", "off", ""}
+            )
 
         vsd = _int("skill_auto_detect_min_repeats")
         if vsd is not None:

@@ -3985,6 +3985,17 @@
                   <span class="escalation-toggle-hint" data-i18n="session_workspace_isolation_hint">Each new session gets its own subdir so files from other sessions never bleed in. Turn off if you'd rather have one shared root.</span>
                 </span>
               </label>
+              <!-- Intent classifier fast-path (added 2026-05-19). For pure
+                   info / chat questions, skip the plan→execute→summary
+                   loop entirely. ~25s faster on "what is X" / "explain Y"
+                   goals. Falls back to full flow on any uncertainty. -->
+              <label class="escalation-toggle">
+                <input type="checkbox" id="chk_intent_classifier_enabled" checked />
+                <span class="escalation-toggle-text">
+                  <span class="escalation-toggle-title" data-i18n="intent_classifier_enabled_label">Fast-path for chat questions</span>
+                  <span class="escalation-toggle-hint" data-i18n="intent_classifier_enabled_hint">Classify each goal first; pure info questions ("what is X", "explain Y") get answered in one LLM turn — typically 25 seconds faster than going through the full tool loop. Falls back to the full flow on any uncertainty.</span>
+                </span>
+              </label>
               <!-- ── Cloud LLM Provider switcher ────────────────────
                    The provider selector comes FIRST, then the matching
                    vendor's key+model row shows below. Picking a vendor
@@ -8893,6 +8904,11 @@
           const v = String(s.session_workspace_isolation?.value ?? 'true').toLowerCase();
           isoEl.checked = !['0', 'false', 'no', 'off'].includes(v);
         }
+        const intEl = document.getElementById('chk_intent_classifier_enabled');
+        if (intEl) {
+          const v = String(s.intent_classifier_enabled?.value ?? 'true').toLowerCase();
+          intEl.checked = !['0', 'false', 'no', 'off'].includes(v);
+        }
         _setInput('inp_gemma_base_url', s.gemma_base_url?.value ?? '');
         _setInput('inp_qwen_base_url',  s.qwen_base_url?.value  ?? '');
         _setInput('inp_agent_workspace_dir', s.agent_workspace_dir?.value ?? './agent-workspace');
@@ -9512,6 +9528,7 @@
         escalation_enabled:        ((document.querySelector('input[name="llm_mode"]:checked')?.value || 'mixed') === 'mixed') ? 'true' : 'false',
         streaming_enabled:         document.getElementById('chk_streaming_enabled').checked ? 'true' : 'false',
         session_workspace_isolation: document.getElementById('chk_session_workspace_isolation').checked ? 'true' : 'false',
+        intent_classifier_enabled:   document.getElementById('chk_intent_classifier_enabled').checked ? 'true' : 'false',
         gemma_base_url:            document.getElementById('inp_gemma_base_url').value.trim(),
         qwen_base_url:             document.getElementById('inp_qwen_base_url').value.trim(),
         escalation_threshold:      document.getElementById('rng_escalation_threshold').value,
