@@ -708,6 +708,21 @@ class Orchestrator:
                 except Exception as exc:  # noqa: BLE001
                     logger.warning("Memory store failed (non-fatal): %s", exc)
 
+            # 6. Auto-detect recurring goal patterns → promote to skill
+            #    (only fires on a successfully completed task to avoid
+            #    learning broken patterns). Async fire-and-forget — the
+            #    user shouldn't have to wait for skill synthesis to see
+            #    their task result.
+            if (overall_status == TaskStatus.COMPLETED
+                    and self.memory is not None
+                    and self.memory.is_available
+                    and not _is_local_only()):
+                # Schedule as background task — embedding query + LLM
+                # synthesis takes 1-3 s and shouldn't delay the return.
+                asyncio.create_task(
+                    self._maybe_promote_pattern_to_skill(req)
+                )
+
             return TaskResult(
                 task_id=req.id,
                 status=overall_status,
@@ -1475,6 +1490,166 @@ class Orchestrator:
             lines = [f"{_L(goal, 'task_completed')}: {goal}", "", tool_log[:1000]]
             return "\n".join(lines)
         return result
+
+    # ── Skill auto-detection (embedding-based) ────────────────────────────────
+    # Why this exists: the original mechanism required Qwen to emit
+    # skill_needed + skill_description in its JSON output, but 2-3B
+    # parameter models almost never do metacognitive "this could be a
+    # reusable function" reflection — and we have empirical confirmation
+    # that 0 skills have been generated in 1+ month of real usage.
+    #
+    # New approach: AFTER each successful task, run a semantic similarity
+    # search against past task_result memories. If ≥ N past goals match
+    # the current goal at ≥ similarity threshold, that's a recurring
+    # pattern → synthesize a skill name + description via the cloud LLM
+    # and ask skill_factory to materialise it.
+    #
+    # Background-fires from orchestrator.run() so the user gets their
+    # task result back without waiting for the embedding lookup + LLM
+    # synthesis (1-3 s total).
+    async def _maybe_promote_pattern_to_skill(
+        self, req: TaskRequest,
+    ) -> None:
+        """Detect recurring-goal patterns and ask SkillFactory to make one.
+
+        No-op on missing memory, disabled detection, or insufficient
+        repetition. Swallows all errors — skill auto-detection is a
+        nice-to-have, not a correctness guarantee.
+        """
+        try:
+            from config import config as _cfg
+            min_repeats = int(getattr(_cfg, "skill_auto_detect_min_repeats", 3))
+            similarity_threshold = float(
+                getattr(_cfg, "skill_auto_detect_similarity", 0.85)
+            )
+            if min_repeats <= 0:
+                return  # explicitly disabled
+
+            # Search across ALL sessions (no session_id filter) — recurring
+            # patterns can appear in different sessions and that's exactly
+            # the case where a skill is most useful.
+            similar = await self.memory.search_memory(
+                query=req.goal,
+                n_results=min_repeats + 5,
+            )
+
+            # Keep only task_result memories from OTHER tasks above threshold.
+            # Excluding self.id matters because this task's own memory has
+            # already been written (step 5 fires before us in run()).
+            matching = [
+                m for m in (similar or [])
+                if m.get("type") == "task_result"
+                   and m.get("task_id") != req.id
+                   and float(m.get("relevance_score", 0.0)) >= similarity_threshold
+            ]
+            if len(matching) < min_repeats:
+                logger.debug(
+                    "Skill auto-detect: only %d similar tasks (need %d) — "
+                    "not promoting yet",
+                    len(matching), min_repeats,
+                )
+                return
+
+            # Pattern confirmed — synthesise a name + description.
+            cluster_goals = [req.goal] + [
+                str(m.get("content", ""))[:200] for m in matching
+            ]
+            skill_name, skill_desc = await self._synthesize_skill_from_cluster(
+                cluster_goals, task_id=req.id,
+            )
+            if not skill_name or not skill_desc:
+                logger.info(
+                    "Skill auto-detect: pattern matched (%d×) but synthesis "
+                    "returned empty name/desc — skipping", len(matching),
+                )
+                return
+
+            # De-dup: only ask SkillFactory once per name.
+            try:
+                existing = await self.skill_factory.tracker.get_skill(skill_name)
+                if existing:
+                    logger.debug(
+                        "Skill auto-detect: '%s' already exists — skipping",
+                        skill_name,
+                    )
+                    return
+            except Exception:  # noqa: BLE001
+                pass  # tracker lookup is best-effort; proceed
+
+            logger.info(
+                "Skill auto-detect: recurring pattern (%d matches ≥ %.2f) → "
+                "generating skill '%s'",
+                len(matching), similarity_threshold, skill_name,
+            )
+            await self.skill_factory.generate_skill(skill_name, skill_desc)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "Skill auto-detect failed (non-fatal): %s", exc,
+            )
+
+    async def _synthesize_skill_from_cluster(
+        self, cluster_goals: List[str], task_id: str = "",
+    ) -> Tuple[Optional[str], Optional[str]]:
+        """Ask the orchestrator LLM to derive a skill name + description
+        from a cluster of similar goals. Returns (name, description) or
+        (None, None) on any failure / malformed response.
+
+        Uses _orchestrator_complete so the call respects llm_mode (cloud
+        in cloud mode, local Gemma otherwise) — no extra config plumbing.
+        """
+        if not cluster_goals:
+            return None, None
+
+        # Compact prompt — small models do better with sharp constraints.
+        # The cluster is small (3-10 goals) so we don't need to truncate.
+        goals_blob = "\n".join(
+            f"- {g.strip()[:240]}" for g in cluster_goals[:10] if g
+        )
+        system = (
+            "You analyse a CLUSTER of similar user goals from an AI "
+            "agent's history and decide if they share a clear reusable "
+            "pattern. Reply ONLY with a single JSON object in this exact "
+            "shape — no markdown fences, no preamble:\n"
+            '{"name": "<snake_case, max 40 chars>", '
+            '"description": "<single sentence under 200 chars describing '
+            'what the reusable function does>"}\n'
+            "If the goals are too heterogeneous to form one skill, reply "
+            'with {"name": "", "description": ""} instead.'
+        )
+        prompt = (
+            "Cluster of recurring goals (most recent first):\n"
+            f"{goals_blob}\n\n"
+            "What is the single reusable skill that captures this pattern?"
+        )
+
+        try:
+            raw = await self._orchestrator_complete(
+                prompt, system,
+                task_id=task_id,
+                task_description="[skill-synth]",
+            )
+            # Best-effort JSON parse — tolerant of extra prose / fences
+            # the model sometimes wraps despite the instruction.
+            import re as _re
+            match = _re.search(r"\{[\s\S]*\}", raw or "")
+            if not match:
+                return None, None
+            data = json.loads(match.group())
+            name = (data.get("name") or "").strip()
+            desc = (data.get("description") or "").strip()
+            if not name or not desc:
+                return None, None
+            # Sanitise name: snake_case, alphanumeric + underscore only,
+            # ≤ 40 chars. Falls back to the first 40 chars stripped of
+            # junk if the model gave us something weird.
+            import re as _re2
+            name = _re2.sub(r"[^a-z0-9_]+", "_", name.lower()).strip("_")[:40]
+            if not name:
+                return None, None
+            return name, desc[:240]
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Skill synthesis failed: %s", exc)
+            return None, None
 
     async def _run_confirmation_checks(
         self, goal: str, subtasks: Optional[List[SubTask]] = None,

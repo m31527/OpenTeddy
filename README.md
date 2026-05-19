@@ -27,8 +27,9 @@ commercial-LLM escalation to finish what local can't.
 
 | | |
 |:-:|:-:|
-| 🍎 **macOS desktop** | [`OpenTeddy-1.0.1-aarch64.dmg`](https://openteddy.net/download/mac) (105 MB, Apple Silicon, signed + notarized) |
-| 🐧 **Linux / WSL2** | `curl -fsSL https://openteddy.net/install \| bash` |
+| 🍎 **macOS desktop** | [`OpenTeddy-1.0.2-aarch64.dmg`](https://openteddy.net/download/mac) (105 MB, Apple Silicon, signed + notarized) |
+| 🐧 **Linux desktop**  *(NEW)* | `.AppImage` / `.deb` for x86_64 — see [Releases](https://github.com/m31527/OpenTeddy/releases) (auto-built via GitHub Actions on every tag) |
+| 🐧 **Linux / WSL2 OSS** | `curl -fsSL https://openteddy.net/install \| bash` |
 | 🐳 **Docker** | see [Docker Deployment](#docker-deployment) below |
 
 [View all releases ↗](https://github.com/m31527/OpenTeddy/releases)
@@ -70,7 +71,7 @@ Claude Pro auto-renewing.
 - **PDF analysis** — drop a `.pdf` into chat, ask questions; the agent extracts text page-by-page (CJK supported) and can cite page numbers. Image-only PDFs are flagged honestly rather than fabricated.
 - **Connect a database to any session** — Postgres / MySQL / SQLite / MSSQL / Oracle / DuckDB via SQLAlchemy. Two-step Test → Connect modal. Destructive SQL (`DELETE` / `DROP` / `TRUNCATE` / `UPDATE`) is hard-blocked on every code path — defence in depth.
 - **Per-session workspace isolation** — each new session gets its own `agent-workspace/sessions/<id>/`; files from one session never bleed into another. Toggleable in Settings.
-- **Self-growing skills** — repeated tasks are promoted into reusable Python skills, cutting LLM calls over time.
+- **Self-growing skills** — recurring goal patterns are auto-detected via ChromaDB embedding similarity (no model self-flagging needed); when N+ similar past goals are found above the similarity floor, OpenTeddy synthesises a skill name + description and asks Claude to generate the Python function. Tunable via Settings → "Skill auto-detect" knobs (default: 3 repeats at 0.75 similarity).
 - **Streaming UI** — both the orchestrator's planning and the executor's answer stream token-by-token via WebSocket — no more staring at a spinner while the model thinks.
 - **Per-step deliverable verification** — LLM-as-judge confirms each produced file actually matches the goal, catching the "wrote a report *about* the game instead of the game" failure mode. Toggleable for big-model setups where extra calls are too costly.
 - **Loop hardening for small models** — adaptive prompts, a parallel low-risk tool fan-out, per-tool-name caps, a circuit breaker, discovery memos, a context watchdog that compresses old turns before busting `num_ctx`, and pinned session-workspace context that prevents "model wanders to the wrong directory" drift.
@@ -500,10 +501,10 @@ them — that's expected for dev iteration.)
 
 | Platform | Status | Notes |
 |----------|--------|-------|
-| **macOS** (Intel / Apple Silicon) | ✅ Fully supported | Primary development target. |
-| **Linux** | ✅ Fully supported | Any distro with Python 3.11+ and Ollama. |
-| **Windows (native)** | ⚠️ Partial — use WSL2 if possible | See caveats below. |
-| **Windows (WSL2)** | ✅ Fully supported | Behaves like Linux. Recommended on Windows. |
+| **macOS** (Apple Silicon) | ✅ Native desktop `.dmg` (signed + notarized) + OSS web | Primary development target. |
+| **Linux** (x86_64) | ✅ Native desktop `.AppImage` / `.deb` *(NEW v1.0.3)* + OSS web | Built on Ubuntu 22.04 CI; AppImage works on any glibc 2.34+ distro. |
+| **Windows (native)** | ⚠️ Partial — use WSL2 if possible | See caveats below. No native desktop installer yet (roadmap). |
+| **Windows (WSL2)** | ✅ Fully supported (OSS web) | Behaves like Linux. Recommended on Windows. |
 
 ### Windows caveats
 

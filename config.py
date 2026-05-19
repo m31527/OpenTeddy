@@ -467,6 +467,30 @@ class Config:
         default_factory=lambda: float(os.getenv("SKILL_MATCH_THRESHOLD", "0.4"))
     )
 
+    # ── Skill auto-detection (embedding-based pattern promotion) ─────────────
+    # Pre-2026-05-18 skill creation depended entirely on Qwen self-flagging
+    # `skill_needed` in its JSON output, which 2-3B models almost never do
+    # → 0 skills generated in a month of real usage. The new mechanism scans
+    # past task_result memories after each successful task; when N+ past
+    # goals match the current one at ≥ similarity threshold, we synthesise
+    # a skill name + description via the orchestrator LLM and hand it to
+    # SkillFactory. Set min_repeats to 0 to disable entirely.
+    skill_auto_detect_min_repeats: int = field(
+        default_factory=lambda: int(os.getenv("SKILL_AUTO_DETECT_MIN_REPEATS", "3"))
+    )
+    # Empirically calibrated: ChromaDB's default MiniLM embedder
+    # rates "analyse sales.csv compute repurchase rate" vs "analyse
+    # 2026_data.csv compute repurchase rate" at ~0.83 — obviously the
+    # same pattern but well below the human-intuitive 0.9. 0.75 catches
+    # all the right clusters without lumping random tasks together.
+    # Tune upward if you see junk skills, downward if expected patterns
+    # don't trigger.
+    skill_auto_detect_similarity: float = field(
+        default_factory=lambda: float(
+            os.getenv("SKILL_AUTO_DETECT_SIMILARITY", "0.75")
+        )
+    )
+
     def validate(self) -> None:
         """Raise ValueError for obviously broken configuration."""
         if not self.anthropic_api_key:
@@ -617,6 +641,13 @@ class Config:
         v6 = _i("skill_promotion_threshold")
         if v6 is not None:
             self.skill_promotion_threshold = v6
+
+        vsd = _i("skill_auto_detect_min_repeats")
+        if vsd is not None:
+            self.skill_auto_detect_min_repeats = max(0, vsd)
+        vss = _f("skill_auto_detect_similarity")
+        if vss is not None:
+            self.skill_auto_detect_similarity = max(0.0, min(1.0, vss))
 
         vdp = _i("default_priority")
         if vdp is not None:

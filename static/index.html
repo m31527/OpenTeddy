@@ -4321,6 +4321,29 @@
                     oninput="document.getElementById('val_skill_promotion_threshold').textContent=this.value" />
                 </div>
               </div>
+              <!-- Skill auto-detection (embedding-based, added 2026-05-18).
+                   After each successful task, scan past task memories for
+                   semantically-similar goals; when N+ matches found above
+                   the similarity floor, synthesise a new skill and hand
+                   to SkillFactory. Default min=3 / similarity=0.75 because
+                   ChromaDB's MiniLM rates obvious-same-pattern goals at
+                   ~0.83 (well below the human-intuitive 0.9). -->
+              <div class="param-row">
+                <div class="param-field">
+                  <label><span data-i18n="skill_auto_detect_min_repeats">Skill auto-detect — min repeats (0 = off)</span>
+                    <span class="param-value" id="val_skill_auto_detect_min_repeats">3</span>
+                  </label>
+                  <input type="range" id="rng_skill_auto_detect_min_repeats" min="0" max="20" step="1" value="3"
+                    oninput="document.getElementById('val_skill_auto_detect_min_repeats').textContent=this.value" />
+                </div>
+                <div class="param-field">
+                  <label><span data-i18n="skill_auto_detect_similarity">Skill auto-detect — similarity floor</span>
+                    <span class="param-value" id="val_skill_auto_detect_similarity">0.75</span>
+                  </label>
+                  <input type="range" id="rng_skill_auto_detect_similarity" min="0" max="1" step="0.05" value="0.75"
+                    oninput="document.getElementById('val_skill_auto_detect_similarity').textContent=parseFloat(this.value).toFixed(2)" />
+                </div>
+              </div>
               <div class="param-row">
                 <div class="param-field">
                   <label><span data-i18n="subtask_timeout">Subtask Timeout (seconds) — wall-clock hard stop</span>
@@ -8898,6 +8921,8 @@
         _setSlider('qwen_max_tokens',           s.qwen_max_tokens?.value           ?? 4096);
         _setSlider('skill_match_threshold',     s.skill_match_threshold?.value     ?? 0.4);
         _setSlider('skill_promotion_threshold', s.skill_promotion_threshold?.value ?? 5);
+        _setSlider('skill_auto_detect_min_repeats',  s.skill_auto_detect_min_repeats?.value  ?? 3);
+        _setSlider('skill_auto_detect_similarity',   s.skill_auto_detect_similarity?.value   ?? 0.75);
         _setSlider('subtask_timeout',           s.subtask_timeout?.value           ?? 900);
         _setSlider('shell_silence_timeout',     s.shell_silence_timeout?.value     ?? 90);
         _setSlider('gemma_temperature',         s.gemma_temperature?.value         ?? 0.1);
@@ -9498,6 +9523,8 @@
         qwen_max_tokens:           document.getElementById('rng_qwen_max_tokens').value,
         skill_match_threshold:     document.getElementById('rng_skill_match_threshold').value,
         skill_promotion_threshold: document.getElementById('rng_skill_promotion_threshold').value,
+        skill_auto_detect_min_repeats: document.getElementById('rng_skill_auto_detect_min_repeats').value,
+        skill_auto_detect_similarity:  document.getElementById('rng_skill_auto_detect_similarity').value,
         subtask_timeout:           document.getElementById('rng_subtask_timeout').value,
         shell_silence_timeout:     document.getElementById('rng_shell_silence_timeout').value,
         gemma_temperature:         document.getElementById('rng_gemma_temperature').value,

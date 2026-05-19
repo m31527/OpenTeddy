@@ -1,0 +1,170 @@
+# ──────────────────────────────────────────────────────────────────────────
+# release-linux.yml — Build OpenTeddy Linux .AppImage + .deb on every
+# pushed `v*` tag, then upload them to the matching GitHub Release.
+#
+# Why this exists:
+#   - PyInstaller cannot cross-compile from macOS → we need a Linux runner
+#     to produce the sidecar binary.
+#   - Most contributors don't have a Linux box handy. GitHub-hosted runners
+#     give us one for free on every release.
+#   - release.sh on the maintainer's Mac still ships the .dmg; this
+#     workflow attaches the Linux artifacts to the same Release object
+#     after the tag is pushed.
+#
+# Trigger: any tag matching `v*.*.*` (e.g. v1.0.3) — matches the format
+# release.sh creates. The tag must already exist + a Release object
+# must already exist (release.sh creates both before this fires).
+# ──────────────────────────────────────────────────────────────────────────
+
+name: Release — Linux build
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to attach Linux artifacts to (e.g. v1.0.3)'
+        required: true
+        type: string
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+
+    permissions:
+      # Need write access to attach artifacts to the existing Release.
+      contents: write
+
+    steps:
+      - name: Resolve target tag
+        id: tag
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "ref=${{ inputs.tag }}" >> $GITHUB_OUTPUT
+          else
+            echo "ref=${{ github.ref_name }}" >> $GITHUB_OUTPUT
+          fi
+          echo "Building for tag: ${{ steps.tag.outputs.ref }}"
+
+      # Check out the OSS repo at the tag's commit.
+      - name: Checkout repo @ tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.tag.outputs.ref }}
+          # We need the `desktop/` submodule / sister-repo. The maintainer
+          # runs desktop as a *separate* private repo today (.gitignored
+          # from OSS), so this workflow checks it out alongside if a
+          # DESKTOP_REPO_TOKEN secret is configured. Without that token
+          # the Linux build is skipped — desktop files aren't in the OSS
+          # repo by design.
+          fetch-depth: 1
+
+      - name: Checkout desktop sister-repo
+        if: env.DESKTOP_REPO_PRESENT == 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: m31527/OpenTeddy-Desktop
+          token: ${{ secrets.DESKTOP_REPO_TOKEN }}
+          path: desktop
+          ref: main
+        env:
+          # Skip the desktop checkout entirely when no token is set —
+          # workflow will fail fast at the build step with a clear
+          # error, rather than leaving a half-set-up tree.
+          DESKTOP_REPO_PRESENT: ${{ secrets.DESKTOP_REPO_TOKEN != '' }}
+
+      - name: Bail out cleanly if desktop repo unavailable
+        run: |
+          if [[ ! -d "desktop" || ! -f "desktop/src-tauri/Cargo.toml" ]]; then
+            echo "::error::desktop/ checkout failed — DESKTOP_REPO_TOKEN secret missing or invalid."
+            echo "::error::Add a PAT with read access to the desktop sister-repo under Settings → Secrets → DESKTOP_REPO_TOKEN."
+            exit 1
+          fi
+
+      # Tauri 2.x on Ubuntu 22.04 needs webkit2gtk-4.1 and friends.
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            build-essential \
+            libssl-dev \
+            pkg-config \
+            curl wget file
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+
+      - name: Cache cargo registry + tauri target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            desktop/src-tauri/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('desktop/src-tauri/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: requirements.txt
+
+      - name: Install Python deps + PyInstaller
+        run: |
+          python -m venv .venv
+          source .venv/bin/activate
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Run build_linux.sh (release mode, no version bump)
+        run: |
+          source .venv/bin/activate
+          chmod +x desktop/scripts/build_linux.sh
+          chmod +x desktop/scripts/build_sidecar.sh
+          # --no-bump: the tag we're building was already bumped by
+          #   release.sh on the maintainer's Mac. Just build whatever
+          #   version is currently checked out.
+          # --release: drop the dev- prefix from output filenames.
+          desktop/scripts/build_linux.sh --release --no-bump --no-install
+          # --no-install just skips a redundant `npm install` — Tauri
+          #   already does an install during `tauri build` and we
+          #   re-installed via the setup-node action cache anyway.
+
+      - name: List build outputs
+        run: |
+          ls -lh desktop/dist/ | head -20
+
+      - name: Upload artifacts to GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.tag.outputs.ref }}"
+          # Upload only the public-named files (no dev- prefix expected
+          # because we pass --release above).
+          for f in desktop/dist/OpenTeddy-*-x86_64.AppImage \
+                   desktop/dist/OpenTeddy-*-x86_64.deb \
+                   desktop/dist/OpenTeddy-*-x86_64.sha256; do
+            [[ -f "$f" ]] || continue
+            echo "Uploading $f → release $TAG"
+            gh release upload "$TAG" "$f" --clobber --repo "${{ github.repository }}"
+          done

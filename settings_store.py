@@ -234,6 +234,31 @@ SETTINGS_META: dict[str, dict[str, Any]] = {
         "min":         1,
         "max":         50,
     },
+    "skill_auto_detect_min_repeats": {
+        "label":       "Skill auto-detect — min repeats",
+        "description": "After a successful task, scan past task memories "
+                       "for semantically-similar goals. When this many "
+                       "(or more) similar goals are found, synthesise a "
+                       "skill and hand it to SkillFactory. Set to 0 to "
+                       "disable auto-detection entirely (skills can "
+                       "still be created manually via the API).",
+        "type":        "int",
+        "min":         0,
+        "max":         20,
+    },
+    "skill_auto_detect_similarity": {
+        "label":       "Skill auto-detect — similarity threshold",
+        "description": "Cosine-similarity floor (0.0-1.0) for counting "
+                       "a past task as 'recurring'. Higher = stricter / "
+                       "fewer false-positive skills. 0.85 is a sensible "
+                       "default; bump to 0.9 if you see weird skills "
+                       "getting generated, drop to 0.75 if expected "
+                       "patterns aren't being caught.",
+        "type":        "float",
+        "min":         0.0,
+        "max":         1.0,
+        "step":        0.05,
+    },
     "approval_auto_approve_after": {
         "label":       "Auto-approve after (seconds)",
         "description": "When > 0, HIGH-risk tool approval prompts "
@@ -392,6 +417,8 @@ def _defaults_from_config() -> dict[str, str]:
         "qwen_max_tokens":          str(config.qwen_max_tokens),
         "skill_match_threshold":    str(getattr(config, "skill_match_threshold", "0.4")),
         "skill_promotion_threshold": str(config.skill_promotion_threshold),
+        "skill_auto_detect_min_repeats": str(getattr(config, "skill_auto_detect_min_repeats", 3)),
+        "skill_auto_detect_similarity":  str(getattr(config, "skill_auto_detect_similarity", 0.85)),
         "default_priority":          str(getattr(config, "default_priority", 1)),
         "approval_auto_approve_after": str(getattr(config, "approval_auto_approve_after", 0)),
         "approval_wait_timeout":       str(getattr(config, "approval_wait_timeout", 1800)),
@@ -713,6 +740,13 @@ class SettingsStore:
         v6 = _int("skill_promotion_threshold")
         if v6 is not None:
             config.skill_promotion_threshold = v6
+
+        vsd = _int("skill_auto_detect_min_repeats")
+        if vsd is not None:
+            config.skill_auto_detect_min_repeats = max(0, vsd)
+        vss = _float("skill_auto_detect_similarity")
+        if vss is not None:
+            config.skill_auto_detect_similarity = max(0.0, min(1.0, vss))
 
         vdp = _int("default_priority")
         if vdp is not None:
