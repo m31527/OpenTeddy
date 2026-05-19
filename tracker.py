@@ -657,6 +657,28 @@ class Tracker:
         )
         return True
 
+    async def get_task_usage(self, task_id: str) -> Dict[str, Any]:
+        """Return cumulative usage totals for one task.
+
+        Sums every usage_records row for the given task_id and returns
+        {tokens_in, tokens_out, cost_usd}. Used by the live progress
+        pill (Sprint 2B) so the UI can show running cost without
+        loading the full Usage tab. Cheap single-row aggregate query.
+        """
+        async with self.db.execute(
+            "SELECT COALESCE(SUM(tokens_in), 0),"
+            "       COALESCE(SUM(tokens_out), 0),"
+            "       COALESCE(SUM(cost_usd), 0.0) "
+            "FROM usage_records WHERE task_id = ?",
+            (task_id,),
+        ) as cur:
+            row = await cur.fetchone()
+        return {
+            "tokens_in":  int(row[0] or 0) if row else 0,
+            "tokens_out": int(row[1] or 0) if row else 0,
+            "cost_usd":   float(row[2] or 0.0) if row else 0.0,
+        }
+
     async def delete_skill(self, skill_name: str) -> bool:
         """Delete a skill row from the DB. Returns False when it didn't
         exist. The caller is responsible for unlinking the .py file on

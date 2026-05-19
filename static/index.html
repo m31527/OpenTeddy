@@ -3067,6 +3067,43 @@
       padding: 0 4px;
     }
     .attach-chips:empty { display: none; }
+
+    /* ── Live task progress pill (Sprint 2B) ────────────────────────
+       Shown above the input row while a task is running. Aggregates
+       state from subtask.progress events + tool_call counts so the
+       user sees the agent's heartbeat instead of staring at a static
+       "thinking…" bubble. Compact, single-row, fade-in. */
+    .task-progress-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.85rem;
+      max-width: 800px;
+      margin: 0 auto 6px;
+      padding: 0.4rem 0.9rem;
+      background: linear-gradient(135deg, rgba(102, 126, 234, 0.10), rgba(118, 75, 162, 0.10));
+      border: 1px solid rgba(102, 126, 234, 0.25);
+      border-radius: 999px;
+      font-size: 0.72rem;
+      color: var(--text-secondary);
+      font-variant-numeric: tabular-nums;
+      animation: pill-fade-in 0.2s ease-out;
+    }
+    @keyframes pill-fade-in {
+      from { opacity: 0; transform: translateY(4px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    .task-progress-pill[hidden] { display: none; }
+    .task-progress-pill > span { white-space: nowrap; }
+    .task-progress-pill .pill-label { color: var(--text-muted); }
+    .task-progress-pill .pill-strong {
+      color: var(--text-primary);
+      font-weight: 600;
+    }
+    /* Confidence colour-coded so 0.65 doesn't read as scary —
+       green ≥ 0.7, amber 0.4-0.7, red < 0.4. */
+    .task-progress-pill .pill-conf-good   { color: #2f9c5e; font-weight: 600; }
+    .task-progress-pill .pill-conf-medium { color: #b4821e; font-weight: 600; }
+    .task-progress-pill .pill-conf-low    { color: #c0392b; font-weight: 600; }
     .attach-chip {
       display: inline-flex;
       align-items: center;
@@ -3558,6 +3595,12 @@
               </div>
             </div>
           </div>
+          <!-- Live task progress pill (Sprint 2B). Hidden when no task
+               is running; populated by handleSubtaskProgress() +
+               handleToolCall(). Sits above the input area so it doesn't
+               crowd the chat history but stays in the user's eye line. -->
+          <div id="taskProgressPill" class="task-progress-pill" hidden></div>
+
           <div class="chat-input-area">
             <!-- Session-context row: workspace path + (optional) DB chip
                  share a single flex line so they read as one cohesive
@@ -5001,6 +5044,11 @@
           if (data.type  === 'update.progress')   handleUpdateProgress(data);
           if (data.type  === 'context.compressed') handleContextCompressed(data);
           if (data.event === 'circuit_breaker')   handleCircuitBreaker(data);
+          if (data.type  === 'subtask.progress')  handleSubtaskProgress(data);
+          // Side effect on the live pill: every tool_call bumps the
+          // tool counter so the user sees activity even between
+          // subtask boundaries.
+          if (data.event === 'tool_call')         bumpPillToolCount();
         } catch (e) { /* ignore */ }
       };
     }
@@ -7733,6 +7781,114 @@
       appendToChat(chip);
     }
 
+    // ── Live task progress pill (Sprint 2B) ────────────────────────────
+    // Aggregates state from subtask.progress events + tool_call counts
+    // for the CURRENTLY-RUNNING task only. Hidden between tasks, fades
+    // in on first event of a new task, fades out 3s after completion.
+    let _pillState = {
+      taskId: null,
+      order: 0, total: 0,
+      conf: 0,
+      tokens: 0, cost: 0,
+      toolCount: 0,
+    };
+
+    function resetPillForNewTask(taskId) {
+      _pillState = {
+        taskId, order: 0, total: 0,
+        conf: 0, tokens: 0, cost: 0, toolCount: 0,
+      };
+      renderProgressPill();
+    }
+
+    function clearPill(delayMs) {
+      const el = document.getElementById('taskProgressPill');
+      if (!el) return;
+      // Soft clear: keep the last numbers visible for a few seconds so
+      // the user has time to read final stats, then hide.
+      setTimeout(() => {
+        if (_pillState.taskId === null) el.hidden = true;
+      }, delayMs);
+      _pillState.taskId = null;
+    }
+
+    function handleSubtaskProgress(data) {
+      if (!data || !data.task_id) return;
+      // Defensive: only update if this matches the current task. The
+      // initial WS dispatcher's task_id filter (line ~4990) should
+      // already drop foreign-task events but redundancy is cheap.
+      if (_currentTaskId && data.task_id !== _currentTaskId) return;
+      _pillState.taskId = data.task_id;
+      _pillState.order  = Number(data.order || 0);
+      _pillState.total  = Number(data.total || 0);
+      _pillState.conf   = Number(data.confidence || 0);
+      _pillState.tokens = Number((data.tokens_in || 0) + (data.tokens_out || 0));
+      _pillState.cost   = Number(data.cost_usd || 0);
+      renderProgressPill();
+    }
+
+    function bumpPillToolCount() {
+      // Only count for the current run. If pill hasn't been initialised
+      // yet (first event of a new task), seed it from _currentTaskId.
+      if (!_pillState.taskId && _currentTaskId) {
+        _pillState.taskId = _currentTaskId;
+      }
+      if (_pillState.taskId !== _currentTaskId) return;
+      _pillState.toolCount += 1;
+      renderProgressPill();
+    }
+
+    function renderProgressPill() {
+      const el = document.getElementById('taskProgressPill');
+      if (!el) return;
+      if (!_pillState.taskId) {
+        el.hidden = true;
+        return;
+      }
+      const parts = [];
+      if (_pillState.total > 0) {
+        parts.push(
+          `<span><span class="pill-label">⚙️</span> ` +
+          `<span class="pill-strong">${_pillState.order}/${_pillState.total}</span></span>`
+        );
+      }
+      if (_pillState.conf > 0) {
+        // Colour-code so 0.65 reads as "okay" not "scary".
+        let confClass = 'pill-conf-good';
+        if (_pillState.conf < 0.4)      confClass = 'pill-conf-low';
+        else if (_pillState.conf < 0.7) confClass = 'pill-conf-medium';
+        parts.push(
+          `<span><span class="pill-label">🎯</span> ` +
+          `<span class="${confClass}">${_pillState.conf.toFixed(2)}</span></span>`
+        );
+      }
+      // Cost only meaningful in cloud / mixed mode. In local mode it's
+      // always $0 → show tokens count instead so the pill stays useful.
+      if (_pillState.cost > 0) {
+        parts.push(
+          `<span><span class="pill-label">💰</span> ` +
+          `<span class="pill-strong">$${_pillState.cost.toFixed(3)}</span></span>`
+        );
+      } else if (_pillState.tokens > 0) {
+        parts.push(
+          `<span><span class="pill-label">🔤</span> ` +
+          `<span class="pill-strong">${_pillState.tokens.toLocaleString()} tok</span></span>`
+        );
+      }
+      if (_pillState.toolCount > 0) {
+        parts.push(
+          `<span><span class="pill-label">🔧</span> ` +
+          `<span class="pill-strong">${_pillState.toolCount}</span></span>`
+        );
+      }
+      if (!parts.length) {
+        el.hidden = true;
+        return;
+      }
+      el.hidden = false;
+      el.innerHTML = parts.join('');
+    }
+
     async function runTask() {
       const goalEl   = document.getElementById('goal');
       const goal     = goalEl.value.trim();
@@ -7769,6 +7925,7 @@
       _currentRunToolCards = [];  // fresh tool-call bucket per task
       _runAbort      = new AbortController();
       setRunningState(true);
+      resetPillForNewTask(taskId);   // Sprint 2B — fresh pill state per run
 
       // Lock the mode the moment a task is dispatched — even before the
       // server confirms it. Switching mode mid-session would re-prompt
@@ -7845,6 +8002,9 @@
         setRunningState(false);
         _runAbort      = null;
         _currentTaskId = null;
+        // Pill fades out 3s after the task ends — long enough to read
+        // the final tool count / cost, short enough not to feel stuck.
+        clearPill(3000);
         if (!aborted) {
           loadSessions().catch(() => {});
           // A completed task may have stored new summaries to memory —

@@ -638,8 +638,30 @@ class Orchestrator:
             new_skills:  list[str] = []
 
             mode_value = req.mode.value if hasattr(req.mode, "value") else str(req.mode)
+            total_subtasks = len(subtasks)
             for st in subtasks:
                 st = await self._run_subtask(st, req.context, mode=mode_value)
+
+                # ── Live progress pill (Sprint 2B) ────────────────────
+                # Broadcast cumulative state so the chat UI's pill can
+                # show "subtask 3/5 · 🎯 0.85 · 💰 $0.043". Cheap —
+                # one tracker aggregate query per subtask, fire-and-
+                # forget WS broadcast.
+                try:
+                    usage = await self.tracker.get_task_usage(req.id)
+                    await self.executor._push_event({
+                        "type":       "subtask.progress",
+                        "task_id":    req.id,
+                        "order":      (st.order or 0) + 1,
+                        "total":      total_subtasks,
+                        "confidence": float(getattr(st, "confidence", 0.0) or 0.0),
+                        "status":     getattr(st.status, "value", str(st.status)),
+                        "tokens_in":  usage["tokens_in"],
+                        "tokens_out": usage["tokens_out"],
+                        "cost_usd":   usage["cost_usd"],
+                    })
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug("subtask.progress broadcast failed: %s", exc)
 
                 if st.skill_hint:
                     skills_used.append(st.skill_hint)
