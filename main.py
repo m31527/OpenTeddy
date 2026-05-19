@@ -497,14 +497,38 @@ async def update_check() -> dict:
     latest_tag = data.get("tag_name") or ""
     latest = latest_tag.lstrip("v")
     is_newer = _semver_tuple(latest) > _semver_tuple(OPENTEDDY_VERSION)
+
+    # Pick direct-download URLs for each platform so the desktop UI
+    # can fire ONE click → browser auto-downloads the .dmg, instead of
+    # opening the GitHub release page and making the user hunt for
+    # which asset to click. The Tauri shell opens this URL in Safari /
+    # Chrome which immediately triggers the file download (GitHub
+    # serves these with Content-Disposition: attachment).
+    download_url_mac = ""
+    download_url_linux = ""
+    for asset in data.get("assets", []) or []:
+        name = (asset.get("name") or "").lower()
+        url  = asset.get("browser_download_url") or ""
+        if not url:
+            continue
+        # Match Apple Silicon DMG (the only Mac asset we currently ship).
+        if not download_url_mac and name.endswith(".dmg") and ("aarch64" in name or "arm64" in name):
+            download_url_mac = url
+        # Linux AppImage — landed v1.0.3+ via GHA when DESKTOP_REPO_TOKEN
+        # is configured. Fall back to nothing if no AppImage is uploaded yet.
+        if not download_url_linux and name.endswith(".appimage"):
+            download_url_linux = url
+
     return {
-        "current":          OPENTEDDY_VERSION,
-        "latest":           latest,
-        "update_available": is_newer,
-        "release_notes":    data.get("body") or "",
-        "release_url":      data.get("html_url") or "",
-        "published_at":     data.get("published_at") or "",
-        "tag":              latest_tag,
+        "current":             OPENTEDDY_VERSION,
+        "latest":              latest,
+        "update_available":    is_newer,
+        "release_notes":       data.get("body") or "",
+        "release_url":         data.get("html_url") or "",
+        "download_url_mac":    download_url_mac,
+        "download_url_linux":  download_url_linux,
+        "published_at":        data.get("published_at") or "",
+        "tag":                 latest_tag,
     }
 
 

@@ -9536,6 +9536,13 @@
       _updateState.latest = data.latest;
       _updateState.notes  = data.release_notes || '';
       _updateState.url    = data.release_url || '';
+      // Direct-download URLs (one-click .dmg / .AppImage) added in
+      // 2026-05-20 so the Tauri "Upgrade now" button can skip the
+      // "open release page, hunt for the right asset" detour. Falls
+      // back to release_url when the server-side asset extraction
+      // didn't find a match (e.g. running against an old /update/check).
+      _updateState.dlMac   = data.download_url_mac   || '';
+      _updateState.dlLinux = data.download_url_linux || '';
       _updateState.tag    = data.tag || ('v' + data.latest);
       const pill = document.getElementById('updatePill');
       const txt  = document.getElementById('updatePillText');
@@ -9598,15 +9605,28 @@
 
       // ── Desktop branch ──────────────────────────────────────────────
       // Inside Tauri we never call /update/apply (git pull + pip install
-      // can't touch a notarised .app bundle). Instead, postMessage the
-      // release URL up to the shell, which uses Tauri's shell.open to
-      // launch the user's default browser. The desktop-view in the
-      // modal already explains the manual steps; here we just open the
-      // page and close. Falls back to direct window.open() if we're
-      // somehow in Tauri without the parent bridge (shouldn't happen).
+      // can't touch a notarised .app bundle). Instead, postMessage a
+      // URL up to the shell which uses Tauri's shell.open to launch the
+      // user's default browser.
+      //
+      // 2026-05-20 UX fix: prefer the DIRECT .dmg asset URL so the
+      // browser immediately starts the download (GitHub serves these
+      // with Content-Disposition: attachment) instead of opening the
+      // release tag page and forcing the user to hunt for the right
+      // asset. Falls back to the release page URL if the server-side
+      // asset extraction didn't find a match (e.g. running against an
+      // older /update/check that doesn't expose download_url_mac).
       if (_IN_TAURI) {
-        const url = _updateState.url ||
-          `https://github.com/m31527/OpenTeddy/releases/latest`;
+        // Pick platform-specific direct download. Mac-first since
+        // that's the only signed/notarised bundle we ship right now;
+        // Linux falls back to the release page until the GHA Linux
+        // workflow is set up (needs DESKTOP_REPO_TOKEN PAT).
+        const platformDirect = (navigator.platform || '').toLowerCase().includes('mac')
+          ? _updateState.dlMac
+          : _updateState.dlLinux;
+        const url = platformDirect
+          || _updateState.url
+          || `https://github.com/m31527/OpenTeddy/releases/latest`;
         try {
           if (window.parent && window.parent !== window) {
             window.parent.postMessage({ type: 'teddy.open_external', url }, '*');
