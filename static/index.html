@@ -4741,6 +4741,37 @@
     </div>
   </div>
 
+  <!-- ── Skill detail modal (clicked from a Learned card in Tools tab) ─────
+       Opened by openSkillModal(skillName). Reads from the in-memory
+       _capCache.skills so the click is instant (no extra fetch).
+       Reuses .update-modal-backdrop + .update-modal styling so the
+       chrome stays consistent. Three buttons: Delete (red), Demote
+       (only when ACTIVE), Promote (only when TESTING). -->
+  <div class="update-modal-backdrop" id="skillModal" role="dialog" aria-modal="true">
+    <div class="update-modal" style="max-width: 720px;">
+      <div class="update-modal-head">
+        <h3 id="skillModalName" style="font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;"></h3>
+        <span class="version-tag" id="skillModalStatus"></span>
+      </div>
+      <div class="update-modal-body">
+        <p id="skillModalDesc" style="font-size: 0.85rem; color: var(--text-secondary); line-height: 1.5; margin: 0 0 0.75rem;"></p>
+        <div id="skillModalStats" style="font-size: 0.75rem; color: var(--text-muted); display: flex; gap: 1rem; flex-wrap: wrap; margin-bottom: 0.75rem;"></div>
+        <div style="font-size: 0.7rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 0.4rem;"
+             data-i18n="skill_modal_source">Source</div>
+        <pre id="skillModalCode" style="background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 8px; padding: 0.85rem 1rem; font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.78rem; line-height: 1.45; max-height: 360px; overflow: auto; white-space: pre; margin: 0; color: var(--text-primary);"></pre>
+      </div>
+      <div class="update-modal-foot">
+        <button class="secondary" type="button" onclick="closeSkillModal()" data-i18n="skill_modal_close">Close</button>
+        <button class="secondary" id="skillModalDelete" type="button" style="color: var(--error); border-color: var(--error);"
+                onclick="onSkillDeleteClick()" data-i18n="skill_modal_delete">Delete</button>
+        <button class="secondary" id="skillModalDemote" type="button" hidden
+                onclick="onSkillDemoteClick()" data-i18n="skill_modal_demote">Demote → TESTING</button>
+        <button class="primary"   id="skillModalPromote" type="button" hidden
+                onclick="onSkillPromoteClick()" data-i18n="skill_modal_promote">Promote → ACTIVE</button>
+      </div>
+    </div>
+  </div>
+
   <!-- ── Reusable confirmation dialog (replaces native confirm) ────────── -->
   <div id="confirmModal" class="confirm-modal-backdrop" style="display:none" role="dialog" aria-modal="true">
     <div class="confirm-modal-box">
@@ -8033,7 +8064,9 @@
         const status = (x.status || '').toLowerCase();
         const successes = x.success_count ?? 0;
         const failures  = x.failure_count ?? 0;
-        return `<div class="tool-panel-card">
+        // Cursor + onclick → click anywhere on the card opens the
+        // detail modal. Cleaner than a separate "view" button.
+        return `<div class="tool-panel-card" style="cursor: pointer;" onclick="openSkillModal('${escHtml(x.name)}')">
           <span class="cap-badge learned">${escHtml(t('cap_badge_learned') || 'Learned')}</span>
           <div class="tool-name">${escHtml(x.name)}</div>
           <div class="tool-desc">${escHtml(x.description || '')}</div>
@@ -8047,12 +8080,128 @@
 
       const all = toolCards.concat(skillCards);
       if (!all.length) {
-        grid.innerHTML = '<div style="color:var(--text-muted);font-size:0.875rem">' +
-          escHtml(t('no_capabilities') || 'No capabilities to show.') +
-          '</div>';
+        // Better empty state when filter is Learned and zero skills:
+        // explain how skills are learned automatically so the user
+        // doesn't think the feature is broken.
+        if (want === 'learned') {
+          grid.innerHTML = `
+            <div style="grid-column: 1 / -1; padding: 2rem 1.25rem; background: var(--bg-secondary); border: 1px dashed var(--border); border-radius: 12px; text-align: center;">
+              <div style="font-size: 2.4rem; margin-bottom: 0.5rem;">🌱</div>
+              <div style="font-weight: 600; margin-bottom: 0.4rem;" data-i18n="skills_empty_title">No learned skills yet</div>
+              <div style="font-size: 0.85rem; color: var(--text-secondary); line-height: 1.55; max-width: 520px; margin: 0 auto;"
+                   data-i18n="skills_empty_body">
+                Skills are <strong>learned automatically</strong> when you complete the same kind of task ≥ 3 times. The agent spots the pattern via embedding similarity, asks the cloud LLM to write a reusable Python function, and saves it here. Tune the threshold in Settings → Parameter Settings → "Skill auto-detect".
+              </div>
+            </div>`;
+        } else {
+          grid.innerHTML = '<div style="color:var(--text-muted);font-size:0.875rem">' +
+            escHtml(t('no_capabilities') || 'No capabilities to show.') +
+            '</div>';
+        }
         return;
       }
       grid.innerHTML = all.join('');
+    }
+
+    // ── Skill detail modal ─────────────────────────────────────────────
+    // Opened by clicking a Learned card in the Tools tab. Reads from
+    // _capCache.skills so the click is instant — the existing /skills
+    // response already ships the full `code` field. Three actions
+    // (Delete / Demote / Promote) all hit the server then reload the
+    // capabilities grid so the changes show immediately.
+    let _activeSkillName = null;
+
+    function openSkillModal(name) {
+      const skill = (_capCache.skills || []).find(s => s.name === name);
+      if (!skill) {
+        toast(`Skill '${name}' not in cache — refreshing…`, true);
+        loadTools();
+        return;
+      }
+      _activeSkillName = name;
+      document.getElementById('skillModalName').textContent   = skill.name;
+      document.getElementById('skillModalDesc').textContent   = skill.description || '(no description)';
+      document.getElementById('skillModalCode').textContent   = skill.code || '(no code stored)';
+      const status = String(skill.status || '').toLowerCase();
+      const statusEl = document.getElementById('skillModalStatus');
+      statusEl.textContent = (skill.status || '').toUpperCase();
+      // Reuse the cap-skill-status colour scheme so the modal pill
+      // matches the card pill the user just clicked.
+      statusEl.className = `version-tag cap-skill-status ${status}`;
+
+      const successes = skill.success_count ?? 0;
+      const failures  = skill.failure_count ?? 0;
+      const total = successes + failures;
+      const rate = total > 0 ? Math.round(100 * successes / total) : null;
+      const created = skill.created_at ? new Date(skill.created_at).toLocaleString() : '—';
+      document.getElementById('skillModalStats').innerHTML =
+        `<span>✓ ${successes}</span>` +
+        `<span>✗ ${failures}</span>` +
+        (rate !== null ? `<span>${rate}% success</span>` : '') +
+        `<span>Created ${escHtml(created)}</span>`;
+
+      // Toggle promote/demote based on current status
+      document.getElementById('skillModalPromote').hidden = (status === 'active');
+      document.getElementById('skillModalDemote').hidden  = (status !== 'active');
+
+      document.getElementById('skillModal').classList.add('open');
+    }
+
+    function closeSkillModal() {
+      document.getElementById('skillModal').classList.remove('open');
+      _activeSkillName = null;
+    }
+
+    async function onSkillPromoteClick() {
+      if (!_activeSkillName) return;
+      try {
+        const r = await fetch(`${API}/skills/${encodeURIComponent(_activeSkillName)}/promote`, { method: 'POST' });
+        const d = await r.json();
+        toast(d.message || 'Promoted');
+      } catch (e) { toast('Error: ' + e.message, true); }
+      closeSkillModal();
+      loadTools();
+    }
+
+    async function onSkillDemoteClick() {
+      if (!_activeSkillName) return;
+      try {
+        const r = await fetch(`${API}/skills/${encodeURIComponent(_activeSkillName)}/demote`, { method: 'POST' });
+        const d = await r.json();
+        toast(d.message || 'Demoted');
+      } catch (e) { toast('Error: ' + e.message, true); }
+      closeSkillModal();
+      loadTools();
+    }
+
+    async function onSkillDeleteClick() {
+      if (!_activeSkillName) return;
+      const name = _activeSkillName;
+      // Use the existing confirm modal — destructive op shouldn't be
+      // a single click.
+      const ok = await new Promise(resolve => {
+        const titleEl = document.getElementById('confirmModalTitle');
+        const bodyEl  = document.getElementById('confirmModalBody');
+        const cancelEl = document.getElementById('confirmModalCancel');
+        const okEl    = document.getElementById('confirmModalOk');
+        const modal   = document.getElementById('confirmModal');
+        titleEl.textContent = t('skill_modal_delete_confirm_title') || 'Delete skill?';
+        bodyEl.textContent  = (t('skill_modal_delete_confirm_body') || "Delete '{name}'? The .py file + DB row will be removed and the agent will stop matching this skill.").replace('{name}', name);
+        cancelEl.textContent = t('cancel') || 'Cancel';
+        okEl.textContent     = t('skill_modal_delete') || 'Delete';
+        modal.style.display = 'flex';
+        const cleanup = () => { modal.style.display = 'none'; cancelEl.onclick = null; okEl.onclick = null; };
+        cancelEl.onclick = () => { cleanup(); resolve(false); };
+        okEl.onclick     = () => { cleanup(); resolve(true); };
+      });
+      if (!ok) return;
+      try {
+        const r = await fetch(`${API}/skills/${encodeURIComponent(name)}`, { method: 'DELETE' });
+        const d = await r.json();
+        toast(d.message || 'Deleted');
+      } catch (e) { toast('Error: ' + e.message, true); }
+      closeSkillModal();
+      loadTools();
     }
 
     // Backwards-compatible alias so old code paths that called
@@ -9641,7 +9790,20 @@
           e.preventDefault();
           closeWorkspacePicker();
         }
+        // Same-same for the skill modal — Esc closes any open modal.
+        const skillModal = document.getElementById('skillModal');
+        if (skillModal && skillModal.classList.contains('open')) {
+          e.preventDefault();
+          closeSkillModal();
+        }
       });
+      // Backdrop click closes the skill modal too (matches update-modal UX).
+      const skillModalEl = document.getElementById('skillModal');
+      if (skillModalEl) {
+        skillModalEl.addEventListener('click', (e) => {
+          if (e.target === skillModalEl) closeSkillModal();
+        });
+      }
     }
 
     // ── Build-hash cache buster ──────────────────────────────────────────

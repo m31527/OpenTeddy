@@ -1984,6 +1984,56 @@ async def generate_skill(name: str, description: str) -> dict:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
+@app.post("/skills/{name}/promote")
+async def promote_skill(name: str) -> dict:
+    """Manually move a TESTING skill to ACTIVE without waiting for the
+    success-count threshold. UI-triggered from the skill dashboard when
+    the user has reviewed the code and trusts it."""
+    from models import SkillStatus
+    ok = await tracker.set_skill_status(name, SkillStatus.ACTIVE)
+    if not ok:
+        raise HTTPException(status_code=404, detail=f"Skill '{name}' not found")
+    return {"name": name, "status": "active", "message": "Promoted to ACTIVE."}
+
+
+@app.post("/skills/{name}/demote")
+async def demote_skill(name: str) -> dict:
+    """Move an ACTIVE skill back to TESTING (e.g. you noticed it
+    misbehaving and want to gate it again without deleting outright)."""
+    from models import SkillStatus
+    ok = await tracker.set_skill_status(name, SkillStatus.TESTING)
+    if not ok:
+        raise HTTPException(status_code=404, detail=f"Skill '{name}' not found")
+    return {"name": name, "status": "testing", "message": "Demoted to TESTING."}
+
+
+@app.delete("/skills/{name}")
+async def delete_skill(name: str) -> dict:
+    """Remove a skill from both the DB and the on-disk skills/<name>.py
+    file. Idempotent — missing file is silently OK so a half-cleaned
+    state can still be tidied up via the UI."""
+    ok = await tracker.delete_skill(name)
+    # Always try to remove the file too — handles cases where the file
+    # exists but the DB row doesn't (and vice versa).
+    try:
+        skill_path = os.path.join(config.skills_dir, f"{name}.py")
+        if os.path.isfile(skill_path):
+            os.remove(skill_path)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("delete_skill: failed to unlink %s.py: %s", name, exc)
+    # Evict from in-memory factory cache so the next match attempt
+    # doesn't pick up the now-deleted skill.
+    try:
+        skill_factory._loaded.pop(name, None)  # type: ignore[attr-defined]
+    except Exception:  # noqa: BLE001
+        pass
+    if not ok:
+        # Neither DB nor file existed — caller probably already deleted
+        # it via the UI in another tab. Don't 404; return a friendly OK.
+        return {"name": name, "deleted": False, "message": "Skill was not present."}
+    return {"name": name, "deleted": True, "message": "Skill deleted."}
+
+
 # ── Tool endpoints ────────────────────────────────────────────────────────────
 
 @app.get("/tools")

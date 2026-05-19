@@ -639,6 +639,38 @@ class Tracker:
             return True
         return False
 
+    async def set_skill_status(
+        self, skill_name: str, status: SkillStatus,
+    ) -> bool:
+        """Manually flip a skill's status (UI-triggered promote / demote
+        / archive). Returns False when the skill doesn't exist."""
+        skill = await self.get_skill(skill_name)
+        if not skill:
+            return False
+        await self.db.execute(
+            "UPDATE skills SET status=?, updated_at=? WHERE name=?",
+            (status.value, datetime.utcnow().isoformat(), skill_name),
+        )
+        await self.db.commit()
+        logger.info(
+            "Skill '%s' status set to %s (manual)", skill_name, status.value,
+        )
+        return True
+
+    async def delete_skill(self, skill_name: str) -> bool:
+        """Delete a skill row from the DB. Returns False when it didn't
+        exist. The caller is responsible for unlinking the .py file on
+        disk — kept separate so a DB-only delete is possible (e.g. when
+        the file was already manually removed)."""
+        cur = await self.db.execute(
+            "DELETE FROM skills WHERE name=?", (skill_name,),
+        )
+        await self.db.commit()
+        if cur.rowcount and cur.rowcount > 0:
+            logger.info("Skill '%s' deleted from DB", skill_name)
+            return True
+        return False
+
     # ── Usage records ─────────────────────────────────────────────────────────
 
     async def record_usage(
