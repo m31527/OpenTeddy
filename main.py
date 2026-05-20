@@ -390,7 +390,7 @@ async def favicon() -> FileResponse:
     raise HTTPException(status_code=404, detail="favicon not found")
 
 
-OPENTEDDY_VERSION = "1.0.4"
+OPENTEDDY_VERSION = "1.0.5"
 GITHUB_REPO = os.getenv("OPENTEDDY_GITHUB_REPO", "m31527/OpenTeddy")
 
 
