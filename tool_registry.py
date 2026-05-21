@@ -227,12 +227,17 @@ class ToolRegistry:
         from tools.report_tool import REPORT_TOOLS
         from tools.analytic_tool import ANALYTIC_TOOLS
         from tools.search_tool import SEARCH_TOOLS
+        # Browser tool sits next to http_tool semantically (both "fetch
+        # a URL") but operates via headless Chromium so JS-rendered
+        # pages actually surface their content. See browser_tool.py for
+        # when to prefer it over fetch_url.
+        from tools.browser_tool import BROWSER_TOOLS
 
         for fn, schema, risk in (
             SHELL_TOOLS + FILE_TOOLS + HTTP_TOOLS
             + PACKAGE_TOOLS + DB_TOOLS + GCP_TOOLS + DEPLOY_TOOLS
             + NOTIFY_TOOLS + REPORT_TOOLS + ANALYTIC_TOOLS
-            + SEARCH_TOOLS
+            + SEARCH_TOOLS + BROWSER_TOOLS
         ):
             self.register(fn, schema, risk)
 

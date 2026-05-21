@@ -645,6 +645,14 @@ class Executor:
             "db_query":           12,
             # Web / network look-ups
             "web_search":         10,
+            "fetch_url":          10,
+            # Browser tool — same "scrape N pages of a listing" use
+            # case as fetch_url, just slower. 8 is plenty for the
+            # event-listing kind of task ("find all August + September
+            # concerts across these 3 sites"); each call is ~3-5 s, so
+            # 8 calls = ~30 s, which is a sensible upper bound before
+            # we want the model to step back and rethink.
+            "browser_fetch":       8,
             # Shell read-only commands the user reported hitting the cap
             # on (ls, cat, grep …). Idempotent; multiple distinct calls
             # are fine, just not the same one repeatedly (that's caught
@@ -1121,6 +1129,11 @@ class Executor:
                 _DATA_ONLY_TOOLS = {
                     "read_file", "file_read", "csv_head", "json_read",
                     "fetch_url",
+                    # browser_fetch returns rendered page content — same
+                    # data-vs-logs distinction as fetch_url, so don't let
+                    # a stray "command not found" inside scraped article
+                    # text trigger objective_failure.
+                    "browser_fetch",
                 }
                 if not objective_failure_seen and tool_name not in _DATA_ONLY_TOOLS:
                     tool_result_text = json.dumps(

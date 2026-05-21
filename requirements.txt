@@ -45,3 +45,16 @@ xlrd>=2.0.0
 # (scanned docs without an OCR layer) still need an OCR pre-pass — out
 # of scope here; this handles the 90% case of text-bearing PDFs.
 pypdf>=4.0.0
+
+# ── Browser Tool ───────────────────────────────────────────────────────────────
+# Real-browser fetcher for JS-heavy sites (SPAs, Cloudflare-protected pages
+# like tixcraft / KKTIX). `tools/browser_tool.py` drives a headless Chromium
+# via Playwright. The Chromium *binary* itself is NOT bundled — it's
+# downloaded lazily on the first `browser_fetch` call (~150 MB one-time)
+# into ~/Library/Caches/ms-playwright (mac) or ~/.cache/ms-playwright (linux).
+# Keeping it out of the PyInstaller bundle keeps the .dmg under 150 MB.
+playwright>=1.45
+# HTML → markdown conversion (uses BeautifulSoup under the hood). Lets the
+# rendered DOM reach the LLM as clean structured text instead of tag soup —
+# matters a lot for 2B-class local models that get confused by HTML noise.
+markdownify>=0.13
