@@ -897,6 +897,10 @@
       background: var(--surface);
       flex-shrink: 0;
       min-height: 48px;
+      /* Anchor for the .header-overflow.open absolute dropdown so it
+         pins to the header's right edge instead of escaping up the
+         DOM to the nearest positioned ancestor. */
+      position: relative;
     }
     .hamburger {
       display: none;
@@ -1031,6 +1035,89 @@
       font-weight: 600;
     }
     #privacyBtn.local-only:hover { background: #dce6ff; }
+
+    /* ── Chat-header overflow (mobile) ────────────────────────────────────
+       On wider viewports the memory + privacy pills sit inline in the
+       header. On phone-width screens (<600 px) the chat-header runs
+       out of horizontal space — hamburger + title + 3-button mode
+       switch + 2 pills is already ~410 px of fixed-width controls,
+       so the pills get clipped off the right edge. We collapse them
+       into a ⋯ kebab that pops the same two pills as a small
+       dropdown anchored to the header's right edge.
+
+       Design notes:
+         - Kebab is mobile-only; on desktop it stays display:none and
+           the pills behave exactly as before. So desktop users see
+           zero change.
+         - The dropdown re-uses the *original* #memoryBtn / #privacyBtn
+           DOM nodes via the `.header-overflow.open` selector — no
+           clones, so the existing click handlers + state classes
+           (`high-memory`, `local-only`) keep working.
+         - z-index 200 sits above the chat content area but below
+           modals (which use 2000+).
+     */
+    .header-overflow {
+      display: inline-flex;
+      gap: 0.5rem;
+      flex-shrink: 0;
+    }
+    .header-overflow-toggle {
+      display: none;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      color: var(--text-secondary);
+      border-radius: 999px;
+      padding: 5px 12px;
+      font-size: 1.05rem;
+      font-weight: 600;
+      line-height: 1;
+      cursor: pointer;
+      font-family: inherit;
+      flex-shrink: 0;
+      transition: background 0.15s, color 0.15s, border-color 0.15s;
+    }
+    .header-overflow-toggle:hover {
+      background: var(--bg-primary);
+      color: var(--text-primary);
+      border-color: var(--text-secondary);
+    }
+    .header-overflow-toggle.open {
+      background: var(--bg-primary);
+      color: var(--text-primary);
+      border-color: var(--text-secondary);
+    }
+
+    @media (max-width: 600px) {
+      /* Pills collapse — kebab takes their place. */
+      .header-overflow { display: none; }
+      .header-overflow-toggle { display: inline-flex; }
+
+      /* When the kebab is toggled `.open`, the pill container becomes
+         an absolutely-positioned dropdown below the header. Tap targets
+         get a small bump (≥36 px tall) so phone hands don't miss. */
+      .header-overflow.open {
+        display: flex;
+        flex-direction: column;
+        gap: 0.45rem;
+        position: absolute;
+        top: calc(100% + 4px);
+        right: 0.75rem;
+        min-width: 160px;
+        padding: 0.55rem;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        box-shadow: 0 8px 24px rgba(0,0,0,0.14), 0 1px 3px rgba(0,0,0,0.06);
+        z-index: 200;
+      }
+      .header-overflow.open .mem-btn {
+        width: 100%;
+        justify-content: flex-start;
+        padding: 0.5rem 0.7rem;
+        font-size: 0.85rem;
+        gap: 0.5rem;
+      }
+    }
 
     /* Mode badge next to each session item in the sidebar */
     .session-mode-badge {
@@ -3562,14 +3649,29 @@
               <span class="mode-emoji">📊</span><span data-i18n="mode_analytic">Analytic</span>
             </button>
           </div>
-          <button type="button" id="memoryBtn" class="mem-btn" onclick="clearSessionMemory()"
-            data-i18n-title="memory_title" title="Long-term memory in this session (click to clear)">
-            <span>🧠</span><span id="memoryCount">—</span>
-          </button>
-          <button type="button" id="privacyBtn" class="mem-btn" onclick="togglePrivacy()"
-            data-i18n-title="privacy_title" title="Toggle local-only mode">
-            <span id="privacyIcon">🔓</span><span id="privacyLabel" data-i18n="privacy_cloud">Cloud</span>
-          </button>
+          <!-- Memory + privacy pills. On wider viewports they sit inline
+               in the header next to the mode-switch. On phone-width
+               viewports (<600 px) the row overflows the right edge,
+               so we hide this wrapper and surface a ⋯ kebab toggle
+               that pops the same pills as a dropdown — see the CSS
+               under `@media (max-width: 600px)` and the
+               toggleHeaderOverflow() JS handler. -->
+          <div class="header-overflow" id="headerOverflow">
+            <button type="button" id="memoryBtn" class="mem-btn" onclick="clearSessionMemory()"
+              data-i18n-title="memory_title" title="Long-term memory in this session (click to clear)">
+              <span>🧠</span><span id="memoryCount">—</span>
+            </button>
+            <button type="button" id="privacyBtn" class="mem-btn" onclick="togglePrivacy()"
+              data-i18n-title="privacy_title" title="Toggle local-only mode">
+              <span id="privacyIcon">🔓</span><span id="privacyLabel" data-i18n="privacy_cloud">Cloud</span>
+            </button>
+          </div>
+          <button type="button" class="header-overflow-toggle"
+            id="headerOverflowToggle"
+            onclick="toggleHeaderOverflow(event)"
+            aria-label="More session controls"
+            data-i18n-title="header_overflow_title"
+            title="More">⋯</button>
         </div>
         <div class="chat-layout">
           <div class="chat-messages" id="chatMessages">
@@ -5062,6 +5164,51 @@
       document.getElementById('sidebar').classList.remove('open');
       document.getElementById('sidebarOverlay').classList.remove('open');
     }
+
+    // ── Chat-header overflow kebab (mobile) ────────────────────────────────
+    // On phone-width viewports (<600 px) the memory + privacy pills don't
+    // fit in the chat-header row. The HTML wraps them in #headerOverflow
+    // and the CSS hides that wrapper by default at that breakpoint; the
+    // ⋯ #headerOverflowToggle button takes their place and opens a small
+    // dropdown when tapped. Three behaviours wire it up here:
+    //   1. toggleHeaderOverflow — flip the .open class on both the wrapper
+    //      (becomes absolute dropdown) and the toggle (slight visual
+    //      feedback that it's currently open).
+    //   2. Outside-click — any click that lands outside the dropdown OR
+    //      the toggle closes the menu. Skipped when the menu isn't open
+    //      to keep the hot path cheap.
+    //   3. Auto-close after pill action — once the user taps memory or
+    //      privacy, the dropdown should dismiss itself (the action is
+    //      done, no reason to linger). Bound on the wrapper, fires on
+    //      the next microtask so the original pill handler runs first.
+    function toggleHeaderOverflow(e) {
+      if (e) e.stopPropagation();
+      const menu   = document.getElementById('headerOverflow');
+      const toggle = document.getElementById('headerOverflowToggle');
+      if (!menu) return;
+      const willOpen = !menu.classList.contains('open');
+      menu.classList.toggle('open', willOpen);
+      if (toggle) toggle.classList.toggle('open', willOpen);
+    }
+    function closeHeaderOverflow() {
+      const menu   = document.getElementById('headerOverflow');
+      const toggle = document.getElementById('headerOverflowToggle');
+      if (menu)   menu.classList.remove('open');
+      if (toggle) toggle.classList.remove('open');
+    }
+    document.addEventListener('click', (e) => {
+      const menu   = document.getElementById('headerOverflow');
+      const toggle = document.getElementById('headerOverflowToggle');
+      if (!menu || !menu.classList.contains('open')) return;
+      if (toggle && toggle.contains(e.target)) return;
+      if (menu.contains(e.target)) {
+        // Click inside the dropdown (= on a pill). Let the pill's own
+        // handler run, then close on the next tick.
+        setTimeout(closeHeaderOverflow, 0);
+        return;
+      }
+      closeHeaderOverflow();
+    });
 
     // ── Desktop sidebar collapse (icon-only mode) ──────────────────────────
     // Persists across reloads. The mobile flow (.open / .hamburger) is
