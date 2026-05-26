@@ -3665,6 +3665,15 @@
               data-i18n-title="privacy_title" title="Toggle local-only mode">
               <span id="privacyIcon">🔓</span><span id="privacyLabel" data-i18n="privacy_cloud">Cloud</span>
             </button>
+            <!-- Export the whole session as one JSON for bug reports or
+                 offline analysis. Lives alongside memory/privacy so on
+                 mobile it sits inside the ⋯ dropdown automatically. -->
+            <button type="button" id="exportSessionBtn" class="mem-btn"
+              onclick="exportSessionToFile()"
+              data-i18n-title="export_session_title"
+              title="Export this session's records as JSON for analysis or bug reports">
+              <span>📥</span><span data-i18n="export_session_label">Export</span>
+            </button>
           </div>
           <button type="button" class="header-overflow-toggle"
             id="headerOverflowToggle"
@@ -5195,6 +5204,35 @@
       const toggle = document.getElementById('headerOverflowToggle');
       if (menu)   menu.classList.remove('open');
       if (toggle) toggle.classList.remove('open');
+    }
+
+    // Export the current session as a single JSON file. We hit the
+    // server endpoint with a transient <a> click so the browser
+    // handles the actual download via the Content-Disposition header
+    // — that avoids buffering the whole JSON in JS memory (sessions
+    // with many tasks can be MB-scale) and gives us the OS native
+    // Save-As dialog for free.
+    function exportSessionToFile() {
+      const sid = (typeof currentSessionId === 'function') ? currentSessionId() : '';
+      if (!sid) {
+        // Defensive — should never happen since the button only renders
+        // inside an active session, but a friendly toast beats a silent
+        // no-op if the state ever desyncs.
+        if (typeof showToast === 'function') {
+          showToast('No active session to export', 'warning');
+        }
+        return;
+      }
+      const a = document.createElement('a');
+      a.href = `/sessions/${encodeURIComponent(sid)}/export`;
+      // Empty `download` attribute is a hint to browsers that the
+      // response should be downloaded (not navigated to); the server's
+      // Content-Disposition header carries the actual filename.
+      a.download = '';
+      a.style.display = 'none';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
     }
     document.addEventListener('click', (e) => {
       const menu   = document.getElementById('headerOverflow');

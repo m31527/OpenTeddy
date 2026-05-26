@@ -10,6 +10,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import uuid
 
 import httpx
@@ -1790,6 +1791,167 @@ async def clear_session_memory(session_id: str) -> dict:
     """
     deleted = await memory_manager.clear_session(session_id)
     return {"ok": True, "deleted_count": deleted, "session_id": session_id}
+
+
+# ── Session export ────────────────────────────────────────────────────────────
+# Wired to the ⋯ kebab menu in the chat header. Users hit "Export" when
+# they want to share a session with us for bug triage, or do offline
+# analysis ("which subtasks took the longest", "did the cost spike on
+# a particular tool call"). One endpoint, one file — no zip bundle —
+# because a single JSON survives email attachments and pastebin-style
+# sharing way better than a tarball.
+
+# Tunable: shaves the export ceiling. A session with >10 000 tasks is
+# almost certainly someone abusing the API, and exporting that much
+# would block the event loop for several seconds during JSON encoding.
+# If a real user hits this we'll know from the truncation flag and can
+# raise it case by case.
+_EXPORT_MAX_TASKS  = 10000
+_EXPORT_MAX_MEMORY = 10000
+
+
+def _mask_db_url_password(url: str) -> str:
+    """Strip the password from a SQLAlchemy-style URL so it's safe to
+    include in an export bundle. ``postgresql://alice:hunter2@db/foo``
+    becomes ``postgresql://alice:****@db/foo``. Conservative: if the
+    regex doesn't match (malformed URL, no password component) we
+    return the input unchanged — no sensitive piece can leak from a
+    string that didn't fit the pattern."""
+    return re.sub(
+        r"^([a-zA-Z][a-zA-Z0-9+.\-]*://[^:/?#]+:)([^@/?#]+)(@)",
+        r"\1****\3",
+        url,
+        count=1,
+    )
+
+
+@app.get("/sessions/{session_id}/export")
+async def export_session(session_id: str) -> Response:
+    """Bundle everything tied to this session into a single JSON file.
+
+    Includes:
+      - Session metadata (id, title, mode, workspace, local_only flag,
+        timestamps, etc.)
+      - All tasks belonging to the session, each expanded with its
+        subtasks and per-task usage / cost summary
+      - Long-term memory entries tagged with this session (content +
+        type + timestamp + importance)
+      - DB connection settings if attached (password masked)
+      - Top-level counts so a quick `jq '.counts'` tells you scale
+
+    Returns a `Response` with `Content-Disposition: attachment`
+    so browsers download it as a file instead of rendering it
+    inline.  Filename is `openteddy-<safe-title>-<utc-timestamp>.json`.
+
+    NOT included:
+      - Anthropic API keys, ollama config, anything from `config.*` —
+        the export is per-session, never user-global
+      - Raw DB passwords (masked above)
+      - Workspace file contents (the export should travel between
+        machines via email / Slack; bundling user files would balloon
+        the size and leak proprietary code)
+    """
+    session = await tracker.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    # SQLite int → bool coercion, same as the GET /sessions endpoint
+    if "local_only" in session:
+        session["local_only"] = bool(session["local_only"])
+
+    # ── Tasks + subtasks + per-task usage ─────────────────────────────────────
+    tasks_raw = await tracker.list_tasks(
+        limit=_EXPORT_MAX_TASKS, session_id=session_id,
+    )
+    tasks_truncated = len(tasks_raw) >= _EXPORT_MAX_TASKS
+    for t in tasks_raw:
+        try:
+            subs = await tracker.get_subtasks(t["id"])
+            # Pydantic v2 model_dump(mode="json") → datetimes become ISO
+            # strings, enums → values, UUIDs → strings. Saves us from
+            # building a custom JSON encoder.
+            t["subtasks"] = [s.model_dump(mode="json") for s in subs]
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("export: get_subtasks(%s) failed: %s", t["id"], exc)
+            t["subtasks"] = []
+        try:
+            t["usage"] = await tracker.get_task_usage(t["id"])
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("export: get_task_usage(%s) failed: %s", t["id"], exc)
+            t["usage"] = None
+
+    # ── Memory entries tagged with this session ───────────────────────────────
+    # list_memories returns everything (paginated, but we ask for a huge
+    # page); we filter to this session client-side. For users with
+    # thousands of memories across many sessions this is wasteful, but
+    # at our actual scale (hundreds of records per session) it's fine
+    # and avoids adding a new ChromaDB query path just for export.
+    session_mem: list[dict] = []
+    memory_truncated = False
+    try:
+        bundle = await memory_manager.list_memories(
+            page=1, page_size=_EXPORT_MAX_MEMORY,
+        )
+        items = bundle.get("items", [])
+        session_mem = [m for m in items if m.get("session_id") == session_id]
+        memory_truncated = bundle.get("total", 0) >= _EXPORT_MAX_MEMORY
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("export: list_memories failed: %s", exc)
+
+    # ── DB connection (password masked) ───────────────────────────────────────
+    db_conn: Optional[dict] = None
+    try:
+        raw_db = await tracker.get_session_db_connection(session_id)
+        if raw_db and raw_db.get("url"):
+            db_conn = {
+                "kind":  raw_db.get("kind"),
+                "label": raw_db.get("label"),
+                "url":   _mask_db_url_password(raw_db["url"]),
+            }
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("export: get_session_db_connection failed: %s", exc)
+
+    payload = {
+        "openteddy_export_version": 1,
+        "exported_at": datetime.utcnow().isoformat() + "Z",
+        "openteddy_version": OPENTEDDY_VERSION,
+        "session": session,
+        "tasks": tasks_raw,
+        "memory": session_mem,
+        "db_connection": db_conn,
+        "counts": {
+            "tasks":    len(tasks_raw),
+            "subtasks": sum(len(t.get("subtasks") or []) for t in tasks_raw),
+            "memory":   len(session_mem),
+        },
+        "truncation": {
+            "tasks":  tasks_truncated,
+            "memory": memory_truncated,
+        },
+    }
+
+    # Stamp a stable, filesystem-safe filename. Title may contain
+    # spaces / punctuation / CJK — strip to ASCII + underscore so the
+    # browser's Save-As dialog doesn't choke. Length cap keeps things
+    # readable; if the title is empty we fall back to "session".
+    title = (session.get("title") or "session").strip() or "session"
+    safe_title = re.sub(r"[^A-Za-z0-9._-]+", "_", title)[:60].strip("_") or "session"
+    date_part = datetime.utcnow().strftime("%Y%m%d-%H%M%S")
+    filename = f"openteddy-{safe_title}-{date_part}.json"
+
+    body = json.dumps(
+        payload, ensure_ascii=False, indent=2, default=str,
+    )
+    return Response(
+        content=body,
+        media_type="application/json; charset=utf-8",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            # Prevent intermediate caches (CDN, browser) from holding on
+            # to a stale export if the same session is re-exported a
+            # minute later. Session content changes on every task.
+            "Cache-Control": "no-store",
+        },
+    )
 
 
 # ── Per-session DB connection (Analytic mode "Connect database" flow) ──────
