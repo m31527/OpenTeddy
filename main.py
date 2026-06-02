@@ -112,6 +112,15 @@ class _WSManager:
         from collections import deque
         # deque of (ts: float, msg: str)
         self._buffer: deque = deque(maxlen=self._BUFFER_MAX)
+        # In-process listeners — same broadcast stream the WebSocket
+        # clients see, but consumed by Python callbacks instead. Used
+        # by the Telegram bridge to mirror live task progress into the
+        # chat (edit a single "🐻 Subtask 3/5 …" message in place as
+        # the orchestrator works through subtasks). Listeners are
+        # callables `async (event: dict) -> None`; exceptions in one
+        # listener never affect other listeners or the WebSocket
+        # broadcast itself.
+        self._listeners: list = []
 
     async def connect(self, ws: WebSocket, since: float = 0.0) -> None:
         await ws.accept()
@@ -137,6 +146,26 @@ class _WSManager:
     def disconnect(self, ws: WebSocket) -> None:
         self._connections.discard(ws)
 
+    def subscribe(self, callback) -> object:
+        """Register an in-process listener for broadcast events. The
+        callback is `async (event: dict) -> None` and is invoked AFTER
+        the WebSocket clients receive the event (so a slow listener can
+        never delay browser updates). Returns the callback itself as
+        an opaque token to pass to :meth:`unsubscribe`.
+        """
+        self._listeners.append(callback)
+        return callback
+
+    def unsubscribe(self, token: object) -> None:
+        """Remove a listener registered via :meth:`subscribe`. Safe to
+        call with an unknown token (no-op). Telegram bridge calls this
+        in a finally block to make sure a crashed run doesn't leak the
+        listener and have it firing on subsequent unrelated tasks."""
+        try:
+            self._listeners.remove(token)
+        except ValueError:
+            pass
+
     async def broadcast(self, data: dict) -> None:
         """Send a JSON event to every connected client (fire-and-forget per client).
         Also stamps the event with `_ts` and stores it in the ring buffer
@@ -159,6 +188,19 @@ class _WSManager:
             except Exception:  # noqa: BLE001
                 dead.add(ws)
         self._connections -= dead
+
+        # In-process listeners last so a slow listener (Telegram API
+        # round-trip, rate-limited editMessageText) can never delay the
+        # browser UI's WebSocket update. Each listener is fully sand-
+        # boxed: an exception in one doesn't affect others or the rest
+        # of broadcast(). Iterate over a snapshot so a listener that
+        # unsubscribes itself mid-call doesn't mutate the list we're
+        # walking.
+        for cb in list(self._listeners):
+            try:
+                await cb(data)
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("ws_manager listener raised: %s", exc)
 
 
 ws_manager = _WSManager()

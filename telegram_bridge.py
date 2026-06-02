@@ -531,22 +531,195 @@ async def _keep_typing(chat_id: str) -> None:
         raise
 
 
-async def _long_task_hint(chat_id: str, short_goal: str) -> None:
-    """One-shot 'still working on this' message that only fires if the
-    task is taking long enough that the user might start wondering if
-    the bot crashed. Cancelled before firing for fast tasks, so chat-
-    mode quick-answer questions never see this."""
+async def _send_message_get_id(chat_id: str, text: str) -> Optional[int]:
+    """sendMessage that returns the new message_id on success, None on
+    failure. Used by progressive-update flows that want to EDIT this
+    message later (editMessageText needs the id).
+
+    Bypasses the existing `_send_reply` because that wrapper
+    intentionally swallows the response — for fire-and-forget replies
+    we don't care about the id, but for the progress message we do."""
+    if not text:
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(
+                _bot_url("sendMessage"),
+                json={"chat_id": chat_id, "text": text},
+            )
+        if resp.status_code == 200:
+            payload = resp.json()
+            if payload.get("ok"):
+                return (payload.get("result") or {}).get("message_id")
+        logger.debug(
+            "_send_message_get_id non-OK for %s: %d %s",
+            chat_id, resp.status_code, resp.text[:200],
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("_send_message_get_id error for %s: %s", chat_id, exc)
+    return None
+
+
+async def _edit_message(chat_id: str, message_id: int, text: str) -> None:
+    """Best-effort editMessageText. Silently ignores rate-limit 429s
+    (Telegram caps edits at ~1/s per chat; next progress event will
+    catch up). Any other failure logs at debug and moves on — a
+    stuck edit must never break the actual task pipeline."""
+    if not message_id or not text:
+        return
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(
+                _bot_url("editMessageText"),
+                json={
+                    "chat_id":    chat_id,
+                    "message_id": message_id,
+                    "text":       text,
+                },
+            )
+        if resp.status_code not in (200, 400, 429):
+            # 400 = "message is not modified" (text unchanged — fine);
+            # 429 = rate-limited (will catch up next round).
+            logger.debug(
+                "editMessageText non-OK for %s/%s: %d %s",
+                chat_id, message_id, resp.status_code, resp.text[:200],
+            )
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("_edit_message error for %s/%s: %s",
+                     chat_id, message_id, exc)
+
+
+# ── Live progress relay ───────────────────────────────────────────────────────
+# When the orchestrator runs a multi-subtask task, the executor
+# broadcasts `subtask.progress` events through ws_manager. The web UI
+# turns them into a live pill ("3/5 · 🎯 0.85 · 💰 $0.04"). For
+# Telegram-driven tasks we mirror the same signal into a single message
+# that gets edited in place — gives the user the same "I can see it
+# working" feedback without spamming the chat with one bubble per
+# subtask.
+
+# Throttle. Telegram allows ~1 edit/sec to the same message; we leave
+# headroom so a burst of fast subtasks doesn't trigger 429s.
+_PROGRESS_EDIT_MIN_INTERVAL_S = 1.5
+
+
+class _ProgressState:
+    """Per-task state for the editable progress message in Telegram.
+
+    One instance per Telegram-driven orchestrator run. Holds the
+    message_id we're editing (None until first written), throttling
+    state, and a lock so concurrent fire-and-forget edits don't race.
+    """
+
+    __slots__ = (
+        "chat_id", "task_id", "short_goal",
+        "message_id", "last_edit_at", "lock",
+    )
+
+    def __init__(self, chat_id: str, task_id: str, short_goal: str):
+        self.chat_id    = chat_id
+        self.task_id    = task_id
+        self.short_goal = short_goal
+        self.message_id: Optional[int] = None
+        self.last_edit_at: float = 0.0
+        self.lock = asyncio.Lock()
+
+
+async def _write_progress(state: "_ProgressState", text: str) -> None:
+    """Send-or-edit the progress message. Thread-safe via state.lock so
+    a fast burst (long-task hint timer firing at the same time as the
+    first subtask.progress event) can't double-send and end up with two
+    separate threads claiming the same slot."""
+    async with state.lock:
+        if state.message_id is None:
+            state.message_id = await _send_message_get_id(state.chat_id, text)
+        else:
+            await _edit_message(state.chat_id, state.message_id, text)
+        state.last_edit_at = time.monotonic()
+
+
+async def _long_task_hint(state: "_ProgressState", hint_task_ref=None) -> None:
+    """If no progress event has populated the progress message within
+    _LONG_TASK_HINT_S, send a generic 'still working' line so the chat
+    doesn't look frozen. For chat-mode fast answers (which never emit
+    subtask.progress events) this becomes the fallback signal.
+
+    Cancelled by the progress listener as soon as a real subtask.
+    progress event fires — that event's "Subtask 2/4 · 🎯 0.85 · 💰…"
+    text is strictly more useful than the generic hint, and we don't
+    want a 0.5s-later hint to clobber it."""
     try:
         await asyncio.sleep(_LONG_TASK_HINT_S)
-        await _send_reply(
-            chat_id,
-            f"🐻 Still working on: {short_goal}\n"
-            "(this is taking a moment — long tasks can run several minutes)",
+        # If a listener already wrote to the progress message, skip the
+        # hint — its generic wording would be a downgrade.
+        if state.message_id is not None:
+            return
+        await _write_progress(
+            state,
+            f"🐻 Still working on: {state.short_goal}\n"
+            "(local model is planning — first subtask should appear soon)",
         )
     except asyncio.CancelledError:
-        # Task finished before the threshold — that's the *happy* path
-        # for fast intent-classified chat answers. No reply was sent.
+        # Cancellation is the happy path for fast tasks. No message
+        # was sent; that's fine.
         raise
+
+
+def _make_progress_listener(
+    state: "_ProgressState", hint_task: "Optional[asyncio.Task]" = None,
+):
+    """Build a ws_manager listener that watches for subtask.progress
+    events on the bound task and pushes them into the editable progress
+    message. The listener also cancels the long-task hint (since the
+    real progress info is now driving the message) so we don't get a
+    generic "planning..." line clobbering a more specific "Subtask 3/5"
+    update."""
+    async def listener(event: Dict[str, Any]) -> None:
+        # Filter to our task only — many tasks can run concurrently
+        # across the server.
+        if event.get("task_id") != state.task_id:
+            return
+        # We only care about subtask.progress for the editable
+        # message. Other event types (tool_call, tool_result) fly past.
+        if event.get("type") != "subtask.progress":
+            return
+
+        # Once we have real progress, the long-task hint becomes
+        # redundant — its generic text would only clobber the more
+        # informative subtask info.
+        if hint_task is not None and not hint_task.done():
+            hint_task.cancel()
+
+        # Throttle. The first event always fires; subsequent edits
+        # respect the Telegram rate-limit window.
+        now = time.monotonic()
+        if state.message_id is not None and (now - state.last_edit_at) < _PROGRESS_EDIT_MIN_INTERVAL_S:
+            return
+
+        order = int(event.get("order") or 0)
+        total = int(event.get("total") or 0)
+        confidence = float(event.get("confidence") or 0.0)
+        cost = float(event.get("cost_usd") or 0.0)
+        tokens_out = int(event.get("tokens_out") or 0)
+
+        # Compose. Keep it dense — Telegram users skim. Confidence /
+        # cost only shown when meaningful (skips the "$0.000" noise
+        # for local-only chats).
+        bits = [f"⚙️ Subtask {order}/{total}" if total else f"⚙️ Subtask {order}"]
+        if confidence > 0:
+            bits.append(f"🎯 {confidence:.2f}")
+        if cost > 0:
+            bits.append(f"💰 ${cost:.3f}")
+        elif tokens_out > 0:
+            bits.append(f"🔤 {tokens_out:,} tok")
+
+        text = (
+            f"🐻 Working on: {state.short_goal}\n"
+            f"\n"
+            f"{' · '.join(bits)}"
+        )
+        await _write_progress(state, text)
+    return listener
 
 
 # ── Update dispatch ───────────────────────────────────────────────────────────
@@ -660,24 +833,16 @@ async def _run_goal_for_chat(chat_id: str, goal_text: str) -> None:
     # Fire the native "typing…" indicator immediately and keep it alive
     # in the background. The previous version sent a static text ack
     # ("🐻 Got it. Working on: ... could take minutes") immediately —
-    # which was visually mismatched for chat-mode questions that finish
-    # in 2-3 s and made the inbox look cluttered. With the indicator
-    # approach, fast answers feel native ("typing…" → answer) and only
-    # genuinely-slow tasks see the long-task hint below.
+    # visually mismatched for chat-mode questions that finish in 2-3 s.
+    # With the indicator + editable progress message approach: fast
+    # answers feel native ("typing…" → answer) and longer tasks get a
+    # single "🐻 Subtask 3/5 · 🎯 0.85 · 💰 $0.04" message that edits
+    # in place as the orchestrator works through its plan.
     short_goal = goal_text if len(goal_text) <= 80 else goal_text[:77] + "…"
-    typing_task = asyncio.create_task(
-        _keep_typing(chat_id), name=f"tg_typing:{chat_id[:16]}",
-    )
-    hint_task = asyncio.create_task(
-        _long_task_hint(chat_id, short_goal),
-        name=f"tg_hint:{chat_id[:16]}",
-    )
 
-    # Build TaskRequest exactly the way POST /run does — same shape, same
-    # orchestrator.run() entry point, just bypassing HTTP. We wrap the
-    # call in asyncio.wait_for so a hung orchestrator (Ollama
-    # unresponsive, tool deadlock, plan loop) doesn't leave the chat's
-    # concurrency lock held forever — see _TELEGRAM_RUN_TIMEOUT_S.
+    # Build TaskRequest first so the progress listener can filter by
+    # task_id before the orchestrator starts emitting events. (Build
+    # is cheap — just a Pydantic model instance.)
     try:
         from models import TaskRequest, SessionMode
         req = TaskRequest(
@@ -693,19 +858,61 @@ async def _run_goal_for_chat(chat_id: str, goal_text: str) -> None:
             session_id=session_id,
             mode=SessionMode.CODE,
         )
-        # Bind the origin marker so tool_registry can see "this task is
-        # Telegram-driven, apply auto-approve + destructive denylist"
-        # without us having to thread the flag through every layer.
-        # Reset is in the finally block below so a crash, timeout or
-        # cancel can't leave the binding leaking into the next task.
-        from tools._context import set_triggered_by, reset_triggered_by
-        origin_token = set_triggered_by("telegram")
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Telegram bridge: failed to build TaskRequest")
+        await _send_reply(chat_id, f"❌ Could not start task: {exc}")
+        _running_chats.pop(chat_id, None)
+        return
+
+    # Live-progress state — shared between the long-task hint (sends
+    # initial fallback message) and the ws_manager listener (edits the
+    # same message with real subtask info). Whoever fires first writes
+    # the message; the other side edits.
+    progress_state = _ProgressState(
+        chat_id=chat_id, task_id=req.id, short_goal=short_goal,
+    )
+
+    typing_task = asyncio.create_task(
+        _keep_typing(chat_id), name=f"tg_typing:{chat_id[:16]}",
+    )
+    hint_task = asyncio.create_task(
+        _long_task_hint(progress_state),
+        name=f"tg_hint:{chat_id[:16]}",
+    )
+
+    # Subscribe to ws_manager so subtask.progress events filtered to
+    # this task_id flow into the progress message. Late import (and
+    # try/except) keeps this best-effort — if ws_manager is somehow
+    # unavailable we still complete the task, just without live
+    # progress feedback.
+    ws_listener_token: Any = None
+    try:
+        from main import ws_manager as _wsm
+        ws_listener_token = _wsm.subscribe(
+            _make_progress_listener(progress_state, hint_task)
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("Telegram bridge: ws_manager subscribe failed: %s", exc)
+
+    # Run the orchestrator. Bind triggered_by so tool_registry can
+    # apply the auto-approve + denylist policy. Wrap with wait_for so
+    # a hung run doesn't freeze the chat. Reset / unsubscribe happen
+    # in the finally to guarantee no state leaks across tasks.
+    from tools._context import set_triggered_by, reset_triggered_by
+    origin_token = set_triggered_by("telegram")
+    try:
         try:
             result = await asyncio.wait_for(
                 _orchestrator.run(req), timeout=_TELEGRAM_RUN_TIMEOUT_S,
             )
         finally:
             reset_triggered_by(origin_token)
+            if ws_listener_token is not None:
+                try:
+                    from main import ws_manager as _wsm
+                    _wsm.unsubscribe(ws_listener_token)
+                except Exception:  # noqa: BLE001
+                    pass
     except asyncio.TimeoutError:
         # Hard cap hit — log + tell the user clearly, don't leave them
         # staring at the typing dots forever. wait_for already cancelled
