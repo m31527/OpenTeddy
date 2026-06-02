@@ -693,9 +693,19 @@ async def _run_goal_for_chat(chat_id: str, goal_text: str) -> None:
             session_id=session_id,
             mode=SessionMode.CODE,
         )
-        result = await asyncio.wait_for(
-            _orchestrator.run(req), timeout=_TELEGRAM_RUN_TIMEOUT_S,
-        )
+        # Bind the origin marker so tool_registry can see "this task is
+        # Telegram-driven, apply auto-approve + destructive denylist"
+        # without us having to thread the flag through every layer.
+        # Reset is in the finally block below so a crash, timeout or
+        # cancel can't leave the binding leaking into the next task.
+        from tools._context import set_triggered_by, reset_triggered_by
+        origin_token = set_triggered_by("telegram")
+        try:
+            result = await asyncio.wait_for(
+                _orchestrator.run(req), timeout=_TELEGRAM_RUN_TIMEOUT_S,
+            )
+        finally:
+            reset_triggered_by(origin_token)
     except asyncio.TimeoutError:
         # Hard cap hit — log + tell the user clearly, don't leave them
         # staring at the typing dots forever. wait_for already cancelled
