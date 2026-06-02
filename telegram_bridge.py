@@ -75,6 +75,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
+import uuid
 from typing import Any, Dict, List, Optional, Set
 
 import httpx
@@ -114,10 +116,22 @@ _task: Optional[asyncio.Task] = None
 
 # Handles passed in from main.lifespan() — kept module-global so the
 # message handler closures don't have to thread them through every call.
-# Phase 2 will use _orchestrator; Phase 1 reads _tracker only for
-# bookkeeping / logging.
 _tracker: Any = None        # type: tracker.Tracker
 _orchestrator: Any = None   # type: orchestrator.Orchestrator
+
+# Per-chat concurrency guard. Maps chat_id → the asyncio.Task currently
+# running orchestrator.run() for that chat. While an entry exists, new
+# free-text messages from the same chat are rejected with "⏳ task
+# running" rather than queued — that's the cleanest UX (the user knows
+# the previous request is still in flight) and avoids the corner cases
+# of either silently dropping or piling up an unbounded queue.
+_running_chats: Dict[str, asyncio.Task] = {}
+
+# Telegram caps outbound messages at 4096 chars. Cap our payload at
+# 3500 so there's room for the metadata header + trailer + truncation
+# notice. Anything longer gets cut + a "...(truncated)" hint pointing
+# to the web UI for the full summary.
+_TELEGRAM_MAX_BODY_CHARS = 3500
 
 
 # ── Entry / exit ──────────────────────────────────────────────────────────────
@@ -473,16 +487,173 @@ async def _dispatch(update: Dict[str, Any]) -> None:
         await _handle_command(chat_id, text)
         return
 
-    # ── Free-text → goal (Phase 2 plug-in point) ──────────────────────────────
-    # PHASE 2: resolve session for chat_id (create if missing, bind in
-    # tracker), build TaskRequest, await orchestrator.run(req), push
-    # result back via _send_reply. Concurrency guard: refuse if the
-    # chat's session already has a running task.
+    # ── Free-text → goal → orchestrator dispatch ──────────────────────────────
+    # Concurrency guard: refuse new messages while this chat already has
+    # an orchestrator run in flight. Queueing is intentionally not done —
+    # if the user sent "fix bug X" 30s ago and is now typing "actually do
+    # Y instead", we want them to know the first one is still chewing,
+    # not silently stack them up.
+    in_flight = _running_chats.get(chat_id)
+    if in_flight and not in_flight.done():
+        await _send_reply(
+            chat_id,
+            "⏳ A task is still running for this chat. Wait for it to "
+            "finish, or send /cancel to abort it (Phase 3).",
+        )
+        return
+
+    # Spawn the run as an asyncio.Task so we can register it for the
+    # concurrency guard above + (Phase 3) /cancel from Telegram. The
+    # outer try/except in _dispatch() still wraps any sync part of this,
+    # and the task body itself owns its own error handling so a crashed
+    # run doesn't poison _running_chats.
+    task = asyncio.create_task(
+        _run_goal_for_chat(chat_id, text),
+        name=f"telegram_goal:{chat_id[:16]}",
+    )
+    _running_chats[chat_id] = task
+
+
+async def _run_goal_for_chat(chat_id: str, goal_text: str) -> None:
+    """Run one Telegram-initiated goal end-to-end:
+      1. Resolve or create the persistent session bound to this chat
+      2. Send an immediate "got it, working" ack so the user knows the
+         message was received (orchestrator runs can take minutes)
+      3. Build a TaskRequest and await orchestrator.run()
+      4. Format the result for Telegram and send it back
+      5. Clean up the _running_chats entry no matter what
+
+    Errors at any step are caught + surfaced back to the user so a
+    flaky run doesn't leave them staring at a silent chat. The poll
+    loop never sees an exception from here."""
+    start = time.monotonic()
+    try:
+        session_id = await _resolve_or_create_session(chat_id, goal_text)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Telegram bridge: session resolution failed for chat=%s", chat_id)
+        await _send_reply(
+            chat_id,
+            f"❌ Could not resolve a session for this chat: {exc}",
+        )
+        _running_chats.pop(chat_id, None)
+        return
+
+    # Truncate the echo so a 2000-char goal doesn't dominate the ack
+    short_goal = goal_text if len(goal_text) <= 120 else goal_text[:117] + "…"
     await _send_reply(
         chat_id,
-        f"📨 Received: {text}\n\n"
-        "(Phase 1 echo — orchestrator hand-off lands in the next commit.)",
+        f"🐻 Got it. Working on:\n{short_goal}\n\n"
+        "I'll reply here when done. Long tasks can take a few minutes.",
     )
+
+    # Build TaskRequest exactly the way POST /run does — same shape, same
+    # orchestrator.run() entry point, just bypassing HTTP.
+    try:
+        from models import TaskRequest, SessionMode
+        req = TaskRequest(
+            id=str(uuid.uuid4()),
+            goal=goal_text,
+            # Mark the origin so logs / future analytics can break down
+            # "where do my tasks come from". Surfaced in tasks.context.
+            context={
+                "triggered_by":      "telegram",
+                "telegram_chat_id":  chat_id,
+            },
+            priority=1,
+            session_id=session_id,
+            mode=SessionMode.CODE,
+        )
+        result = await _orchestrator.run(req)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception(
+            "Telegram bridge: orchestrator.run() raised for chat=%s session=%s",
+            chat_id, session_id,
+        )
+        await _send_reply(
+            chat_id,
+            f"❌ Task crashed inside the orchestrator: {exc}\n"
+            "Check the server logs for the full traceback.",
+        )
+        _running_chats.pop(chat_id, None)
+        return
+
+    elapsed_s = time.monotonic() - start
+    reply = _format_result_for_telegram(result, session_id, elapsed_s)
+    await _send_reply(chat_id, reply)
+    _running_chats.pop(chat_id, None)
+
+
+async def _resolve_or_create_session(chat_id: str, first_goal: str) -> str:
+    """Find the session bound to this Telegram chat, or create + bind a
+    new one. "One chat = one persistent agent" — the user's chat history
+    in Telegram naturally mirrors the session's task history in OpenTeddy,
+    so follow-ups continue with the same memory / workspace / mode.
+
+    First-time-from-this-chat: we create a Session row titled with a
+    short slice of the first goal so it shows up legibly in the
+    sessions list ("Telegram: fix the deploy script" rather than "New
+    session"). Subsequent calls just look up the binding."""
+    existing = await _tracker.get_session_by_telegram_chat(chat_id)
+    if existing:
+        return existing["id"]
+
+    # First message — provision a fresh session bound to this chat.
+    session_id = str(uuid.uuid4())
+    title = ("Telegram: " + first_goal.strip().splitlines()[0])[:60] or f"Telegram chat {chat_id}"
+    await _tracker.create_session(session_id, title, mode="code")
+    await _tracker.bind_session_to_telegram_chat(session_id, chat_id)
+    logger.info(
+        "Telegram bridge: provisioned new session %s for chat %s (%r)",
+        session_id, chat_id, title,
+    )
+    return session_id
+
+
+def _format_result_for_telegram(result: Any, session_id: str, elapsed_s: float) -> str:
+    """Render a TaskResult into a Telegram-readable message. Aggressive
+    on length (cap at _TELEGRAM_MAX_BODY_CHARS) since Telegram clamps
+    messages at 4096 chars total and we want headroom for trailer
+    metadata. Truncated summaries pointer the user at the web UI for
+    the full text — exporting the session via the kebab menu is the
+    "see everything" escape hatch."""
+    # Late import — avoids pulling Pydantic models into module load.
+    try:
+        from models import TaskStatus
+        status_val = result.status.value if hasattr(result.status, "value") else str(result.status)
+    except Exception:  # noqa: BLE001
+        status_val = str(getattr(result, "status", "unknown"))
+
+    # Pick the right status emoji. Anything we haven't explicitly seen
+    # falls through to a neutral marker rather than a misleading ✅/❌.
+    icon = {
+        "completed": "✅",
+        "failed":    "❌",
+        "escalated": "⚠️",
+        "running":   "⏳",
+    }.get(status_val.lower(), "ℹ️")
+
+    summary = (getattr(result, "summary", "") or "").strip() or "(no summary)"
+    truncated = False
+    if len(summary) > _TELEGRAM_MAX_BODY_CHARS:
+        summary = summary[:_TELEGRAM_MAX_BODY_CHARS]
+        truncated = True
+
+    subtask_count = len(getattr(result, "subtasks", []) or [])
+
+    parts = [
+        f"{icon} {status_val.title()} · {elapsed_s:.1f}s · {subtask_count} subtask"
+        + ("s" if subtask_count != 1 else ""),
+        "",
+        summary,
+    ]
+    if truncated:
+        parts.append(
+            "\n…(truncated — open the session in the web UI or use the "
+            "kebab menu's Export button for the full output)"
+        )
+    parts.append("")
+    parts.append(f"session: {session_id}")
+    return "\n".join(parts)
 
 
 async def _handle_command(chat_id: str, text: str) -> None:
