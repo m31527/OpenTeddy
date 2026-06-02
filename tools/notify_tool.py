@@ -109,11 +109,21 @@ async def telegram_send(
                 duration_ms=duration_ms,
             )
         # Bubble up Telegram's description for actionable errors like
-        # "chat not found" or "bot was blocked".
+        # "chat not found" or "bot was blocked". Use the shared
+        # `friendly_telegram_error` so the LLM sees the same multi-line,
+        # actionable hint that the UI's Test ping button shows — that
+        # way "tell the user how to fix this" outputs are consistent
+        # whether the failure was a manual test or a real agent call.
         description = data.get("description") or f"HTTP {resp.status_code}"
+        try:
+            from telegram_bridge import friendly_telegram_error
+            friendly = friendly_telegram_error(description)
+        except ImportError:
+            # telegram_bridge missing on a partial install — fall back.
+            friendly = f"Telegram API rejected the message: {description}"
         return make_result(
             False,
-            error=f"Telegram API rejected the message: {description}",
+            error=friendly,
             duration_ms=duration_ms,
         )
     except httpx.HTTPError as exc:

@@ -4572,7 +4572,11 @@
                   title="Send a 'OpenTeddy is connected' message to the Default Chat ID to verify the bot token + chat_id work.">
                   <span>📡</span><span data-i18n="telegram_test_ping_label">Test ping</span>
                 </button>
-                <span id="telegram_test_ping_status" style="margin-left:0.6rem;font-size:0.78rem;color:var(--text-secondary)"></span>
+                <!-- white-space:pre-line so the server-side multi-line
+                     friendly error explanations (e.g. "chat not found" →
+                     3-step fix) render with proper line breaks instead
+                     of collapsing into a wall of text. -->
+                <span id="telegram_test_ping_status" style="margin-left:0.6rem;font-size:0.78rem;color:var(--text-secondary);white-space:pre-line;vertical-align:top"></span>
               </div>
 
               <!-- ── Inbound bridge (Telegram → OpenTeddy) ──────────────

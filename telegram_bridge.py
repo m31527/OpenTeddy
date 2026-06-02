@@ -211,6 +211,98 @@ def _bot_url(path: str) -> str:
     return _API_BASE.format(token=token) + "/" + path
 
 
+# ── Human-friendly error translation ──────────────────────────────────────────
+
+def friendly_telegram_error(description: str) -> str:
+    """Translate Telegram's terse API error into an actionable, multi-
+    line explanation aimed at someone setting up a bot for the first
+    time. Returns the input unchanged if nothing matches — so a
+    surprising error never gets silently lost; the raw text is always
+    present at the end as `Raw: ...` for support / copy-paste.
+
+    The patterns covered are the ones we've seen real users hit on
+    first-time setup. Add more here as new failure shapes show up.
+    """
+    if not description:
+        return "Telegram returned an empty error description."
+
+    lower = description.lower()
+
+    # The classic one: bot can't send to a chat that has never written
+    # to it first. Standard fix is 3 steps — spell them out so the user
+    # doesn't need to leave the app to figure it out.
+    if "chat not found" in lower or "can't initiate conversation" in lower:
+        return (
+            "Telegram says 'chat not found' — usually this means your "
+            "Telegram account has never started a conversation with this "
+            "bot, so Telegram refuses to let the bot DM you out of the "
+            "blue.\n"
+            "\n"
+            "Fix (30 seconds):\n"
+            "  1. Open Telegram, search for your bot's @username "
+            "(the one @BotFather gave you).\n"
+            "  2. Tap Start (or send /start).\n"
+            "  3. Come back here and click Test ping again.\n"
+            "\n"
+            f"Raw: {description}"
+        )
+
+    # Bad token — the 401 path usually surfaces here too, but if Telegram
+    # sends it as a 400 with this phrase, catch it.
+    if "unauthorized" in lower or "401" in lower:
+        return (
+            "Telegram says the bot token is invalid. Double-check you "
+            "copied the whole token from @BotFather (it includes the "
+            "colon and is ~46 chars). Regenerate with /token in "
+            "@BotFather if you suspect the old one leaked.\n"
+            "\n"
+            f"Raw: {description}"
+        )
+
+    # User blocked the bot — happens after a previous setup attempt
+    # where the user blocked instead of pressing Start.
+    if "blocked" in lower:
+        return (
+            "Telegram says the user has blocked this bot. Open the bot's "
+            "chat in Telegram, tap the menu (top right), and choose "
+            "Unblock. Then click Test ping again.\n"
+            "\n"
+            f"Raw: {description}"
+        )
+
+    # Group chat without the bot being a member — common for the "send
+    # the report to my team channel" use case.
+    if ("bot is not a member" in lower
+            or "need administrator rights" in lower
+            or ("chat not found" in lower and description.lstrip("-").lstrip().startswith("-"))):
+        return (
+            "Telegram says the bot can't reach this group/channel. "
+            "Either:\n"
+            "  - Add the bot to the group (Group settings → Add members "
+            "→ search the bot's @username), or\n"
+            "  - For channels, make it an admin so it can post.\n"
+            "\n"
+            f"Raw: {description}"
+        )
+
+    # chat_id format / empty — usually means the user pasted a username
+    # without the @ prefix, or left a stray character.
+    if "chat_id is empty" in lower or "chat_id" in lower and "invalid" in lower:
+        return (
+            "Telegram says the chat_id is malformed. For a personal chat "
+            "this should be a positive integer (e.g. 987654321). For a "
+            "group it's a negative integer (e.g. -1001234567890). For a "
+            "public channel it can be '@channelname'. Find your numeric "
+            "chat_id by sending any message to @userinfobot.\n"
+            "\n"
+            f"Raw: {description}"
+        )
+
+    # Fall-through — surface the raw error verbatim so the user can
+    # google it / paste it into a bug report.
+    return f"Telegram returned: {description}"
+
+
 # ── Polling loop ──────────────────────────────────────────────────────────────
 
 async def _poll_loop() -> None:

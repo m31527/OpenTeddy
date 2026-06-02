@@ -2474,10 +2474,15 @@ async def telegram_test_ping() -> dict:
             "data": {"message_id": message_id, "sent_to": chat_id},
             "error": None,
         }
+    # Translate Telegram's terse description into multi-line, actionable
+    # text. The original raw error is preserved at the tail of the
+    # message so unknown failure modes still get surfaced verbatim and
+    # the user can copy-paste for support without losing detail.
     description = data.get("description") or f"HTTP {resp.status_code}"
+    from telegram_bridge import friendly_telegram_error
     return {
         "success": False, "data": None,
-        "error": f"Telegram rejected the message: {description}",
+        "error": friendly_telegram_error(description),
     }
 
 
