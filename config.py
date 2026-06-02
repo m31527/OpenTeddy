@@ -292,6 +292,26 @@ class Config:
     telegram_default_chat_id: str = field(
         default_factory=lambda: os.getenv("TELEGRAM_DEFAULT_CHAT_ID", "")
     )
+    # Inbound (Telegram → OpenTeddy) — long-polling bridge.
+    # When `telegram_inbound_enabled` is True AND `telegram_bot_token`
+    # is set AND `telegram_inbound_chat_id_whitelist` is non-empty,
+    # telegram_bridge.py spawns a background task at startup that polls
+    # `getUpdates`, routes whitelisted messages to a per-chat persistent
+    # session, runs them through the orchestrator, and pushes the
+    # result back via telegram_send. See telegram_bridge.py docstring
+    # for the full lifecycle.
+    #
+    # Whitelist format: comma-separated chat_ids (numeric or "@username"
+    # for public channels). Empty = inbound disabled even if the toggle
+    # is on — we refuse to listen on an open bot, since any stranger
+    # could spawn tasks otherwise.
+    telegram_inbound_enabled: bool = field(
+        default_factory=lambda: os.getenv("TELEGRAM_INBOUND_ENABLED", "false").strip().lower()
+                                in {"1", "true", "yes", "on"}
+    )
+    telegram_inbound_chat_id_whitelist: str = field(
+        default_factory=lambda: os.getenv("TELEGRAM_INBOUND_WHITELIST", "")
+    )
     smtp_host: str = field(default_factory=lambda: os.getenv("SMTP_HOST", ""))
     smtp_port: int = field(
         default_factory=lambda: int(os.getenv("SMTP_PORT", "587") or "587")

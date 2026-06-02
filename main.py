@@ -266,7 +266,23 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:  # type: ignore[type-arg]
                 "    (a) Settings → Orchestrator Model: pick gemma3:4b\n"
                 "    (b) Settings → Claude API Key: paste an Anthropic key\n"
             )
+    # Telegram inbound bridge — long-polls Telegram for messages from
+    # whitelisted chats and (Phase 2+) routes them through the
+    # orchestrator. No-ops cleanly if not configured. See
+    # telegram_bridge.py for the lifecycle + security model.
+    try:
+        from telegram_bridge import start as _start_tg_bridge
+        await _start_tg_bridge(tracker, orchestrator)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Telegram bridge startup failed (non-fatal): %s", exc)
+
     yield
+
+    try:
+        from telegram_bridge import stop as _stop_tg_bridge
+        await _stop_tg_bridge()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Telegram bridge shutdown saw: %s", exc)
 
     await executor.close()
     await orchestrator.close()
@@ -2401,6 +2417,68 @@ async def ollama_status() -> dict:
         online = False
 
     return {"success": True, "data": {"online": online, "url": url}, "error": None}
+
+
+@app.post("/settings/telegram/test")
+async def telegram_test_ping() -> dict:
+    """Send a one-shot 'OpenTeddy is connected' message to the
+    configured Telegram default chat. Wired to the Settings → Telegram
+    inbound → 'Test ping' button so the user can verify their bot
+    token + chat_id are correct without spinning up a full task.
+
+    Returns {success, data: {message_id, sent_to}, error}. On
+    misconfiguration (no token, no chat_id, Telegram rejects) returns
+    success=False with a clear error string so the UI can surface it
+    inline instead of as an opaque red toast."""
+    import httpx as _httpx
+
+    token = (getattr(config, "telegram_bot_token", "") or "").strip()
+    if not token:
+        return {
+            "success": False, "data": None,
+            "error": "telegram_bot_token is empty — set it above first.",
+        }
+    chat_id = (getattr(config, "telegram_default_chat_id", "") or "").strip()
+    if not chat_id:
+        return {
+            "success": False, "data": None,
+            "error": (
+                "telegram_default_chat_id is empty — set it so the bot "
+                "knows where to send the ping. Find your chat_id by "
+                "sending any message to @userinfobot on Telegram."
+            ),
+        }
+
+    text = (
+        "🐻 OpenTeddy ping — bot token + chat_id are working.\n"
+        "If inbound polling is enabled and this chat is whitelisted, "
+        "you can now send goals here."
+    )
+    try:
+        async with _httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(
+                f"https://api.telegram.org/bot{token}/sendMessage",
+                json={"chat_id": chat_id, "text": text},
+            )
+        data = resp.json() if resp.status_code < 500 else {}
+    except Exception as exc:  # noqa: BLE001
+        return {
+            "success": False, "data": None,
+            "error": f"network error talking to Telegram: {exc}",
+        }
+
+    if resp.status_code == 200 and data.get("ok"):
+        message_id = (data.get("result") or {}).get("message_id")
+        return {
+            "success": True,
+            "data": {"message_id": message_id, "sent_to": chat_id},
+            "error": None,
+        }
+    description = data.get("description") or f"HTTP {resp.status_code}"
+    return {
+        "success": False, "data": None,
+        "error": f"Telegram rejected the message: {description}",
+    }
 
 
 @app.get("/settings/ollama/models")

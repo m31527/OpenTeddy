@@ -132,6 +132,14 @@ class Tracker:
             # back to a session re-rendered the agent message WITHOUT
             # the chip + preview button. Read+rendered by loadChatHistory.
             "ALTER TABLE tasks ADD COLUMN artifacts TEXT NOT NULL DEFAULT '[]'",
+            # Telegram inbound bridge — chat_id is the per-chat-id key
+            # that maps a Telegram conversation to *one* persistent
+            # OpenTeddy session. See telegram_bridge.py: "one chat = one
+            # standing agent" is the mental model. Stored as TEXT (not
+            # INT) because Telegram chat_ids can also be `@username`
+            # strings for public channels. Empty default = "not bound
+            # to any chat", which is every pre-existing session.
+            "ALTER TABLE sessions ADD COLUMN telegram_chat_id TEXT NOT NULL DEFAULT ''",
         ]
         for sql in migrations:
             try:
@@ -145,6 +153,20 @@ class Tracker:
         try:
             await self.db.execute(
                 "CREATE INDEX IF NOT EXISTS idx_tasks_session ON tasks(session_id)"
+            )
+            await self.db.commit()
+        except Exception:  # noqa: BLE001
+            pass
+        # Index for the telegram bridge's "find my chat's session" lookup.
+        # Single-column index is fine because telegram_chat_id values are
+        # already unique among bound sessions in practice (we set them
+        # one-per-chat), and the cardinality is low (one row per Telegram
+        # whitelist entry — never more than a handful).
+        try:
+            await self.db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_sessions_tg_chat "
+                "ON sessions(telegram_chat_id) "
+                "WHERE telegram_chat_id != ''"
             )
             await self.db.commit()
         except Exception:  # noqa: BLE001
@@ -439,6 +461,44 @@ class Tracker:
         if not (kind and url):
             return None
         return {"kind": kind, "url": url, "label": label}
+
+    # ── Telegram bridge: chat_id ↔ session binding ───────────────────────────
+    # One Telegram chat is bound to exactly one OpenTeddy session, so
+    # "send a follow-up message" continues the same agent's memory /
+    # workspace / mode. The binding is set the first time a whitelisted
+    # chat sends a message and persists until the user explicitly rebinds
+    # (e.g. via /new in Telegram, or by deleting the session).
+
+    async def get_session_by_telegram_chat(
+        self, chat_id: str,
+    ) -> Optional[dict]:
+        """Return the session row currently bound to this Telegram
+        chat_id, or None if no binding exists. Used by the inbound
+        bridge to route incoming messages to the correct session."""
+        if not chat_id:
+            return None
+        async with self.db.execute(
+            "SELECT * FROM sessions WHERE telegram_chat_id=? "
+            "ORDER BY updated_at DESC LIMIT 1",
+            (str(chat_id),),
+        ) as cur:
+            row = await cur.fetchone()
+        if not row:
+            return None
+        cols = [d[0] for d in cur.description]
+        return dict(zip(cols, row))
+
+    async def bind_session_to_telegram_chat(
+        self, session_id: str, chat_id: str,
+    ) -> None:
+        """Tie a session to a Telegram chat_id so future incoming
+        messages from that chat route to this session. Idempotent:
+        re-binding to the same chat_id is a no-op."""
+        await self.db.execute(
+            "UPDATE sessions SET telegram_chat_id=?, updated_at=? WHERE id=?",
+            (str(chat_id), datetime.utcnow().isoformat(), session_id),
+        )
+        await self.db.commit()
 
     async def clear_session_db_connection(self, session_id: str) -> None:
         """Detach the DB. Same effect as set_session_db_connection with

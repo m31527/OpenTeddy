@@ -362,6 +362,25 @@ SETTINGS_META: dict[str, dict[str, Any]] = {
                        "and send here by default.",
         "type":        "text",
     },
+    # Inbound bridge (Telegram → OpenTeddy). When enabled + whitelist
+    # populated, telegram_bridge.py polls getUpdates and routes messages
+    # from whitelisted chats to a per-chat persistent session.
+    "telegram_inbound_enabled": {
+        "label":       "Enable Telegram inbound",
+        "description": "When ON (and a whitelist is set), OpenTeddy polls "
+                       "Telegram for messages from your whitelisted chats and "
+                       "runs them as goals. The reply is pushed back to the "
+                       "same chat. Needs the server to stay running 24/7.",
+        "type":        "bool",
+    },
+    "telegram_inbound_chat_id_whitelist": {
+        "label":       "Inbound chat-ID whitelist",
+        "description": "Comma-separated chat_ids that are allowed to drive "
+                       "OpenTeddy. Empty = inbound disabled (we refuse to "
+                       "listen on an open bot). Find your chat_id by sending "
+                       "any message to @userinfobot on Telegram.",
+        "type":        "text",
+    },
     "smtp_host": {
         "label":       "SMTP Host",
         "description": "e.g. smtp.gmail.com, smtp.sendgrid.net",
@@ -444,6 +463,8 @@ def _defaults_from_config() -> dict[str, str]:
         "qwen_temperature":          str(config.qwen_temperature),
         "telegram_bot_token":        str(config.telegram_bot_token),
         "telegram_default_chat_id":  str(config.telegram_default_chat_id),
+        "telegram_inbound_enabled":  "true" if getattr(config, "telegram_inbound_enabled", False) else "false",
+        "telegram_inbound_chat_id_whitelist": str(getattr(config, "telegram_inbound_chat_id_whitelist", "")),
         "smtp_host":                 str(config.smtp_host),
         "smtp_port":                 str(config.smtp_port),
         "smtp_user":                 str(config.smtp_user),
@@ -811,10 +832,16 @@ class SettingsStore:
         # Notification credentials. All strings; blanks are meaningful
         # (= "not configured", tools will return a clear error).
         for k in ("telegram_bot_token", "telegram_default_chat_id",
+                  "telegram_inbound_chat_id_whitelist",
                   "smtp_host", "smtp_user", "smtp_password", "smtp_from",
                   "webhook_secret"):
             if k in settings:
                 setattr(config, k, settings[k] or "")
+        if "telegram_inbound_enabled" in settings:
+            config.telegram_inbound_enabled = (
+                str(settings["telegram_inbound_enabled"]).strip().lower()
+                in {"1", "true", "yes", "on"}
+            )
         port_val = _int("smtp_port")
         if port_val is not None:
             config.smtp_port = port_val
