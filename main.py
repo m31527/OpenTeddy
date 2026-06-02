@@ -2419,6 +2419,34 @@ async def ollama_status() -> dict:
     return {"success": True, "data": {"online": online, "url": url}, "error": None}
 
 
+@app.get("/admin/telegram/status")
+async def telegram_bridge_status() -> dict:
+    """Diagnose the Telegram inbound bridge in one round-trip.
+
+    Returns the bridge's current runtime state plus the most-recent
+    `chat_id` we silently dropped (because it wasn't on the whitelist) —
+    the single most useful piece of info for someone setting up inbound
+    for the first time and wondering "why doesn't my message arrive?".
+
+    Typical answers this surfaces:
+      - running=False, blocked_reason="inbound disabled in Settings"
+        → flip the toggle
+      - running=True, last_dropped_chat_id="987654" and your whitelist
+        is ["123456"] → your @userinfobot chat_id is "987654", paste it
+        into the whitelist
+      - running=True, last_dropped_chat_id=null, in_flight_chats=["..."]
+        → it's already processing, just wait
+
+    Safe to expose: never returns the bot token (only `token_set: bool`),
+    never reveals chats it didn't already receive a message from.
+    """
+    try:
+        from telegram_bridge import status as _bridge_status
+        return {"success": True, "data": _bridge_status(), "error": None}
+    except Exception as exc:  # noqa: BLE001
+        return {"success": False, "data": None, "error": f"status snapshot failed: {exc}"}
+
+
 @app.post("/settings/telegram/test")
 async def telegram_test_ping() -> dict:
     """Send a one-shot 'OpenTeddy is connected' message to the

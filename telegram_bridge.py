@@ -127,6 +127,14 @@ _orchestrator: Any = None   # type: orchestrator.Orchestrator
 # of either silently dropping or piling up an unbounded queue.
 _running_chats: Dict[str, asyncio.Task] = {}
 
+# Diagnostics: last chat_id we silent-dropped because it wasn't on the
+# whitelist. Surfaced by GET /admin/telegram/status so a user setting up
+# inbound for the first time can see "I sent a message from chat X but
+# my whitelist is Y" without having to grep server logs. Bounded — only
+# the *most recent* drop is kept; we don't need a history, just the hint
+# for whichever chat the user is currently trying to connect.
+_last_dropped_chat_id: Optional[str] = None
+
 # Telegram caps outbound messages at 4096 chars. Cap our payload at
 # 3500 so there's room for the metadata header + trailer + truncation
 # notice. Anything longer gets cut + a "...(truncated)" hint pointing
@@ -174,6 +182,27 @@ async def stop() -> None:
         logger.warning("telegram bridge stop() saw unexpected: %s", exc)
     _task = None
     logger.info("Telegram inbound bridge stopped.")
+
+
+def status() -> Dict[str, Any]:
+    """Snapshot of the bridge's runtime state for diagnostics. Surfaced
+    by GET /admin/telegram/status so the user setting this up can see
+    "yes the bridge is running, my whitelist is [X, Y], you sent your
+    last unauthorised message from chat Z" in one place — without
+    having to grep server logs or guess from silence.
+
+    Intentionally token-free (only `token_set: bool` flag) so the
+    response is safe to glance at on a shared screen."""
+    token_set = bool((getattr(config, "telegram_bot_token", "") or "").strip())
+    return {
+        "running":              _task is not None and not _task.done(),
+        "inbound_enabled":      bool(getattr(config, "telegram_inbound_enabled", False)),
+        "token_set":            token_set,
+        "whitelist":            sorted(_whitelisted_chat_ids()),
+        "blocked_reason":       _why_we_should_not_start(),
+        "last_dropped_chat_id": _last_dropped_chat_id,
+        "in_flight_chats":      sorted(_running_chats.keys()),
+    }
 
 
 async def reload_config() -> None:
@@ -466,9 +495,19 @@ async def _dispatch(update: Dict[str, Any]) -> None:
     if chat.get("username"):
         candidates.add("@" + chat["username"])
     if not (candidates & _whitelisted_chat_ids()):
-        logger.debug(
-            "Telegram bridge: ignored chat_id %s (not in whitelist)",
-            chat_id,
+        # Bump to INFO so a user setting up inbound for the first time
+        # can confirm "yes, the bot is receiving my message; no, my
+        # chat_id isn't on the whitelist" in one log line. Also stash
+        # the most-recent dropped id on the module so /admin/telegram/
+        # status can show it without server-log access. Security note:
+        # we still don't *reply* to non-whitelisted chats — the
+        # behaviour shift is purely about local observability for the
+        # owner, not about exposing anything to the probing chat.
+        global _last_dropped_chat_id
+        _last_dropped_chat_id = chat_id
+        logger.info(
+            "Telegram bridge: ignored chat_id %s (not in whitelist %s)",
+            chat_id, sorted(_whitelisted_chat_ids()),
         )
         return
 
@@ -686,12 +725,93 @@ async def _handle_command(chat_id: str, text: str) -> None:
             "Commands:\n"
             "/start  — confirm you're connected\n"
             "/help   — this message\n"
-            "/cancel — stop the currently-running task (Phase 3)\n"
-            "/new    — start a fresh session for this chat (Phase 3)\n",
+            "/cancel — abort the currently-running task\n"
+            "/new    — start a fresh session for this chat (old one stays in history)\n",
         )
+        return
+
+    if cmd == "/cancel":
+        await _handle_cancel(chat_id)
+        return
+
+    if cmd == "/new":
+        await _handle_new(chat_id)
         return
 
     await _send_reply(
         chat_id,
         f"❓ Unknown command: {cmd}. Try /help.",
+    )
+
+
+async def _handle_cancel(chat_id: str) -> None:
+    """Abort the orchestrator run currently in flight for this chat.
+    Cancellation is cooperative — asyncio.Task.cancel() raises
+    CancelledError inside the running coroutine on its next `await`,
+    which propagates up through orchestrator.run() and unwinds the
+    executor. The run_goal closure's outer try/except in
+    _run_goal_for_chat catches the exception, but cancellation is a
+    legitimate path: we explicitly send a different reply for it."""
+    task = _running_chats.get(chat_id)
+    if not task or task.done():
+        await _send_reply(
+            chat_id,
+            "ℹ️ Nothing running for this chat — there's no task to cancel.",
+        )
+        return
+    task.cancel()
+    # The _run_goal_for_chat coroutine catches CancelledError implicitly
+    # via the bare Exception handler and pops itself from _running_chats.
+    # Confirm to the user separately so the cancellation reply isn't
+    # gated on the orchestrator's cleanup actually completing (which
+    # could take a few seconds if a tool is mid-flight).
+    await _send_reply(chat_id, "⏹️ Cancelling — the running task will stop shortly.")
+
+
+async def _handle_new(chat_id: str) -> None:
+    """Detach this chat from its current session and start a fresh one.
+
+    Refuses if a task is currently running — switching sessions
+    mid-task would leave a confusing dangling run on the old session.
+    Make the user /cancel first, then /new. Common UX would just
+    /cancel automatically, but explicit is safer: a user might not
+    realise the run is in-flight and discard real work.
+
+    The old session is NOT deleted — it stays in the sessions list and
+    history. Just the chat binding is moved to the new one.
+    """
+    in_flight = _running_chats.get(chat_id)
+    if in_flight and not in_flight.done():
+        await _send_reply(
+            chat_id,
+            "⏳ A task is still running. Send /cancel first, then /new.",
+        )
+        return
+
+    try:
+        existing = await _tracker.get_session_by_telegram_chat(chat_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Telegram bridge: lookup failed during /new for chat=%s", chat_id)
+        await _send_reply(chat_id, f"❌ Could not look up your current session: {exc}")
+        return
+
+    # Create a fresh session and rebind. The atomic
+    # bind_session_to_telegram_chat in tracker.py clears the chat_id off
+    # the previous session in the same SQL transaction, so we don't end
+    # up with two sessions claiming the same chat.
+    try:
+        new_id = str(uuid.uuid4())
+        title = f"Telegram (fresh @ {time.strftime('%Y-%m-%d %H:%M')})"
+        await _tracker.create_session(new_id, title, mode="code")
+        await _tracker.bind_session_to_telegram_chat(new_id, chat_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Telegram bridge: failed to create fresh session for chat=%s", chat_id)
+        await _send_reply(chat_id, f"❌ Could not create a fresh session: {exc}")
+        return
+
+    old_hint = f"\nPrevious session ({existing['id'][:8]}) stays in your history." if existing else ""
+    await _send_reply(
+        chat_id,
+        f"🆕 Fresh session started.{old_hint}\n"
+        "Send any text to kick off your first goal.",
     )

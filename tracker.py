@@ -492,8 +492,25 @@ class Tracker:
         self, session_id: str, chat_id: str,
     ) -> None:
         """Tie a session to a Telegram chat_id so future incoming
-        messages from that chat route to this session. Idempotent:
-        re-binding to the same chat_id is a no-op."""
+        messages from that chat route to this session.
+
+        Atomic rebind: clears the same chat_id from any *other* session
+        before stamping it onto this one, so we never end up with two
+        sessions claiming the same chat. Without this, `/new` would
+        leave a dangling binding on the old session, and
+        `get_session_by_telegram_chat`'s "most-recently-updated"
+        tie-breaker would silently rely on updated_at ordering to pick
+        the right session — fragile, and surprising when a chronologically
+        older session somehow becomes the "active" one after a workspace
+        edit bumps its updated_at.
+
+        Idempotent: re-binding to the same (session_id, chat_id) just
+        bumps updated_at."""
+        await self.db.execute(
+            "UPDATE sessions SET telegram_chat_id='' "
+            "WHERE telegram_chat_id=? AND id != ?",
+            (str(chat_id), session_id),
+        )
         await self.db.execute(
             "UPDATE sessions SET telegram_chat_id=?, updated_at=? WHERE id=?",
             (str(chat_id), datetime.utcnow().isoformat(), session_id),
