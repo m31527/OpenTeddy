@@ -469,6 +469,71 @@ async def _send_reply(chat_id: str, text: str) -> None:
         logger.warning("Telegram sendMessage to %s failed: %s", chat_id, exc)
 
 
+# ── Native "thinking" indicator ───────────────────────────────────────────────
+# Telegram clients show "Bot is typing…" for ~5 s after the bot calls
+# sendChatAction. The indicator is much lighter-weight UX than a static
+# text ack — a chat-mode question that finishes in 2 s shouldn't have
+# its inbox cluttered by a separate "got it, this may take minutes"
+# message. We refresh every ~4 s so the indicator stays alive through
+# longer runs, and ONLY fall back to a textual "still working" hint if
+# the task is actually long.
+
+# Refresh interval — just under Telegram's ~5 s indicator timeout so
+# the dots don't visibly blink off and on between sendChatAction calls.
+_TYPING_REFRESH_S = 4
+
+# After this many seconds without a result, send a one-shot text
+# "still working" message so the user knows the bot hasn't silently
+# crashed. ~5 s is the inflection point where the typing dots stop
+# feeling "fast" and start feeling "stuck".
+_LONG_TASK_HINT_S = 5
+
+
+async def _send_chat_action(chat_id: str, action: str = "typing") -> None:
+    """Fire-and-forget sendChatAction. Telegram-side this surfaces the
+    native typing indicator. Errors are swallowed: an indicator failure
+    must never derail the actual task reply."""
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            await client.post(
+                _bot_url("sendChatAction"),
+                json={"chat_id": chat_id, "action": action},
+            )
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("Telegram sendChatAction to %s failed: %s", chat_id, exc)
+
+
+async def _keep_typing(chat_id: str) -> None:
+    """Background loop that keeps the typing indicator alive for the
+    duration of a task. Cancelled by the caller (via task.cancel())
+    when the orchestrator returns."""
+    try:
+        while True:
+            await _send_chat_action(chat_id, "typing")
+            await asyncio.sleep(_TYPING_REFRESH_S)
+    except asyncio.CancelledError:
+        # Clean exit — caller cancelled us because the task finished.
+        raise
+
+
+async def _long_task_hint(chat_id: str, short_goal: str) -> None:
+    """One-shot 'still working on this' message that only fires if the
+    task is taking long enough that the user might start wondering if
+    the bot crashed. Cancelled before firing for fast tasks, so chat-
+    mode quick-answer questions never see this."""
+    try:
+        await asyncio.sleep(_LONG_TASK_HINT_S)
+        await _send_reply(
+            chat_id,
+            f"🐻 Still working on: {short_goal}\n"
+            "(this is taking a moment — long tasks can run several minutes)",
+        )
+    except asyncio.CancelledError:
+        # Task finished before the threshold — that's the *happy* path
+        # for fast intent-classified chat answers. No reply was sent.
+        raise
+
+
 # ── Update dispatch ───────────────────────────────────────────────────────────
 
 async def _dispatch(update: Dict[str, Any]) -> None:
@@ -577,12 +642,20 @@ async def _run_goal_for_chat(chat_id: str, goal_text: str) -> None:
         _running_chats.pop(chat_id, None)
         return
 
-    # Truncate the echo so a 2000-char goal doesn't dominate the ack
-    short_goal = goal_text if len(goal_text) <= 120 else goal_text[:117] + "…"
-    await _send_reply(
-        chat_id,
-        f"🐻 Got it. Working on:\n{short_goal}\n\n"
-        "I'll reply here when done. Long tasks can take a few minutes.",
+    # Fire the native "typing…" indicator immediately and keep it alive
+    # in the background. The previous version sent a static text ack
+    # ("🐻 Got it. Working on: ... could take minutes") immediately —
+    # which was visually mismatched for chat-mode questions that finish
+    # in 2-3 s and made the inbox look cluttered. With the indicator
+    # approach, fast answers feel native ("typing…" → answer) and only
+    # genuinely-slow tasks see the long-task hint below.
+    short_goal = goal_text if len(goal_text) <= 80 else goal_text[:77] + "…"
+    typing_task = asyncio.create_task(
+        _keep_typing(chat_id), name=f"tg_typing:{chat_id[:16]}",
+    )
+    hint_task = asyncio.create_task(
+        _long_task_hint(chat_id, short_goal),
+        name=f"tg_hint:{chat_id[:16]}",
     )
 
     # Build TaskRequest exactly the way POST /run does — same shape, same
@@ -608,6 +681,10 @@ async def _run_goal_for_chat(chat_id: str, goal_text: str) -> None:
             "Telegram bridge: orchestrator.run() raised for chat=%s session=%s",
             chat_id, session_id,
         )
+        # Stop the indicator / hint before surfacing the error so a slow
+        # crash doesn't keep flashing "typing…" while the failure reply
+        # is being read.
+        _cancel_indicator_tasks(typing_task, hint_task)
         await _send_reply(
             chat_id,
             f"❌ Task crashed inside the orchestrator: {exc}\n"
@@ -616,10 +693,26 @@ async def _run_goal_for_chat(chat_id: str, goal_text: str) -> None:
         _running_chats.pop(chat_id, None)
         return
 
+    # Happy path: cancel the indicator + hint so a fast answer doesn't
+    # also get the "still working" line. For sub-_LONG_TASK_HINT_S runs
+    # the hint never fired; for longer runs it fired once and that's
+    # the right number of times.
+    _cancel_indicator_tasks(typing_task, hint_task)
+
     elapsed_s = time.monotonic() - start
     reply = _format_result_for_telegram(result, session_id, elapsed_s)
     await _send_reply(chat_id, reply)
     _running_chats.pop(chat_id, None)
+
+
+def _cancel_indicator_tasks(*tasks: asyncio.Task) -> None:
+    """Cancel the typing-keep-alive + long-task-hint background tasks
+    safely. Cancelling an already-finished task is a no-op; cancelling
+    one that's mid-await produces the asyncio.CancelledError that those
+    coroutines themselves let propagate. Both behaviours are fine here."""
+    for t in tasks:
+        if t and not t.done():
+            t.cancel()
 
 
 async def _resolve_or_create_session(chat_id: str, first_goal: str) -> str:
