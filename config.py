@@ -730,10 +730,22 @@ class Config:
 
         # Notification credentials — strings only (port parsed as int).
         for k in ("telegram_bot_token", "telegram_default_chat_id",
+                  "telegram_inbound_chat_id_whitelist",
                   "smtp_host", "smtp_user", "smtp_password", "smtp_from",
                   "webhook_secret"):
             if k in settings:
                 setattr(self, k, settings[k] or "")
+        # Inbound bridge toggle — bool, accepts the conventional
+        # truthy strings. Without this branch, the polling loop sees
+        # `inbound disabled in Settings` at every restart even when
+        # the user ticked the box in the UI; we caught this in real
+        # use on 2026-06-03 with a server log clearly saying "Settings
+        # loaded from DB" followed by "inbound bridge NOT started".
+        if "telegram_inbound_enabled" in settings:
+            self.telegram_inbound_enabled = (
+                str(settings["telegram_inbound_enabled"]).strip().lower()
+                in {"1", "true", "yes", "on"}
+            )
         smtp_port_val = _i("smtp_port")
         if smtp_port_val is not None:
             self.smtp_port = smtp_port_val
