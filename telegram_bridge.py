@@ -488,6 +488,21 @@ _TYPING_REFRESH_S = 4
 # feeling "fast" and start feeling "stuck".
 _LONG_TASK_HINT_S = 5
 
+# Hard upper bound on a single Telegram-initiated task. If the
+# orchestrator's subtask_timeout misbehaves, or the local model goes
+# unresponsive (Ollama OOM, model unload mid-call), or some tool
+# deadlocks waiting on an external resource — without this cap, the
+# task would hold the chat's concurrency lock indefinitely and the
+# user just sees a frozen bot. Caught by `asyncio.wait_for` below.
+#
+# 10 min is generous for any single Telegram-driven goal (the chat
+# UX assumes a "send + wait" rhythm; nobody wants to babysit a 30 min
+# task this way). Bumped here, not in Settings, because the right
+# number depends on the Telegram UX, not on the user's preference —
+# users genuinely waiting 10 min for a Telegram reply have a UX
+# problem regardless of whether the underlying task could complete.
+_TELEGRAM_RUN_TIMEOUT_S = 600
+
 
 async def _send_chat_action(chat_id: str, action: str = "typing") -> None:
     """Fire-and-forget sendChatAction. Telegram-side this surfaces the
@@ -659,7 +674,10 @@ async def _run_goal_for_chat(chat_id: str, goal_text: str) -> None:
     )
 
     # Build TaskRequest exactly the way POST /run does — same shape, same
-    # orchestrator.run() entry point, just bypassing HTTP.
+    # orchestrator.run() entry point, just bypassing HTTP. We wrap the
+    # call in asyncio.wait_for so a hung orchestrator (Ollama
+    # unresponsive, tool deadlock, plan loop) doesn't leave the chat's
+    # concurrency lock held forever — see _TELEGRAM_RUN_TIMEOUT_S.
     try:
         from models import TaskRequest, SessionMode
         req = TaskRequest(
@@ -675,7 +693,31 @@ async def _run_goal_for_chat(chat_id: str, goal_text: str) -> None:
             session_id=session_id,
             mode=SessionMode.CODE,
         )
-        result = await _orchestrator.run(req)
+        result = await asyncio.wait_for(
+            _orchestrator.run(req), timeout=_TELEGRAM_RUN_TIMEOUT_S,
+        )
+    except asyncio.TimeoutError:
+        # Hard cap hit — log + tell the user clearly, don't leave them
+        # staring at the typing dots forever. wait_for already cancelled
+        # the inner coroutine on its way out, but it's worth noting that
+        # the cancellation might still take a few seconds to actually
+        # unwind through any in-flight HTTP call.
+        logger.warning(
+            "Telegram bridge: orchestrator.run() exceeded %ds for "
+            "chat=%s session=%s — aborted.",
+            _TELEGRAM_RUN_TIMEOUT_S, chat_id, session_id,
+        )
+        _cancel_indicator_tasks(typing_task, hint_task)
+        await _send_reply(
+            chat_id,
+            f"⌛ Task ran longer than {_TELEGRAM_RUN_TIMEOUT_S // 60} min "
+            "and was force-cancelled.\n"
+            "Common causes: local model (Ollama) unresponsive, tool "
+            "deadlock, or a plan loop. Try a simpler goal, or /new "
+            "for a fresh session.",
+        )
+        _running_chats.pop(chat_id, None)
+        return
     except Exception as exc:  # noqa: BLE001
         logger.exception(
             "Telegram bridge: orchestrator.run() raised for chat=%s session=%s",
