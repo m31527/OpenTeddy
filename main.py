@@ -212,6 +212,88 @@ ws_manager = _WSManager()
 _running_tasks: dict[str, asyncio.Task] = {}
 
 
+async def _warmup_ollama_models() -> None:
+    """Fire-and-forget background warmup that asks Ollama to pre-load
+    both the orchestrator (Gemma) and the executor (Qwen) into VRAM.
+
+    Why this exists: the very first LLM call after a cold start —
+    server boot, or after Ollama's KEEP_ALIVE timeout caused a model
+    unload — has to read 2-4 GB of weights from disk into VRAM. On a
+    typical NVMe + GPU setup this is ~5-15 s. Without warmup, the
+    user's first task pays that cost; their second task feels fast
+    by comparison and they're left wondering "is OpenTeddy slow or
+    just my model?". With warmup, the first real task feels as fast
+    as the second.
+
+    The trick: ``num_predict=1`` makes the response one single token
+    long, so we get the load cost without paying for a real
+    generation. The model stays resident afterwards (Ollama's
+    default 5-min KEEP_ALIVE keeps it hot for the user's first
+    actual request).
+
+    Failure modes are all benign: Ollama not running yet, network
+    blip, model not pulled. Logged at debug, never raised — server
+    startup must not fail because of a warmup hiccup.
+    """
+    import httpx as _httpx
+
+    base = (getattr(config, "gemma_base_url", "") or "http://localhost:11434").rstrip("/")
+
+    models_to_warm: list[tuple[str, str]] = []
+    g_model = (getattr(config, "gemma_model", "") or "").strip()
+    q_model = (getattr(config, "qwen_model", "") or "").strip()
+    if g_model:
+        models_to_warm.append(("orchestrator", g_model))
+    if q_model and q_model != g_model:
+        models_to_warm.append(("executor", q_model))
+
+    if not models_to_warm:
+        return
+
+    logger.info(
+        "Pre-warming %d Ollama model(s) in background: %s",
+        len(models_to_warm),
+        ", ".join(name for _, name in models_to_warm),
+    )
+
+    for role, model in models_to_warm:
+        try:
+            async with _httpx.AsyncClient(timeout=120.0) as client:
+                resp = await client.post(
+                    f"{base}/api/chat",
+                    json={
+                        "model":    model,
+                        "messages": [{"role": "user", "content": "hi"}],
+                        "stream":   False,
+                        # 1 token output — we only care about the load
+                        # cost, not the generation cost. Some Ollama
+                        # versions ignore num_predict at exactly 1 due
+                        # to a minimum-greater-than guard; we set 2 as
+                        # a defensive floor that still completes in
+                        # ~50 ms once the model is hot.
+                        "options":  {"num_predict": 2},
+                    },
+                )
+            if resp.status_code == 200:
+                logger.info(
+                    "Ollama warmup OK: %s (%s)", role, model,
+                )
+            else:
+                logger.debug(
+                    "Ollama warmup returned %d for %s (%s): %s",
+                    resp.status_code, role, model, resp.text[:160],
+                )
+        except Exception as exc:  # noqa: BLE001
+            # Cold-start may hit "model not yet pulled" or "Ollama not
+            # running" — both legitimate states where the user will see
+            # a clearer error on their first real request. Debug-level
+            # so this doesn't clutter normal logs.
+            logger.debug(
+                "Ollama warmup failed for %s (%s) — non-fatal: %s",
+                role, model, exc,
+            )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator:  # type: ignore[type-arg]
     """Open / close shared resources around the app's lifetime."""
@@ -317,6 +399,20 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:  # type: ignore[type-arg]
         await _start_tg_bridge(tracker, orchestrator)
     except Exception as exc:  # noqa: BLE001
         logger.warning("Telegram bridge startup failed (non-fatal): %s", exc)
+
+    # Pre-warm Ollama models in the background. First LLM call after a
+    # cold start (or after Ollama's KEEP_ALIVE timeout expired) has to
+    # load the model into VRAM — typically 5-15 s for a Gemma 3:4B
+    # class model. By firing a tiny throwaway call at server boot we
+    # eat that latency before the user's first real question lands.
+    #
+    # Fully async — server is "ready" the moment yield fires; the warm-
+    # up runs in the background and any failure is logged at debug
+    # rather than affecting startup. The Ollama side handles concurrent
+    # requests fine (a warm-up still in flight doesn't block a real
+    # user request — they queue, the user's gets priority once the warm
+    # call returns its single token).
+    asyncio.create_task(_warmup_ollama_models(), name="ollama_warmup")
 
     yield
 

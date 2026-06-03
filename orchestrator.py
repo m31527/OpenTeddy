@@ -594,13 +594,62 @@ class Orchestrator:
         await self.tracker.create_task(req)
         await self.tracker.update_task_status(req.id, TaskStatus.RUNNING)
 
-        # ── 0. Intent classifier (fast-path for pure-chat goals) ──────
+        # ── 0a. Chat-mode short-circuit (highest-priority fast path) ──
+        # When the user has explicitly picked Chat mode for the session,
+        # we already know this isn't going to involve tools — skip the
+        # intent-classifier call entirely (saves a whole LLM round-trip,
+        # ~500 ms-2 s on a local Gemma) and go straight to streaming
+        # the answer.
+        #
+        # Why this is safe: session_mode == "chat" is an explicit user
+        # signal, far stronger than the classifier's confidence number.
+        # Anyone who *did* want code execution would have picked Code
+        # mode in the session row; the LLM has no agency to override
+        # the user's choice.
+        #
+        # User-facing impact: a question like "Python lambda 怎麼用"
+        # in a chat session goes from 2 LLM calls (classifier + answer)
+        # to 1 (answer only) — typically the difference between feeling
+        # snappy and feeling sluggish on a local model.
+        if session_mode == "chat":
+            logger.info(
+                "Chat-mode fast-path engaged (skipped intent classifier): task=%s",
+                req.id,
+            )
+            try:
+                return await self._fast_chat_response(
+                    req, session_mode,
+                    # Synthetic intent dict — fast-path persists the
+                    # classifier's confidence on the synthetic subtask
+                    # so Usage-tab stats can distinguish path types.
+                    # 0.95 reflects the unambiguous nature of the
+                    # signal (user explicitly chose chat).
+                    {
+                        "needs_tools":  False,
+                        "is_pure_chat": True,
+                        "confidence":   0.95,
+                        "rationale":    "explicit chat session mode",
+                    },
+                )
+            except Exception as exc:  # noqa: BLE001
+                # If the streamlined path blows up for any reason (the
+                # _orchestrator_complete LLM call failed, network blip,
+                # model unloaded mid-call), fall through to the full
+                # plan → execute flow rather than failing the task.
+                logger.warning(
+                    "Chat-mode fast-path failed (falling back to full flow): %s",
+                    exc,
+                )
+
+        # ── 0b. Intent classifier (fast-path for pure-chat goals in
+        # code / analytic sessions) ─────────────────────────────────────
         # Before paying for plan → execute → summary on goals that
         # legitimately don't need tools (questions, explanations,
-        # opinions), classify the goal in ~100ms and short-circuit
-        # straight to a single-LLM-turn answer. Cuts ~25 seconds off
-        # the latency for "what is X" style questions that were
-        # previously running a full empty tool loop.
+        # opinions), classify the goal in ~100 ms and short-circuit
+        # straight to a single-LLM-turn answer. Cuts ~25 s off the
+        # latency for "what is X" style questions that were previously
+        # running a full empty tool loop. Skipped above for explicit
+        # chat-mode sessions (where we know without asking).
         #
         # Conservative: only fires when the classifier is confident
         # (>= 0.7) AND says BOTH needs_tools=False AND is_pure_chat=True.
