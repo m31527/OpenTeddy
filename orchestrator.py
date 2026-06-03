@@ -319,7 +319,7 @@ _PLAN_STRICT_HEADER = """\
 # parameter scale is much better at not-over-decomposing when forced
 # to compress to a single sentence first.
 _PLAN_INTENT_FIRST_HEADER = """\
-【規劃前必做兩步 — 順序很重要】
+【規劃前必做三步 — 順序很重要】
 
 步驟 1：先用「一句話」寫出使用者真正想要什麼。
   - 忽略 Deliverables / Acceptance Criteria 等清單細節
@@ -338,6 +338,30 @@ _PLAN_INTENT_FIRST_HEADER = """\
 關鍵：使用者列出「5 個 deliverables」≠ 你要拆出「5 個 subtask」。
 那 5 個通常是「實作該軟體要包含的功能特性」，全部屬於同一個
 "create the codebase" subtask。
+
+步驟 3：把每個 subtask 的 description 寫成「**具體可執行的第一步動作**」。
+  → **這是最常被忽略的一步，違反這條會讓 executor 跑爆 token**
+  → description 不是「最終目標」，是「**這一步要做什麼**」
+
+  ❌ 錯誤示範（直接把 user 的 goal 文字貼進去）：
+     description: "爬取大巨蛋官網活動資訊，取得從今天起 3 個月內的所有
+       舉辦活動列表。 目標網站：https://www.x.com.tw 或大巨蛋官方活動頁面
+       （請先確認正確 URL）。 deliverable：輸出結構化列表... acceptance
+       criteria：- 涵蓋今日起 90 天內所有活動 ..."
+     → Executor 看完整段不知道從哪開始，會跑 50k+ tokens 然後熔斷
+
+  ✅ 正確示範（單一可執行動作）：
+     description: "用 browser_fetch 抓 https://www.x.com.tw 取得 HTML，
+       並列出活動標題與日期的 DOM 結構"
+     → Executor 知道：call browser_fetch、看 result、回報。3-5 秒搞定。
+
+  description 寫作檢查清單：
+  • 動詞開頭：「用 X 工具做 Y」/「執行 Z 命令」/「讀取 W 檔案的 X 欄」
+  • 提到具體工具名（browser_fetch / fetch_url / shell_exec_write /
+    read_file / python_exec / db_query 等）
+  • 長度 ≤ 80 字。超過代表你在貼 goal，不是寫動作。
+  • **不可以**只是把使用者 goal 複製貼上、或重寫得更冗長
+  • **不可以**包含 "deliverable:" / "acceptance criteria:" 等 meta 描述
 
 ──────────────────────────────────────────────────────────────────
 
