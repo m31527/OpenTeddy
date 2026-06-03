@@ -436,6 +436,84 @@ def _system_prompt_for_mode(mode: str, model_name: str = "") -> str:
     return base
 
 
+# ── Workspace artifact scanner ────────────────────────────────────────────────
+# Used by Executor.execute() to spot files created/modified during a
+# subtask that weren't emitted via the explicit producer-tool path
+# (write_file, render_chart_report, etc.). The most common gap is shell
+# redirects — `python foo.py > out.txt` writes a real file but the
+# shell tool result doesn't carry a `path` or `bytes_written` key, so
+# the inline emitter inside _qwen_execute can't see it.
+#
+# These walk the workspace once before the subtask runs and once after,
+# diff the {path: (mtime, size)} dicts, and return the deltas. Cheap
+# enough at typical OpenTeddy workspace scale (~hundreds of files) —
+# ~10-50ms per scan. Massive `.git` / `node_modules` / `.venv` are
+# explicitly skipped so a checkout of a Next.js project doesn't pay
+# 50000-file walk costs each subtask.
+
+_ARTIFACT_SCAN_SKIP_DIRS: frozenset = frozenset({
+    ".git", "node_modules", ".venv", "venv", "__pycache__",
+    ".pytest_cache", ".mypy_cache", "target",  # rust target dir
+    ".next", "dist", "build",
+})
+
+
+def _snapshot_workspace_files(
+    workspace_path: str,
+) -> Dict[str, Tuple[float, int]]:
+    """Walk `workspace_path` and return {abs_path: (mtime, size)} for
+    every regular file outside the skip-list of noise dirs. Failures
+    are swallowed and produce an empty snapshot — a stat error on one
+    file must never break the rest of the subtask."""
+    snap: Dict[str, Tuple[float, int]] = {}
+    if not workspace_path:
+        return snap
+    import os as _os
+    try:
+        for root, dirs, files in _os.walk(workspace_path):
+            dirs[:] = [d for d in dirs if d not in _ARTIFACT_SCAN_SKIP_DIRS]
+            for f in files:
+                p = _os.path.join(root, f)
+                try:
+                    st = _os.stat(p)
+                    snap[p] = (st.st_mtime, st.st_size)
+                except (OSError, PermissionError):
+                    pass
+    except Exception:  # noqa: BLE001
+        pass
+    return snap
+
+
+def _diff_workspace_files(
+    workspace_path: str,
+    before: Dict[str, Tuple[float, int]],
+) -> List[Tuple[str, int]]:
+    """Return [(abs_path, size_bytes)] for files that are NEW (didn't
+    exist in `before`) or MODIFIED (mtime > before's mtime). Used by
+    the post-subtask scan to emit artifact events. Skip-dir set
+    matches _snapshot so the diff doesn't claim a node_modules/* file
+    is "new" — it was never in the snapshot to begin with."""
+    deltas: List[Tuple[str, int]] = []
+    if not workspace_path:
+        return deltas
+    import os as _os
+    try:
+        for root, dirs, files in _os.walk(workspace_path):
+            dirs[:] = [d for d in dirs if d not in _ARTIFACT_SCAN_SKIP_DIRS]
+            for f in files:
+                p = _os.path.join(root, f)
+                try:
+                    st = _os.stat(p)
+                except (OSError, PermissionError):
+                    continue
+                prev = before.get(p)
+                if prev is None or st.st_mtime > prev[0]:
+                    deltas.append((p, st.st_size))
+    except Exception:  # noqa: BLE001
+        pass
+    return deltas
+
+
 class Executor:
     """Qwen 3 executor agent with Ollama function-calling support."""
 
@@ -472,6 +550,26 @@ class Executor:
         subtask.status = TaskStatus.RUNNING
         await self.tracker.update_subtask(subtask)
 
+        # Snapshot the workspace BEFORE the tool loop so we can detect any
+        # files created/modified during the subtask — including those
+        # written via shell redirects (`python foo.py > out.txt`), wget,
+        # tar extraction, or scripts that internally call open(...,'w')
+        # without going through the file_write tool. The existing
+        # producer-tool emission inside _qwen_execute catches the
+        # `write_file` / `python_exec` / `db_query_to_csv` paths;
+        # shell-redirect outputs were the gap real users hit (Telegram
+        # bug report 2026-06-03: github_trending_results.txt produced
+        # via shell redirect was invisible to both the chat UI's
+        # download chip and the Telegram bridge's result formatter).
+        from config import effective_workspace_dir as _ws
+        try:
+            workspace_path = _ws() or ""
+        except Exception:  # noqa: BLE001
+            workspace_path = ""
+        ws_snapshot = (
+            _snapshot_workspace_files(workspace_path) if workspace_path else {}
+        )
+
         # 1. Try a matching skill first — skills are available in all modes
         # except pure chat (where tools make no sense).
         if mode != "chat":
@@ -483,6 +581,9 @@ class Executor:
                 subtask.status = TaskStatus.COMPLETED if success else TaskStatus.FAILED
                 subtask.completed_at = datetime.utcnow()
                 await self.tracker.update_subtask(subtask)
+                await self._scan_and_emit_new_artifacts(
+                    workspace_path, ws_snapshot, subtask,
+                )
                 return subtask
 
         # 2. Qwen with function calling
@@ -504,11 +605,82 @@ class Executor:
         subtask.completed_at = datetime.utcnow()
         await self.tracker.update_subtask(subtask)
 
+        # Post-run workspace scan — emit synthetic artifact events for
+        # any file that appeared / was modified during this subtask but
+        # wasn't already registered via a producer tool. Dedupe against
+        # what _qwen_execute already pushed so we never double-chip.
+        await self._scan_and_emit_new_artifacts(
+            workspace_path, ws_snapshot, subtask,
+        )
+
         # 3. Background: request skill creation if signalled
         if skill_hint and skill_desc:
             await self._request_skill_creation(skill_hint, skill_desc)
 
         return subtask
+
+    async def _scan_and_emit_new_artifacts(
+        self,
+        workspace_path: str,
+        before_snapshot: Dict[str, Tuple[float, int]],
+        subtask: SubTask,
+    ) -> None:
+        """Diff the workspace against the pre-subtask snapshot and emit
+        synthetic 'artifact' events for any file that's new or modified.
+
+        Catches files created by shell redirects, scripts, archive
+        extraction, etc. — anything the producer-tool path in
+        _qwen_execute can't see because it only knows about explicit
+        `path` / `bytes_written` keys in the tool result.
+
+        Dedupes against artifacts already collected for this subtask
+        (the producer-tool path), so the same file never produces two
+        download chips."""
+        if not workspace_path:
+            return
+        try:
+            new_files = _diff_workspace_files(workspace_path, before_snapshot)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("workspace diff failed: %s", exc)
+            return
+        if not new_files:
+            return
+
+        # Skip paths already emitted via a producer tool this subtask.
+        # _subtask_artifacts is keyed by subtask_id and populated by
+        # _push_event whenever an artifact event flows through.
+        already = {
+            a.get("path")
+            for a in self._subtask_artifacts.get(subtask.id, [])
+            if a.get("path")
+        }
+        import os as _os
+        for fpath, size_bytes in new_files:
+            if fpath in already:
+                continue
+            try:
+                rel = _os.path.relpath(fpath, workspace_path)
+            except Exception:  # noqa: BLE001
+                rel = ""
+            artifact_info = {
+                "tool":          "shell_output",
+                "path":          fpath,
+                "relative_path": rel,
+                "size_bytes":    size_bytes,
+                "name":          _os.path.basename(fpath),
+            }
+            await self._push_event({
+                "event":      "artifact",
+                "task_id":    subtask.parent_task_id,
+                "subtask_id": subtask.id,
+                **artifact_info,
+            })
+            try:
+                await self.tracker.append_task_artifact(
+                    subtask.parent_task_id, artifact_info,
+                )
+            except Exception:  # noqa: BLE001
+                pass
 
     # ── Ollama Function Calling ───────────────────────────────────────────────
 

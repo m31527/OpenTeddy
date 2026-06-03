@@ -960,8 +960,162 @@ async def _run_goal_for_chat(chat_id: str, goal_text: str) -> None:
 
     elapsed_s = time.monotonic() - start
     reply = _format_result_for_telegram(result, session_id, elapsed_s)
+
+    # Pull the persisted artifact list off the task row so the reply
+    # can list "📎 github_trending_results.txt (1.2 KB)" and we can
+    # also push small text files inline as follow-up messages. The
+    # tracker's tasks.artifacts JSON column is the source of truth —
+    # populated by the executor's producer-tool path AND (after this
+    # commit) the post-subtask workspace scanner for shell-redirect
+    # outputs.
+    artifacts: List[Dict[str, Any]] = []
+    try:
+        task_row = await _tracker.get_task(req.id)
+        if task_row:
+            artifacts = task_row.get("artifacts") or []
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("artifact lookup failed for task %s: %s", req.id, exc)
+
+    if artifacts:
+        reply = reply + _format_artifacts_block(artifacts)
+
     await _send_reply(chat_id, reply)
+
+    # For small text artifacts, push the file CONTENT as follow-up
+    # messages so the user doesn't have to open the web UI to see
+    # what was produced. Larger / binary files go via sendDocument so
+    # the user can tap-to-download from inside Telegram.
+    if artifacts:
+        await _push_artifact_contents(chat_id, artifacts)
+
     _running_chats.pop(chat_id, None)
+
+
+# ── Artifact rendering ────────────────────────────────────────────────────────
+# Telegram bot file/media limits:
+#   - sendMessage:  max 4096 chars per message (we cap at ~3500)
+#   - sendDocument: up to 50 MB per file via standard Bot API
+# Trade-off: inline message is one round-trip and immediately readable;
+# sendDocument shows up as a "file attachment" card and is more
+# discoverable but adds a click. We inline small text (< ~3 KB), send
+# everything else as a document.
+
+_INLINE_TEXT_SIZE_LIMIT = 3000   # bytes; below this we send content inline
+_SEND_DOCUMENT_SIZE_LIMIT = 50 * 1024 * 1024  # 50 MB Telegram Bot API cap
+
+# Tunable. Files we treat as text for inline display. Other extensions
+# go through sendDocument (so the user gets a tap-to-download chip
+# rather than a binary garbled into a message).
+_TEXT_EXTENSIONS: frozenset = frozenset({
+    ".txt", ".md", ".markdown", ".log", ".json", ".csv", ".tsv",
+    ".yaml", ".yml", ".toml", ".ini", ".cfg", ".conf",
+    ".py", ".js", ".ts", ".tsx", ".jsx", ".go", ".rs", ".rb", ".sh",
+    ".bash", ".zsh", ".html", ".xml", ".css", ".scss", ".sql",
+    ".java", ".kt", ".swift", ".c", ".h", ".cpp", ".hpp", ".cs",
+})
+
+
+def _format_artifacts_block(artifacts: List[Dict[str, Any]]) -> str:
+    """Render the artifact list as a footer block appended to the
+    main result reply. Compact: one line per artifact with name +
+    human-readable size. Truncates to 10 entries because (a) Telegram
+    has a 4096-char message cap and (b) a task producing >10 files is
+    almost always a bug worth surfacing differently."""
+    if not artifacts:
+        return ""
+    lines = ["", "📎 Files produced:"]
+    for a in artifacts[:10]:
+        name = a.get("name") or "(unnamed)"
+        size = int(a.get("size_bytes") or 0)
+        if size >= 1024 * 1024:
+            size_str = f"{size / (1024 * 1024):.1f} MB"
+        elif size >= 1024:
+            size_str = f"{size / 1024:.1f} KB"
+        else:
+            size_str = f"{size} B"
+        tool = a.get("tool") or "?"
+        lines.append(f"  • {name} ({size_str}, via {tool})")
+    if len(artifacts) > 10:
+        lines.append(f"  …and {len(artifacts) - 10} more")
+    return "\n".join(lines)
+
+
+def _looks_like_text_file(path: str) -> bool:
+    """Heuristic: file is "text-like" iff its extension matches one we
+    inline-display. Not a perfect check (.dat could be text, .json could
+    be a binary export) but covers the 95 % case the user actually
+    produces — scrape outputs, scripts, configs, CSVs."""
+    import os as _os
+    _, ext = _os.path.splitext(path.lower())
+    return ext in _TEXT_EXTENSIONS
+
+
+async def _push_artifact_contents(
+    chat_id: str, artifacts: List[Dict[str, Any]],
+) -> None:
+    """For each artifact: inline-display content if it's a small text
+    file, otherwise send via sendDocument as a downloadable file.
+
+    Silently skips files that don't exist on disk (could happen if the
+    artifact path is stale — e.g. a session was deleted between the
+    tool call and our scan). Per-file errors don't propagate; one
+    unreadable file mustn't suppress the others."""
+    import os as _os
+    for a in artifacts[:10]:  # same 10-cap as the summary block
+        fpath = a.get("path") or ""
+        if not fpath or not _os.path.isfile(fpath):
+            continue
+        size = a.get("size_bytes") or 0
+        name = a.get("name") or _os.path.basename(fpath)
+
+        try:
+            if size < _INLINE_TEXT_SIZE_LIMIT and _looks_like_text_file(fpath):
+                # Inline display — read + format as a code-block-ish
+                # message. Cap at ~3 KB so even a worst-case binary
+                # masquerading as .txt can't blow the 4096 limit.
+                with open(fpath, "r", encoding="utf-8", errors="replace") as fh:
+                    content = fh.read(_INLINE_TEXT_SIZE_LIMIT)
+                preview = f"📄 {name}\n\n{content}"
+                if len(preview) > 3800:
+                    preview = preview[:3800] + "\n…(truncated)"
+                await _send_reply(chat_id, preview)
+            elif size <= _SEND_DOCUMENT_SIZE_LIMIT:
+                # sendDocument — Telegram-native file attachment. Tap
+                # to download / preview on phone.
+                await _send_document(chat_id, fpath, caption=name)
+            # Files larger than 50 MB get only the summary entry, no
+            # content delivery — Telegram bot API rejects them and the
+            # user can grab the file from the workspace directly.
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(
+                "artifact delivery failed for %s: %s", fpath, exc,
+            )
+
+
+async def _send_document(chat_id: str, file_path: str, caption: str = "") -> None:
+    """Telegram sendDocument — uploads a file the user can tap to
+    download. multipart/form-data because that's what the Telegram
+    Bot API wants for binary uploads. Best-effort: any failure is
+    logged at debug and ignored, so a flaky upload doesn't break
+    the rest of the run."""
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            with open(file_path, "rb") as fh:
+                files = {"document": (file_path.rsplit("/", 1)[-1], fh)}
+                data = {"chat_id": chat_id}
+                if caption:
+                    data["caption"] = caption[:1024]  # Telegram caption cap
+                resp = await client.post(
+                    _bot_url("sendDocument"), data=data, files=files,
+                )
+        if resp.status_code != 200:
+            logger.debug(
+                "sendDocument non-OK for %s/%s: %d %s",
+                chat_id, file_path, resp.status_code, resp.text[:200],
+            )
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("sendDocument error for %s/%s: %s",
+                     chat_id, file_path, exc)
 
 
 def _cancel_indicator_tasks(*tasks: asyncio.Task) -> None:
