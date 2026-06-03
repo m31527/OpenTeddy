@@ -83,6 +83,8 @@ Claude Pro auto-renewing.
 - **Performance observability** — Usage tab shows per-mode (Chat / Code / Analytic) time-to-result stats (mean / p50 / p95 / max) plus your slowest 10 tasks. Screenshot it into a bug report when something looks off.
 - **Capabilities tab** — built-in Tools and learned Skills merged into one filterable list with type badges, so users see "what can my agent do?" in one place. Skills graduate from `TESTING` to `ACTIVE` automatically; the count grows as the install matures.
 - **Auto-approve countdown** — opt-in setting that turns the high-risk approval gate fail-permissive after N seconds, with a visible amber timer so you have time to Deny if the agent's about to do something unexpected. Default: off.
+- **Drive OpenTeddy from Telegram** — toggle on a single bot token + chat-ID whitelist in Settings → Notification Credentials and your agent is reachable from your phone over Telegram: send any text as a goal, get live "⚙️ Subtask 3/5 · 🎯 0.85 · 💰 $0.043" progress that edits in place, a final summary, and `📎 Files produced` with text artifacts inlined / binary artifacts sent as tap-to-download attachments. Auto-approves high-risk tools so you don't have to leave Telegram for routine work — but a hard denylist (`rm`, `rmdir`, `DROP TABLE`, `TRUNCATE TABLE`, `DELETE FROM`, `mkfs`, `dd if=…/of=/dev/…`, …) hard-blocks destructive actions regardless. Commands: `/start`, `/help`, `/cancel`, `/new`. See [Remote Access](#remote-access-phone--telegram--tailscale).
+- **Phone-friendly web UI over Tailscale** — `./run.sh --host 0.0.0.0` + your tailnet means the dashboard works from your phone's browser too. Sessions / chat-mode / artifact previews all responsive; mobile header collapses the session controls into a ⋯ kebab. No port-forwarding, no nginx, no public DNS — just install the Tailscale app on your phone and hit `http://<your-machine>:8000`.
 - **Native macOS desktop client** — Tauri 2.x shell with onboarding wizard (Ollama install + tier-based model pull), language picker, mode-locked sessions, full window-drag regions, auto-update against GitHub Releases, and one-click diagnostics download. See [`desktop/`](desktop/).
 - **Optional cloud account** — sign in with Google to enable cross-device sync (skills, memory, settings) and licence-gated premium content. Anonymous Firebase auth runs from day one; the upgrade is opt-in. The OSS web UI stays Firebase-free — auth lives only in the desktop shell.
 - **Lifetime licensing via Lemon Squeezy** — one-time $99 unlocks the polished signed desktop, cloud sync, and (future) premium skill packs. Open-source core stays free forever for everyone. Webhook-driven licence activation: the sidebar pill flips from "Get Lifetime" to your account email within ~1 sec of payment clearing.
@@ -230,7 +232,7 @@ cd ~/OpenTeddy
 ./run.sh --help             # full flag list
 ```
 
-> ⚠️ **`--host 0.0.0.0` opens the agent to every machine on your network.** The agent has `shell_exec_write` / `delete_file` and other powerful tools — anything on the LAN that can reach the port can drive it. Only use `0.0.0.0` when you trust every device on the network (private home LAN / Tailscale tailnet / dedicated server behind a firewall). For public servers, put it behind nginx / Caddy / Cloudflare Tunnel with auth.
+> ⚠️ **`--host 0.0.0.0` opens the agent to every machine that can reach the port.** The agent has `shell_exec_write` / `delete_file` and other powerful tools. Only use `0.0.0.0` when you trust every device on that network — a private home LAN, a Tailscale tailnet, or a server behind a real firewall. For public servers, put it behind nginx / Caddy / Cloudflare Tunnel with auth. **For "I want to use OpenTeddy from my phone", the recommended setup is `--host 0.0.0.0` + Tailscale — see [Remote Access](#remote-access-phone--telegram--tailscale).**
 
 Customisation flags for the **installer**: `--dir <path>`, `--force`, `--skip-models`. See `./install.sh --help`.
 
@@ -273,6 +275,146 @@ uvicorn main:app --reload
 # API docs  → http://localhost:8000/docs
 ```
 
+## Remote Access (phone / Telegram / Tailscale)
+
+Two complementary ways to reach your OpenTeddy instance away from the machine
+it runs on. Both work against the same server and the same sessions — you
+can start a goal in Telegram on the train and finish reading the artifact
+output in the desktop web UI when you're back home.
+
+### A. Web UI from your phone via Tailscale
+
+The simplest "let me check on the agent from anywhere" setup. Zero
+port-forwarding, no DNS, no nginx.
+
+1. **On the server** (the machine running OpenTeddy):
+   ```bash
+   curl -fsSL https://tailscale.com/install.sh | sh
+   sudo tailscale up
+   ./run.sh --host 0.0.0.0
+   ```
+   `--host 0.0.0.0` makes uvicorn bind to all interfaces (including the
+   tailnet one). Tailscale itself is what restricts who can actually reach
+   the port — only devices on your tailnet.
+
+2. **On your phone**: install the Tailscale app from the App Store / Play
+   Store, sign in with the same account, turn on the VPN toggle.
+
+3. **Open the browser** and hit `http://<machine-name>:8000` (or the
+   tailnet IP from `tailscale status`). The web UI loads with the same
+   sessions, the same artifact chips, the same WebSocket live stream. On
+   a phone-width screen the session header collapses memory / privacy /
+   export controls into a ⋯ kebab and the mode switcher reflows.
+
+> ⚠️ **Why Tailscale instead of just `--host 0.0.0.0` on the LAN?** Plain
+> LAN exposure means anyone on your WiFi (including guest devices) can
+> drive your agent — and the agent has `shell_exec_write` and friends.
+> Tailscale ACLs let you keep the port reachable from only the devices
+> you explicitly approve. If you do want plain LAN, only do it on a
+> private home network you fully control.
+
+### B. Bidirectional Telegram bot
+
+Send a goal from anywhere, get the result pushed back to the same chat.
+Live progress updates edit a single message in place — no spam. Built for
+self-hosted servers that stay running 24/7 (Mac mini, NUC, home Linux
+box) — long-polling stops when the server stops, so this is a worse fit
+for the desktop app that you close and reopen all day.
+
+#### 1. Create a bot
+
+Open Telegram, talk to **@BotFather**, send `/newbot`, follow the prompts.
+Save the bot token (looks like `123456:ABC-DEF1234...`).
+
+#### 2. Find your numeric chat-ID
+
+Send any message to **@userinfobot**. It replies with your numeric `id`
+(e.g. `987654321`). For a group: send a message in the group, then
+forward it to **@userinfobot** — it shows the group's chat-ID (negative
+number, e.g. `-1001234567890`).
+
+#### 3. Start a chat with your bot
+
+Search for your bot's `@username` in Telegram and tap **Start** (or send
+`/start`). This is the single most-missed step — without it, Telegram's
+"bot can't message you out of the blue" rule kicks in and every
+outbound test pings back `chat not found`.
+
+#### 4. Configure OpenTeddy
+
+In **Settings → Notification Credentials**:
+
+| Field | Value |
+|---|---|
+| Bot Token | the token from BotFather |
+| Default Chat ID | your numeric chat-ID (lets the `telegram_send` tool work) |
+| **Test ping** button | click — expect ✓ + a "🐻 OpenTeddy ping" message in Telegram |
+| **Enable inbound polling** | ✅ check |
+| Chat-ID whitelist | your chat-ID(s), comma-separated |
+
+Save. **Restart the server** (hot-reload of the toggle is on the
+backlog — for now `./run.sh` must be restarted to start the polling
+loop). On boot you should see in the log:
+
+```
+[INFO] telegram_bridge: Telegram inbound bridge started — polling with 1-id whitelist.
+```
+
+If you instead see `Telegram inbound bridge NOT started: …` the message
+spells out exactly which field needs another look.
+
+#### 5. Drive the agent from Telegram
+
+| You send | What happens |
+|---|---|
+| any text | run as a goal in this chat's bound session; reply with the result |
+| `/start` | confirm you're connected |
+| `/help` | command list |
+| `/cancel` | abort the currently-running task |
+| `/new` | start a fresh session (old one stays in history) |
+
+The agent's reply includes:
+
+- **Status line** — `✅ Completed · 12.4s · 3 subtasks`
+- **Summary text** — the orchestrator's final summary, capped at ~3500 chars
+- **`📎 Files produced`** — every artifact (incl. shell-redirect outputs
+  caught by the post-subtask workspace scanner) with size + emitting tool
+- **Inline content** — text artifacts under 3 KB sent as a follow-up
+  message; larger / binary artifacts uploaded via Telegram `sendDocument`
+  so you can tap-to-download from inside the chat.
+
+#### Safety model
+
+- **Hard whitelist**: messages from any non-whitelisted chat are silently
+  dropped (no probe signal). Empty whitelist = inbound refuses to start
+  even if the toggle is on.
+- **Auto-approve high-risk tools**: the whitelisted chat-ID is itself the
+  consent signal — `shell_exec_write`, `python_exec`, `file_write` and
+  friends run without web-UI approval prompts that nobody would see.
+- **Hard denylist on destructive ops**: regardless of approval, the tool
+  registry blocks anything matching `rm` / `rmdir` / `unlink` / `git rm`
+  / `shred`, SQL `DROP TABLE` / `DROP DATABASE` / `TRUNCATE TABLE`
+  / `DELETE FROM`, system-level `mkfs` / `dd if=…/of=/dev/…`
+  / `> /dev/sd[a-z]` / `fdisk` / `format X:` / recursive `chmod 0…`,
+  plus any tool whose name matches `*delete*` / `*remove*` / `*drop_table*`
+  / `*truncate*` / `*wipe*` / `*purge*`. The agent's reply explains the
+  block and points at the web UI for interactive approval.
+- **10-min hard timeout**: a single Telegram-driven run is wrapped in
+  `asyncio.wait_for(timeout=600)` so a hung Ollama call or tool deadlock
+  can't freeze the chat — the bot replies `⌛ Task ran longer than 10
+  min and was force-cancelled` instead of going silent.
+
+#### Diagnostics
+
+```bash
+curl -s http://<server>:8000/admin/telegram/status | jq
+```
+
+Returns the bridge's runtime state — `running`, `inbound_enabled`,
+`token_set`, the parsed whitelist, the most recent silently-dropped
+`chat_id` (the single fastest answer to "why isn't my bot replying?"),
+and any in-flight chats. Token is never returned, only a boolean flag.
+
 ## API
 
 | Method | Endpoint | Description |
@@ -296,6 +438,9 @@ uvicorn main:app --reload
 | `POST` | `/update/apply` | Apply an available update |
 | `POST` | `/optimize_prompt` | Rewrite a draft goal via Claude |
 | `GET`  | `/admin/diagnostics` | Download a zipped diagnostic bundle |
+| `GET`  | `/admin/telegram/status` | Inbound bridge runtime snapshot (running, whitelist, last-dropped chat_id, in-flight chats). Safe to expose — never returns the bot token. |
+| `POST` | `/settings/telegram/test` | One-shot "OpenTeddy is connected" message to the default chat — friendly-error remapping translates Telegram's terse codes into 30-second fix steps. |
+| `GET`  | `/sessions/{id}/export` | Download a single-JSON dump of the session (metadata + tasks + subtasks + memory + DB connection with password masked). Used by the chat header's ⋯ kebab → 📥 Export. |
 | `GET`  | `/health` | Health check |
 | `WS`   | `/ws?since=N` | Live event stream — `since` replays the ring buffer from sequence `N` |
 
@@ -472,6 +617,23 @@ Most of these matter most on big models — turn them off to trade safety nets f
 | `QWEN_NUM_CTX` | `16384` | Ollama `num_ctx` for the executor. Larger = more tool-round history before the watchdog has to compress, but more VRAM. |
 | `GEMMA_NUM_CTX` | `16384` | Same, for the orchestrator. |
 | `CONTEXT_COMPRESS_AT` | `0.7` | Trigger context compression when prompt-token usage crosses this fraction of `num_ctx`. |
+
+### Notification credentials
+
+All blank by default — the relevant tools / bridges report a clear
+"not configured" error pointing at Settings, so a stock install never
+silently does the wrong thing. These can all be edited from
+**Settings → Notification Credentials** at runtime; the env-var form
+is just for headless / Docker-compose installs.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `TELEGRAM_BOT_TOKEN` | — | Bot token from @BotFather. Required for both outbound `telegram_send` and inbound polling. |
+| `TELEGRAM_DEFAULT_CHAT_ID` | — | Optional. When set, `telegram_send` and `/settings/telegram/test` can omit `chat_id` and send here by default. |
+| `TELEGRAM_INBOUND_ENABLED` | `false` | Master toggle for the long-polling Telegram→OpenTeddy bridge (see [Remote Access → Bidirectional Telegram bot](#b-bidirectional-telegram-bot)). |
+| `TELEGRAM_INBOUND_WHITELIST` | — | Comma-separated chat-IDs allowed to drive the agent (numeric for users / groups, `@channelname` for public channels). **Empty = inbound refuses to start even if the toggle is on** — we don't run open bots. |
+| `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASSWORD` / `SMTP_FROM` | — | Used by the `email_send` tool. `SMTP_PORT` defaults to `587`. |
+| `WEBHOOK_SECRET` | — | Optional shared-secret for `POST /webhooks/{session_id}`. Empty = endpoint is open to anyone on the network (UI warns when this is the case). |
 
 ## Desktop Client (macOS)
 
