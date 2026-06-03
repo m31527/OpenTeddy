@@ -43,6 +43,8 @@
 - **技能會自己長出來** — 透過 ChromaDB embedding 偵測重複的 goal pattern（不依賴小模型自我反思），當過去有 N 個語意相近的 goal 達標時自動合成技能名稱+描述，交給 Claude 寫成 Python 函式。可在 Settings 調整門檻（預設 3 次重複、相似度 0.75）。
 - **Web 儀表板** — 提交任務、即時看工具呼叫、審核敏感指令、管理記憶、即時顯示「已省 $X vs GPT-4」，還有 GFM 表格 + Chart.js 數值標籤 HTML 報表。
 - **Capabilities tab** — 內建 Tools 跟自動長出來的 Skills 合併在同一個可篩選列表，type badge 標明來源；技能用越多自動從 TESTING 升 ACTIVE。
+- **從 Telegram 驅動 OpenTeddy** — 在 Settings → Notification Credentials 填一支 bot token + 白名單 chat_id 後，手機上就能用 Telegram 下任務：發任何文字當 goal，看到「⚙️ Subtask 3/5 · 🎯 0.85 · 💰 $0.043」**就地編輯的即時進度**，跑完拿到 summary 跟 `📎 Files produced`（文字檔直接 inline 顯示，二進位走 sendDocument 變附件）。自動 approve 高風險工具讓日常任務不卡 — 但 hard denylist（`rm`、`rmdir`、`DROP TABLE`、`TRUNCATE TABLE`、`DELETE FROM`、`mkfs`、`dd if=…/of=/dev/…` 等）絕對擋住破壞性指令。命令：`/start`、`/help`、`/cancel`、`/new`。詳見 [遠端存取](#遠端存取手機--telegram--tailscale)。
+- **手機友善的 Web UI 透過 Tailscale** — `./run.sh --host 0.0.0.0` + 自家 tailnet 就讓 dashboard 在手機瀏覽器上能用。Sessions / chat / artifact 預覽都 responsive；手機寬度時 session header 會自動把記憶 / 隱私 / 匯出收進右上 ⋯ kebab。不用 port forward、不用 nginx、不用公網 DNS — 手機裝 Tailscale app 直接連 `http://<你的機器名>:8000`。
 - **macOS 原生客戶端** — Tauri 2.x 殼，引導精靈（Ollama 一鍵安裝 + 機器分級拉模型）、語言切換器、模式鎖定、可自由拖動的視窗、自動更新、診斷下載。詳見 [`desktop/`](desktop/)。
 - **可選的雲端帳號** — 用 Google 登入即可跨裝置同步技能、記憶、設定。匿名 Firebase Auth 每個 install 從第一次開機就有；登入是 opt-in。OSS web UI 完全不含 Firebase code，雲端只在 desktop 殼裡跑。
 - **Lemon Squeezy 終身授權** — 一次性 $99 解鎖簽名版桌面、雲端同步、未來的 premium 技能包。Open-source 核心永遠免費。Webhook 驅動的 license 啟動：付完款 1 秒內 sidebar 自動切換顯示帳號 email，不用重啟。
@@ -94,7 +96,7 @@ cp .env.example .env
 ./run.sh --help             # 看完整 flags
 ```
 
-> ⚠️ **`--host 0.0.0.0` 等於把 agent 開放給所有同網段的機器**。Agent 有 `shell_exec_write` / `delete_file` 之類強力工具——區網內任何能連到該 port 的裝置都能驅動它。只有在你信任網段上每一台機器（私人家用網段 / Tailscale tailnet / 防火牆後的專屬伺服器）才用 `0.0.0.0`。公網伺服器請放在 nginx / Caddy / Cloudflare Tunnel 後面並加上認證。
+> ⚠️ **`--host 0.0.0.0` 等於把 agent 開放給所有能連到該 port 的機器**。Agent 有 `shell_exec_write` / `delete_file` 之類強力工具，只有在你信任網段上每一台機器（私人家用網段 / Tailscale tailnet / 防火牆後的專屬伺服器）才用 `0.0.0.0`。公網伺服器請放在 nginx / Caddy / Cloudflare Tunnel 後面並加上認證。**想用手機操作 OpenTeddy 的話，推薦做法是 `--host 0.0.0.0` + Tailscale — 詳見 [遠端存取](#遠端存取手機--telegram--tailscale)。**
 
 不想用 `run.sh`？直接：
 
@@ -103,6 +105,96 @@ uvicorn main:app --reload
 # 儀表板： http://localhost:8000
 # API 文件： http://localhost:8000/docs
 ```
+
+## 遠端存取（手機 / Telegram / Tailscale）
+
+兩條互補的路徑可以在不在主機旁邊時操作 OpenTeddy。兩者打到同一個 server、同一份 sessions —— 你可以在通勤時用 Telegram 開一個 goal，回家後在桌面 web UI 看完整 artifact。
+
+### A. 用 Tailscale 從手機開瀏覽器連 Web UI
+
+最簡單的「在哪都能瞄一下 agent」設定。不用 port forward、不用 DNS、不用 nginx。
+
+1. **server 端**（OpenTeddy 跑的那台）：
+   ```bash
+   curl -fsSL https://tailscale.com/install.sh | sh
+   sudo tailscale up
+   ./run.sh --host 0.0.0.0
+   ```
+   `--host 0.0.0.0` 讓 uvicorn 綁所有 interface（包含 tailnet）。實際擋外部存取的是 **Tailscale 本身** — 只有你 tailnet 上的裝置連得到。
+
+2. **手機**：App Store / Play Store 裝 Tailscale，登入同一個帳號，打開 VPN toggle。
+
+3. **開瀏覽器**連 `http://<機器名>:8000`（或 `tailscale status` 看到的 IP）。Web UI 用同一份 sessions、同一份 artifact chip、同一份 WebSocket live stream。手機寬度下，session header 自動把記憶 / 隱私 / 匯出收進右上 ⋯ kebab。
+
+> ⚠️ **為什麼推薦 Tailscale 而不是裸的 `--host 0.0.0.0` 在 LAN？** 你家裡 WiFi 上的訪客裝置也算 LAN，而 agent 有 `shell_exec_write` 等強力工具。Tailscale ACL 才能精準限定「只有我授權過的裝置進得來」。如果你真的要走 LAN，請只在你 100% 信任的家用網段用。
+
+### B. 從 Telegram 雙向操作 OpenTeddy
+
+從任何地方傳 goal，結果推回同一個 chat。即時進度會在**同一則訊息上 edit**，不會洗版。設計給 24/7 跑著的 self-hosted server（Mac mini、NUC、家用 Linux box）— 桌面 app 關掉就會停止 polling，所以**桌面 app 不適合**這個功能。
+
+#### 1. 建一支 bot
+
+打開 Telegram → 找 **@BotFather** → `/newbot` → 跟著步驟走。記下 bot token（長得像 `123456:ABC-DEF1234...`）。
+
+#### 2. 找你的 chat_id
+
+傳任何訊息給 **@userinfobot**，它會回你一個數字 `id`（例如 `987654321`）。如果是群組：在群組裡發訊，然後 forward 那則到 **@userinfobot**，它會給群組 chat_id（負數，例如 `-1001234567890`）。
+
+#### 3. 先跟自己的 bot 開啟對話
+
+在 Telegram 搜你 bot 的 `@username`，按 **Start**（或送 `/start`）。**這步最常被忽略**。沒做的話 Telegram 的「bot 不能無預警 DM 你」規則會擋下所有 outbound 測試，你會看到 `chat not found` 錯誤。
+
+#### 4. 設定 OpenTeddy
+
+在 **Settings → Notification Credentials**：
+
+| 欄位 | 填什麼 |
+|---|---|
+| Bot Token | BotFather 給的 token |
+| Default Chat ID | 你的數字 chat_id（讓 `telegram_send` 工具能用） |
+| **Test ping** 按鈕 | 按下去，預期回 ✓ + Telegram 收到「🐻 OpenTeddy ping」 |
+| **Enable inbound polling** | ✅ 勾起來 |
+| Chat-ID whitelist | 你的 chat_id（多個用逗號分隔） |
+
+存檔。**重啟 server**（hot-reload 還沒做 — 目前 `./run.sh` 要手動重啟才會啟動 polling loop）。重啟後 log 應該看到：
+
+```
+[INFO] telegram_bridge: Telegram inbound bridge started — polling with 1-id whitelist.
+```
+
+如果看到 `Telegram inbound bridge NOT started: …` 的話，訊息會告訴你是哪個欄位沒設好。
+
+#### 5. 從 Telegram 操作 agent
+
+| 你發 | 會怎樣 |
+|---|---|
+| 任何文字 | 當 goal 跑，在這個 chat 綁的 session 裡，跑完推結果回來 |
+| `/start` | 確認連線 |
+| `/help` | 命令列表 |
+| `/cancel` | 中止當下正在跑的 task |
+| `/new` | 換新 session（舊的保留在歷史） |
+
+Agent 回覆包含：
+
+- **狀態行** — `✅ Completed · 12.4s · 3 subtasks`
+- **summary 文字** — orchestrator 寫的最終 summary，截斷到 ~3500 字元
+- **`📎 Files produced`** — 每個 artifact 的檔名 + 大小 + 是哪個工具產的（包含 shell redirect 寫出來的檔，已被後台 workspace scanner 抓到）
+- **內容 inline** — 小於 3 KB 的文字檔直接當下一則訊息丟過來；大檔 / 二進位走 Telegram `sendDocument` 變成「附件 card」，你 tap 就下載
+
+#### 安全模型
+
+- **硬性白名單**：不在白名單的 chat_id 來訊**直接沈默丟掉**（不留 probe signal）。白名單空 = inbound 連啟動都不啟動，就算 toggle 開了也一樣。
+- **Auto-approve 高風險工具**：你白名單的 chat_id 本身就是 consent signal — `shell_exec_write` / `python_exec` / `file_write` 都不會卡 approval prompt（反正你也不在 web UI 旁邊）。
+- **Denylist 硬擋破壞行為**：無論 approve 與否，tool registry 會擋 `rm` / `rmdir` / `unlink` / `git rm` / `shred`、SQL `DROP TABLE` / `DROP DATABASE` / `TRUNCATE TABLE` / `DELETE FROM`、系統層 `mkfs` / `dd if=…/of=/dev/…` / `> /dev/sd[a-z]` / `fdisk` / `format X:` / 遞迴 `chmod 0…`，以及任何工具名含 `delete` / `remove` / `drop_table` / `truncate` / `wipe` / `purge`。被擋會明確告訴你「open the web UI 手動 approve」。
+- **10 分鐘 hard timeout**：每個 Telegram-driven run 用 `asyncio.wait_for(timeout=600)` 包住，Ollama 掛掉、tool deadlock 都不會把 chat 卡死 — 10 分鐘整 bot 會回「⌛ Task ran longer than 10 min and was force-cancelled」而不是無聲沈默。
+
+#### 排查
+
+```bash
+curl -s http://<server>:8000/admin/telegram/status | jq
+```
+
+回 bridge 當下的狀態 — `running`、`inbound_enabled`、`token_set`、白名單實際內容、**最近一次被沈默丟掉的 chat_id**（這個是「為什麼我發訊息沒回」的最快答案），以及哪些 chat 正在跑 task。Token 不會回傳，只回一個 bool flag 表示有沒有設。
 
 ## 平台支援
 
