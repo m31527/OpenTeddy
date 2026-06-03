@@ -903,6 +903,11 @@ class Executor:
                     # is the real budget the watchdog is keeping us under.
                     "num_ctx":     num_ctx,
                 },
+                # Per-request keep_alive override (e.g. "24h"). Ollama
+                # honours this regardless of its own OLLAMA_KEEP_ALIVE env
+                # var, so OpenTeddy users get long resident models without
+                # editing the Ollama service file.
+                "keep_alive": getattr(config, "ollama_keep_alive", "24h"),
             }
             if tools:
                 payload["tools"] = tools
@@ -1542,9 +1547,10 @@ class Executor:
                     "system": _SYSTEM_PROMPT,
                     "stream": False,
                     "options": {
-                    "temperature": float(getattr(config, "qwen_temperature", 0.2)),
-                    "num_predict": config.qwen_max_tokens,
-                },
+                        "temperature": float(getattr(config, "qwen_temperature", 0.2)),
+                        "num_predict": config.qwen_max_tokens,
+                    },
+                    "keep_alive": getattr(config, "ollama_keep_alive", "24h"),
                 },
             )
             resp.raise_for_status()
@@ -1728,6 +1734,7 @@ class Executor:
                         "num_predict": 600,
                         "num_ctx":     int(getattr(config, "qwen_num_ctx", 16384)),
                     },
+                    "keep_alive": getattr(config, "ollama_keep_alive", "24h"),
                 },
                 timeout=120,
             )

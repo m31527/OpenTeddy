@@ -1379,6 +1379,7 @@ class Orchestrator:
                         "num_predict": 200,
                         "num_ctx":     int(getattr(config, "qwen_num_ctx", 16384)),
                     },
+                    "keep_alive": getattr(config, "ollama_keep_alive", "24h"),
                 },
                 # 30s cap. The judge call only needs ~50 tokens of output
                 # ("PASS" / "FAIL" + 30-word reason). On a healthy big
@@ -2147,6 +2148,11 @@ class Orchestrator:
                 "num_predict": config.gemma_max_tokens,
                 "num_ctx":     int(getattr(config, "gemma_num_ctx", 16384)),
             },
+            # Same per-request keep_alive override the executor uses —
+            # so orchestrator's plan + fast-chat / classifier calls all
+            # benefit from the long retention setting without touching
+            # Ollama's daemon config.
+            "keep_alive": getattr(config, "ollama_keep_alive", "24h"),
         }
         try:
             if stream_on:

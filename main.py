@@ -272,6 +272,14 @@ async def _warmup_ollama_models() -> None:
                         # a defensive floor that still completes in
                         # ~50 ms once the model is hot.
                         "options":  {"num_predict": 2},
+                        # Pin keep_alive on the warmup call too — point
+                        # of warmup is to leave the model resident; if
+                        # we passed nothing and Ollama's default was
+                        # 5 min, the model would unload again before
+                        # the user's first real request.
+                        "keep_alive": getattr(
+                            config, "ollama_keep_alive", "24h",
+                        ),
                     },
                 )
             if resp.status_code == 200:

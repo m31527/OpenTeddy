@@ -126,6 +126,24 @@ class Config:
         default_factory=lambda: os.getenv("QWEN_MODEL", "qwen3.5:2b")
     )
 
+    # Ollama `keep_alive` — how long Ollama keeps a loaded model in VRAM
+    # after the last request. Default 5 min unloads aggressively, which
+    # forces a 5-15 s cold reload every time the user pauses for coffee.
+    # 24 h matches what most everyday users want: model stays hot all
+    # day, only reloads on machine reboot. Power users tweaking VRAM
+    # contention can drop to "5m" / "0" from Settings.
+    #
+    # Passed as the `keep_alive` field in every Ollama API request (the
+    # daemon honours per-request overrides regardless of its own
+    # OLLAMA_KEEP_ALIVE env var), so OpenTeddy users get a sane default
+    # without having to touch Ollama's service file.
+    #
+    # Accepts any Ollama-recognised duration string: "24h", "1h", "30m",
+    # "5m", "0" (unload immediately), "-1" (keep forever).
+    ollama_keep_alive: str = field(
+        default_factory=lambda: os.getenv("OLLAMA_KEEP_ALIVE", "24h")
+    )
+
     # Claude upgrade / escalation
     anthropic_api_key: str = field(
         default_factory=lambda: os.getenv("ANTHROPIC_API_KEY", "")
@@ -568,6 +586,8 @@ class Config:
             self.gemma_base_url = settings["gemma_base_url"]
         if _s("qwen_base_url"):
             self.qwen_base_url = settings["qwen_base_url"]
+        if _s("ollama_keep_alive"):
+            self.ollama_keep_alive = settings["ollama_keep_alive"]
 
         # Claude API key — only overwrite when the user actually saved one
         # in the UI. Empty string keeps the env-var fallback.

@@ -171,6 +171,16 @@ SETTINGS_META: dict[str, dict[str, Any]] = {
         "description": "Base URL of the Ollama instance serving the executor",
         "type":        "text",
     },
+    "ollama_keep_alive": {
+        "label":       "Ollama model VRAM retention",
+        "description": "How long Ollama keeps models loaded in VRAM after a "
+                       "request. Default 24h means the first task of the day "
+                       "doesn't pay the 5-15 s reload cost. Accepts '24h', "
+                       "'1h', '30m', '0' (unload immediately), '-1' (forever). "
+                       "Sent as the `keep_alive` field on every Ollama request "
+                       "— overrides the daemon's own OLLAMA_KEEP_ALIVE env var.",
+        "type":        "text",
+    },
     "escalation_threshold": {
         "label":       "Escalation Confidence Threshold",
         "description": "Escalate to Claude when executor confidence is below this value",
@@ -443,6 +453,7 @@ def _defaults_from_config() -> dict[str, str]:
         "verification_enabled":     "true" if getattr(config, "verification_enabled", True) else "false",
         "gemma_base_url":           config.gemma_base_url,
         "qwen_base_url":            config.qwen_base_url,
+        "ollama_keep_alive":        getattr(config, "ollama_keep_alive", "24h"),
         "escalation_threshold":     str(config.escalation_confidence_threshold),
         "escalation_failure_limit": str(config.escalation_failure_limit),
         "gemma_max_tokens":         str(config.gemma_max_tokens),
@@ -748,6 +759,11 @@ class SettingsStore:
             config.gemma_base_url = settings["gemma_base_url"]
         if "qwen_base_url" in settings:
             config.qwen_base_url = settings["qwen_base_url"]
+        if "ollama_keep_alive" in settings and settings["ollama_keep_alive"]:
+            # Non-empty only — clearing the field via the UI keeps the
+            # 24h default rather than disabling keep_alive entirely
+            # (which would force a cold reload on every request).
+            config.ollama_keep_alive = settings["ollama_keep_alive"].strip()
 
         v = _float("escalation_threshold")
         if v is not None:
