@@ -101,6 +101,50 @@ _PLAN_SYSTEM_CODE = """\
   ❌ 錯誤：先一個「cd /path/to/project」，再一個「docker compose up」
 docker compose 也可以用 `-f /path/to/docker-compose.yml` 取代 cd。
 
+【爬蟲 / 抓網頁資料任務 — 最重要規則，違反這條會浪費十分鐘以上】
+
+如果用戶的目標含「爬」/「抓」/「scrape」/「crawl」/「擷取網頁」/
+「get data from <網站>」/「list trending」/「top N from <網站>」等意圖：
+
+  ✅ 首選：直接用 `browser_fetch(url=...)` 工具，**1 個 subtask 搞定**
+     - browser_fetch 內建 headless Chromium，會跑 JavaScript
+     - 不需要 pip install，不需要寫 .py 腳本
+     - 適合 SPA、Cloudflare 站、tixcraft、github trending、新聞網
+     - 範例 subtask 描述：
+         「用 browser_fetch 抓 https://github.com/trending 的內容回傳
+          markdown」
+     - 拿到 markdown 直接就是答案；若需要篩選最多再加 1 個
+       python_exec subtask 處理。**總共 1-2 個 subtask 上限。**
+
+  ✅ 次選：`fetch_url(url=...)` 如果確定目標是純 server-rendered HTML
+     (例如靜態 blog、純文字 API endpoint)。比 browser_fetch 快 ~5 倍。
+
+  ❌ **絕對禁止規劃以下路徑**（過去一週用戶踩了 7 次，全部失敗）：
+     ┌──────────────────────────────────────────────────────────┐
+     │  subtask 1: pip install requests beautifulsoup4         │
+     │  subtask 2: cat << EOF > scraper.py ...                 │
+     │  subtask 3: python3 scraper.py                          │
+     └──────────────────────────────────────────────────────────┘
+     失敗原因：
+       1. `pip install` 在 ARM / 低速網路要 >900 秒 → 自動升級
+          Claude → 浪費錢
+       2. 純 `requests` 拿不到 JS-rendered 內容
+       3. `browser_fetch` 工具已內建 chromium，重新裝 playwright 是
+          重複造輪子且更慢
+       4. 寫出來的 scraper.py 沒人會再用，是一次性 dead code
+
+  範例對照：
+    用戶：「爬 github trending top 10」
+    ❌ 錯誤規劃：3 個 subtask (install + write + run) → 通常 10-15 分鐘失敗
+    ✅ 正確規劃：1 個 subtask
+       [{"description": "用 browser_fetch 抓 https://github.com/trending，
+          回傳前 10 個 repo 名稱與描述", "skill_hint": null, "order": 0}]
+       → 通常 3-8 秒完成
+
+    用戶：「抓 X 網站列表」/「擷取 Y 網頁資料」
+    → 同樣：first subtask 用 browser_fetch 抓網頁，second subtask (僅
+       當需要時) 用 python_exec 處理結果。**不要寫獨立 scraper 腳本。**
+
 【部署任務的標準流程 — 很重要】
 如果用戶的目標包含「部署／啟動／架設／跑起來／deploy／serve／install」，
 照以下順序規劃（**pre-flight 驗證是重點**，不要直接 up）：
