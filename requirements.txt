@@ -58,3 +58,11 @@ playwright>=1.45
 # rendered DOM reach the LLM as clean structured text instead of tag soup —
 # matters a lot for 2B-class local models that get confused by HTML noise.
 markdownify>=0.13
+
+# ── Scheduled tasks ────────────────────────────────────────────────────────────
+# APScheduler powers the per-session cron-driven runs ("every weekday 9:30,
+# fetch GitHub trending and push the summary to my Telegram"). The
+# AsyncIOScheduler integrates with FastAPI's event loop, handles cron parsing
+# + DST + missed-fire policies, and is the de-facto standard. Pure Python,
+# no native deps, PyInstaller-friendly.
+APScheduler>=3.10

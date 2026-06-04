@@ -75,6 +75,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 import uuid
 from typing import Any, Dict, List, Optional, Set
@@ -779,6 +780,16 @@ async def _dispatch(update: Dict[str, Any]) -> None:
         await _handle_command(chat_id, text)
         return
 
+    # ── Natural-language schedule cancel — must run BEFORE the
+    # orchestrator-dispatch branch so a message like "取消我的排程" doesn't
+    # get treated as a new goal and burn LLM tokens trying to interpret
+    # it. Returns True iff it handled the message; False falls through.
+    try:
+        if await _maybe_handle_natural_cancel(chat_id, text):
+            return
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("natural-cancel guard raised, falling through: %s", exc)
+
     # ── Free-text → goal → orchestrator dispatch ──────────────────────────────
     # Concurrency guard: refuse new messages while this chat already has
     # an orchestrator run in flight. Queueing is intentionally not done —
@@ -1232,7 +1243,14 @@ async def _handle_command(chat_id: str, text: str) -> None:
             "/start  — confirm you're connected\n"
             "/help   — this message\n"
             "/cancel — abort the currently-running task\n"
-            "/new    — start a fresh session for this chat (old one stays in history)\n",
+            "/new    — start a fresh session for this chat (old one stays in history)\n"
+            "/cron   — list scheduled tasks for this chat\n"
+            "          /cron cancel <id>  — cancel a schedule\n"
+            "          /cron run <id>     — fire immediately (test)\n"
+            "\n"
+            "Natural cancel: a message like 「取消排程」or 'cancel my schedule' \n"
+            "is recognised — if there's exactly one, it gets cancelled; otherwise \n"
+            "I'll list them so you can pick.",
         )
         return
 
@@ -1244,10 +1262,228 @@ async def _handle_command(chat_id: str, text: str) -> None:
         await _handle_new(chat_id)
         return
 
+    if cmd == "/cron":
+        await _handle_cron(chat_id, text)
+        return
+
     await _send_reply(
         chat_id,
         f"❓ Unknown command: {cmd}. Try /help.",
     )
+
+
+# ── /cron command + natural-language schedule management ─────────────────────
+
+async def _handle_cron(chat_id: str, text: str) -> None:
+    """Manage scheduled tasks bound to this chat's session.
+
+    Usage:
+      /cron                      — list all schedules for this chat
+      /cron cancel <id_prefix>   — cancel a specific schedule (8-char prefix)
+      /cron run <id_prefix>      — fire a schedule immediately (test before cron)
+
+    The schedules listed are scoped to the session bound to this
+    Telegram chat, so users can only see + manage their own. No
+    cross-chat enumeration.
+    """
+    # Identify the chat's bound session — schedules are per-session.
+    sess = await _tracker.get_session_by_telegram_chat(chat_id)
+    if not sess:
+        await _send_reply(
+            chat_id,
+            "ℹ️ This chat isn't bound to a session yet. Send any message "
+            "to start one, then create schedules from there.",
+        )
+        return
+    session_id = sess["id"]
+
+    parts = text.strip().split(maxsplit=2)
+    sub = parts[1].lower() if len(parts) >= 2 else ""
+
+    if sub in ("", "list", "ls"):
+        await _cron_list(chat_id, session_id)
+        return
+    if sub in ("cancel", "rm", "remove", "delete", "stop"):
+        target = parts[2] if len(parts) >= 3 else ""
+        await _cron_cancel(chat_id, session_id, target)
+        return
+    if sub in ("run", "trigger", "now"):
+        target = parts[2] if len(parts) >= 3 else ""
+        await _cron_run_now(chat_id, session_id, target)
+        return
+
+    await _send_reply(
+        chat_id,
+        "❓ Unknown /cron subcommand. Try:\n"
+        "  /cron               — list schedules\n"
+        "  /cron cancel <id>   — cancel a schedule\n"
+        "  /cron run <id>      — trigger immediately\n",
+    )
+
+
+async def _cron_list(chat_id: str, session_id: str) -> None:
+    """Render the schedule list with friendly formatting."""
+    rows = await _tracker.list_scheduled_tasks(session_id=session_id)
+    if not rows:
+        await _send_reply(
+            chat_id,
+            "📭 No scheduled tasks for this chat yet.\n"
+            "\n"
+            "Create one via the API, e.g.:\n"
+            "```\n"
+            f"curl -X POST http://<server>/schedules -H 'Content-Type: application/json' \\\n"
+            f'  -d \'{{"session_id":"{session_id}",'
+            f'"cron":"30 9 * * *",'
+            f'"goal":"用 browser_fetch 抓 https://github.com/trending 列 top 10"}}\'\n'
+            "```\n"
+            "Cron format: 'minute hour day month weekday' "
+            "(e.g. `30 9 * * *` = daily 9:30)",
+        )
+        return
+
+    lines = [f"⏰ {len(rows)} scheduled task(s):"]
+    for r in rows:
+        rid = (r.get("id") or "")[:8]
+        enabled = "✅" if r.get("enabled") else "⏸"
+        cron = r.get("cron") or "?"
+        goal = (r.get("goal") or "")
+        if len(goal) > 70:
+            goal = goal[:67] + "…"
+        next_at = (r.get("next_run_at") or "")[:16].replace("T", " ")
+        last_status = r.get("last_status") or "—"
+        fails = int(r.get("consecutive_failures") or 0)
+        cap = int(r.get("max_consecutive_failures") or 3)
+        fail_str = f" · ❌{fails}/{cap}" if fails > 0 else ""
+        lines.append(
+            f"\n{enabled} `{rid}`  cron: `{cron}`"
+            f"\n   goal: {goal}"
+            f"\n   next: {next_at or '—'} · last: {last_status}{fail_str}"
+        )
+    lines.append("\n\nTo cancel: `/cron cancel <id>` (use 8-char prefix).")
+    await _send_reply(chat_id, "\n".join(lines))
+
+
+async def _cron_cancel(chat_id: str, session_id: str, target: str) -> None:
+    """Resolve `target` (id prefix or empty) and cancel.
+
+    If the user wrote `/cron cancel` with no target, and the chat has
+    exactly one schedule, cancel that — natural "I only have one, just
+    kill it" intent.
+    """
+    rows = await _tracker.list_scheduled_tasks(session_id=session_id)
+    if not rows:
+        await _send_reply(chat_id, "ℹ️ Nothing to cancel — no schedules for this chat.")
+        return
+
+    target = (target or "").strip().lower()
+    matches: List[Dict[str, Any]] = []
+    if not target:
+        # No target supplied — only resolves cleanly if there's exactly
+        # one schedule. Anything more is ambiguous; refuse and list.
+        if len(rows) == 1:
+            matches = rows
+        else:
+            await _send_reply(
+                chat_id,
+                f"❓ {len(rows)} schedules in this chat — which one?\n"
+                "Use `/cron cancel <8-char-id>`. Run `/cron` to see ids.",
+            )
+            return
+    else:
+        for r in rows:
+            rid = (r.get("id") or "").lower()
+            if rid.startswith(target):
+                matches.append(r)
+
+    if not matches:
+        await _send_reply(
+            chat_id,
+            f"❓ No schedule id starting with `{target}` in this chat. "
+            "Run `/cron` to see what's available.",
+        )
+        return
+    if len(matches) > 1:
+        ids = ", ".join(f"`{(r.get('id') or '')[:8]}`" for r in matches)
+        await _send_reply(
+            chat_id,
+            f"❓ Prefix `{target}` matches {len(matches)} schedules: {ids}\n"
+            "Use a longer prefix to disambiguate.",
+        )
+        return
+
+    row = matches[0]
+    from scheduler import delete_schedule as _del
+    ok = await _del(row["id"])
+    if ok:
+        goal_preview = (row.get("goal") or "")[:60]
+        await _send_reply(
+            chat_id,
+            f"🗑 Cancelled schedule `{row['id'][:8]}`\n"
+            f"   was: {goal_preview}",
+        )
+    else:
+        await _send_reply(
+            chat_id, f"❌ Failed to cancel `{row['id'][:8]}` — try again.",
+        )
+
+
+async def _cron_run_now(chat_id: str, session_id: str, target: str) -> None:
+    """Trigger one schedule immediately. Same prefix resolution as cancel."""
+    rows = await _tracker.list_scheduled_tasks(session_id=session_id)
+    if not rows:
+        await _send_reply(chat_id, "ℹ️ Nothing to run — no schedules for this chat.")
+        return
+
+    target = (target or "").strip().lower()
+    matches = [r for r in rows if (r.get("id") or "").lower().startswith(target)] if target else (rows if len(rows) == 1 else [])
+    if not matches:
+        await _send_reply(chat_id, "❓ Couldn't resolve which schedule to run. Try `/cron` first.")
+        return
+    if len(matches) > 1:
+        await _send_reply(chat_id, "❓ Prefix matches multiple — try a longer id.")
+        return
+
+    row = matches[0]
+    from scheduler import run_now as _run
+    await _run(row["id"])
+    await _send_reply(
+        chat_id,
+        f"▶️ Triggered `{row['id'][:8]}` — results will land here when done.",
+    )
+
+
+# Regex matching free-text "I want to cancel my schedule" — checked in
+# _dispatch BEFORE handing the message to the orchestrator, so a natural
+# request never gets misrouted into a new agent run.
+_NL_CANCEL_RE = re.compile(
+    r"(取消|停掉|關掉|cancel|stop|remove|delete)"
+    r".{0,15}"
+    r"(排程|定時|每天的|cron|schedule)",
+    re.IGNORECASE,
+)
+
+
+async def _maybe_handle_natural_cancel(chat_id: str, text: str) -> bool:
+    """If `text` reads like "please cancel my schedule" in natural
+    language, route it to the /cron cancel flow + return True. Otherwise
+    return False so the dispatcher continues to orchestrator.
+
+    Disambiguation: with 1 schedule for the chat → cancel + confirm.
+    With multiple → reply listing them + tell the user to use `/cron cancel
+    <id>`. With 0 → reply "nothing scheduled".
+
+    We deliberately don't try to AI-resolve "cancel the github one" vs
+    "cancel the slack one" — too much ambiguity. Forcing the user to
+    pick an id with `/cron cancel <id>` is safer than risking the
+    wrong cancellation.
+    """
+    if not _NL_CANCEL_RE.search(text):
+        return False
+    sess = await _tracker.get_session_by_telegram_chat(chat_id)
+    if not sess:
+        return False
+    await _cron_cancel(chat_id, sess["id"], target="")
+    return True
 
 
 async def _handle_cancel(chat_id: str) -> None:

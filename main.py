@@ -408,6 +408,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:  # type: ignore[type-arg]
     except Exception as exc:  # noqa: BLE001
         logger.warning("Telegram bridge startup failed (non-fatal): %s", exc)
 
+    # Scheduled tasks — APScheduler-driven recurring runs. Loads all
+    # enabled schedules from SQLite and registers their cron triggers
+    # so a 9:30 AM run survives a server restart. See scheduler.py
+    # for the trigger handler, circuit-breaker, and Telegram delivery
+    # path.
+    try:
+        from scheduler import start as _start_scheduler
+        await _start_scheduler(tracker, orchestrator, ws_manager.broadcast)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Scheduler startup failed (non-fatal): %s", exc)
+
     # Pre-warm Ollama models in the background. First LLM call after a
     # cold start (or after Ollama's KEEP_ALIVE timeout expired) has to
     # load the model into VRAM — typically 5-15 s for a Gemma 3:4B
@@ -429,6 +440,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:  # type: ignore[type-arg]
         await _stop_tg_bridge()
     except Exception as exc:  # noqa: BLE001
         logger.warning("Telegram bridge shutdown saw: %s", exc)
+
+    try:
+        from scheduler import stop as _stop_scheduler
+        await _stop_scheduler()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Scheduler shutdown saw: %s", exc)
 
     await executor.close()
     await orchestrator.close()
@@ -2563,6 +2580,114 @@ async def ollama_status() -> dict:
         online = False
 
     return {"success": True, "data": {"online": online, "url": url}, "error": None}
+
+
+# ── Scheduled tasks (cron-driven recurring runs) ──────────────────────────────
+# See scheduler.py for the runtime; these are just the thin HTTP wrappers
+# around the public surface. Request / response shapes are deliberately
+# flat dicts (not Pydantic models) so curl-based usage stays trivial — the
+# UI work is a v2 concern.
+
+class _ScheduleCreateBody(BaseModel):
+    session_id: str
+    cron: str                   # 5-field crontab: "30 9 * * *"
+    goal: str
+    max_failures: Optional[int] = 3
+
+
+class _ScheduleUpdateBody(BaseModel):
+    cron: Optional[str] = None
+    goal: Optional[str] = None
+    enabled: Optional[bool] = None
+
+
+@app.post("/schedules")
+async def create_schedule(body: _ScheduleCreateBody) -> dict:
+    """Create a new schedule. The bound session keeps its memory,
+    workspace, mode, and Telegram chat binding — so a schedule attached
+    to a Telegram-bound session pushes results back automatically when
+    it fires. Cron parsing is validated synchronously; a bad expression
+    returns 400 with a helpful message."""
+    try:
+        from scheduler import add_schedule as _add
+        row = await _add(
+            session_id=body.session_id,
+            cron=body.cron.strip(),
+            goal=body.goal,
+            max_failures=int(body.max_failures or 3),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"success": True, "data": row, "error": None}
+
+
+@app.get("/schedules")
+async def list_schedules(session_id: Optional[str] = None) -> dict:
+    """List schedules. Filter by session_id if supplied (e.g. the UI
+    "schedules for THIS session" view); otherwise returns everything."""
+    rows = await tracker.list_scheduled_tasks(session_id=session_id)
+    return {"success": True, "data": rows, "error": None}
+
+
+@app.patch("/schedules/{schedule_id}")
+async def update_schedule(schedule_id: str, body: _ScheduleUpdateBody) -> dict:
+    """Patch any combination of cron / goal / enabled. Cron changes
+    re-register the APScheduler job with the new trigger; enabled flips
+    add or remove the job. Returns the updated row."""
+    if body.cron is not None:
+        # Validate before persisting so we don't leave a half-applied
+        # state where SQLite has the new cron but APScheduler doesn't.
+        try:
+            from scheduler import _validate_cron  # type: ignore[attr-defined]
+            _validate_cron(body.cron.strip())
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+    await tracker.update_scheduled_task(
+        schedule_id,
+        cron=body.cron.strip() if body.cron is not None else None,
+        goal=body.goal,
+        enabled=body.enabled,
+    )
+
+    # Re-register / unregister with APScheduler based on the new state.
+    from scheduler import _register_job, _unregister_job  # type: ignore[attr-defined]
+    from scheduler import set_enabled as _set_enabled
+    if body.enabled is not None:
+        await _set_enabled(schedule_id, body.enabled)
+    elif body.cron is not None:
+        # cron changed but enabled wasn't touched — re-register so the
+        # APScheduler trigger uses the new cron immediately.
+        row = await tracker.get_scheduled_task(schedule_id)
+        if row and row.get("enabled"):
+            _register_job(row)
+
+    row = await tracker.get_scheduled_task(schedule_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Schedule not found")
+    return {"success": True, "data": row, "error": None}
+
+
+@app.delete("/schedules/{schedule_id}")
+async def delete_schedule(schedule_id: str) -> dict:
+    """Remove a schedule from both SQLite and APScheduler."""
+    from scheduler import delete_schedule as _del
+    deleted = await _del(schedule_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Schedule not found")
+    return {"success": True, "data": {"id": schedule_id, "deleted": True}, "error": None}
+
+
+@app.post("/schedules/{schedule_id}/run-now")
+async def run_schedule_now(schedule_id: str) -> dict:
+    """Trigger a schedule out-of-band. Useful for testing a new
+    schedule without waiting until tomorrow morning. The next cron-
+    scheduled fire is NOT bumped — APScheduler's queue stays unchanged."""
+    from scheduler import run_now as _run_now
+    res = await _run_now(schedule_id)
+    if res is None:
+        raise HTTPException(status_code=404, detail="Schedule not found")
+    return {"success": True, "data": {"id": schedule_id, "triggered": True}, "error": None}
 
 
 @app.get("/admin/telegram/status")

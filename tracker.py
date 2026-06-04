@@ -140,6 +140,29 @@ class Tracker:
             # strings for public channels. Empty default = "not bound
             # to any chat", which is every pre-existing session.
             "ALTER TABLE sessions ADD COLUMN telegram_chat_id TEXT NOT NULL DEFAULT ''",
+            # ── Scheduled tasks (cron-driven recurring runs) ──────────────
+            # Each row is "this session runs this goal on this cron". The
+            # session binding gives the schedule continuity of memory /
+            # workspace / mode / Telegram chat id — so if you bound a chat
+            # to a session and then created a schedule on that session, the
+            # daily run automatically pushes results to that same chat. No
+            # extra wiring.
+            "CREATE TABLE IF NOT EXISTS scheduled_tasks ("
+            "  id                          TEXT PRIMARY KEY,"
+            "  session_id                  TEXT NOT NULL,"
+            "  cron                        TEXT NOT NULL,"
+            "  goal                        TEXT NOT NULL,"
+            "  enabled                     INTEGER NOT NULL DEFAULT 1,"
+            "  max_consecutive_failures    INTEGER NOT NULL DEFAULT 3,"
+            "  consecutive_failures        INTEGER NOT NULL DEFAULT 0,"
+            "  last_run_at                 TEXT,"
+            "  next_run_at                 TEXT,"
+            "  last_status                 TEXT,"  # 'success' / 'failure' / null
+            "  last_error                  TEXT,"
+            "  last_task_id                TEXT,"
+            "  created_at                  TEXT NOT NULL,"
+            "  updated_at                  TEXT NOT NULL"
+            ")",
         ]
         for sql in migrations:
             try:
@@ -487,6 +510,156 @@ class Tracker:
             return None
         cols = [d[0] for d in cur.description]
         return dict(zip(cols, row))
+
+    # ── Scheduled tasks ──────────────────────────────────────────────────────
+    # CRUD + lifecycle helpers for the per-session cron-driven runs. Used
+    # by scheduler.py to spawn / cancel / list jobs, and by main.py's API
+    # endpoints + telegram_bridge's /cron command to drive them from the
+    # outside. All methods are async + use the shared aiosqlite connection
+    # for consistency with the rest of the tracker.
+
+    async def create_scheduled_task(
+        self,
+        schedule_id: str,
+        session_id: str,
+        cron: str,
+        goal: str,
+        max_failures: int = 3,
+    ) -> None:
+        """Persist a new scheduled task. Caller (scheduler.py) is responsible
+        for then registering it with APScheduler — this method only handles
+        the DB write."""
+        now = datetime.utcnow().isoformat()
+        await self.db.execute(
+            "INSERT INTO scheduled_tasks "
+            "(id, session_id, cron, goal, enabled, max_consecutive_failures, "
+            " consecutive_failures, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, 1, ?, 0, ?, ?)",
+            (schedule_id, session_id, cron, goal, max_failures, now, now),
+        )
+        await self.db.commit()
+
+    async def get_scheduled_task(self, schedule_id: str) -> Optional[dict]:
+        """Fetch one schedule by id, or None if missing."""
+        async with self.db.execute(
+            "SELECT * FROM scheduled_tasks WHERE id=?", (schedule_id,),
+        ) as cur:
+            row = await cur.fetchone()
+            if not row:
+                return None
+            cols = [d[0] for d in cur.description]
+            d = dict(zip(cols, row))
+        d["enabled"] = bool(d.get("enabled", 0))
+        return d
+
+    async def list_scheduled_tasks(
+        self, session_id: Optional[str] = None, enabled_only: bool = False,
+    ) -> List[dict]:
+        """List schedules. Filter by session_id or enabled-status when
+        useful (the scheduler's startup load only needs enabled rows; the
+        Telegram /cron command wants enabled + disabled both visible to
+        the user)."""
+        clauses: List[str] = []
+        params: List[Any] = []
+        if session_id is not None:
+            clauses.append("session_id=?")
+            params.append(session_id)
+        if enabled_only:
+            clauses.append("enabled=1")
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        async with self.db.execute(
+            f"SELECT * FROM scheduled_tasks{where} ORDER BY created_at DESC",
+            tuple(params),
+        ) as cur:
+            rows = await cur.fetchall()
+            cols = [d[0] for d in cur.description]
+        out: List[dict] = []
+        for r in rows:
+            d = dict(zip(cols, r))
+            d["enabled"] = bool(d.get("enabled", 0))
+            out.append(d)
+        return out
+
+    async def update_scheduled_task(
+        self,
+        schedule_id: str,
+        cron: Optional[str] = None,
+        goal: Optional[str] = None,
+        enabled: Optional[bool] = None,
+    ) -> None:
+        """Mutate one or more fields on an existing schedule. Caller
+        is responsible for re-registering with APScheduler if cron
+        changes — DB and runtime registration are deliberately
+        decoupled."""
+        sets: List[str] = []
+        params: List[Any] = []
+        if cron is not None:
+            sets.append("cron=?")
+            params.append(cron)
+        if goal is not None:
+            sets.append("goal=?")
+            params.append(goal)
+        if enabled is not None:
+            sets.append("enabled=?")
+            params.append(1 if enabled else 0)
+        if not sets:
+            return
+        sets.append("updated_at=?")
+        params.append(datetime.utcnow().isoformat())
+        params.append(schedule_id)
+        await self.db.execute(
+            f"UPDATE scheduled_tasks SET {', '.join(sets)} WHERE id=?",
+            tuple(params),
+        )
+        await self.db.commit()
+
+    async def delete_scheduled_task(self, schedule_id: str) -> bool:
+        """Remove a schedule. Returns True if a row was deleted, False if
+        the id wasn't found. Caller is responsible for also unregistering
+        the job from APScheduler — see scheduler.delete_schedule."""
+        async with self.db.execute(
+            "DELETE FROM scheduled_tasks WHERE id=?", (schedule_id,),
+        ) as cur:
+            await self.db.commit()
+            return (cur.rowcount or 0) > 0
+
+    async def record_scheduled_run(
+        self,
+        schedule_id: str,
+        status: str,                       # 'success' | 'failure'
+        task_id: Optional[str] = None,
+        error: Optional[str] = None,
+        next_run_at: Optional[str] = None,
+    ) -> dict:
+        """Update lifecycle fields after a triggered run finishes.
+
+        Returns the updated row so the caller (scheduler.py) can immediately
+        check `consecutive_failures` against `max_consecutive_failures`
+        and decide whether to disable + alert — without needing a second
+        SELECT. Success resets `consecutive_failures` to 0; failure
+        increments it.
+        """
+        now = datetime.utcnow().isoformat()
+        if status == "success":
+            await self.db.execute(
+                "UPDATE scheduled_tasks SET "
+                "  last_run_at=?, last_status='success', last_error=NULL, "
+                "  last_task_id=?, consecutive_failures=0, "
+                "  next_run_at=?, updated_at=? "
+                "WHERE id=?",
+                (now, task_id, next_run_at, now, schedule_id),
+            )
+        else:
+            await self.db.execute(
+                "UPDATE scheduled_tasks SET "
+                "  last_run_at=?, last_status='failure', last_error=?, "
+                "  last_task_id=?, consecutive_failures=consecutive_failures+1, "
+                "  next_run_at=?, updated_at=? "
+                "WHERE id=?",
+                (now, (error or "")[:1000], task_id, next_run_at, now, schedule_id),
+            )
+        await self.db.commit()
+        return await self.get_scheduled_task(schedule_id) or {}
 
     async def bind_session_to_telegram_chat(
         self, session_id: str, chat_id: str,
