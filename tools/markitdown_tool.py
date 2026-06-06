@@ -121,25 +121,12 @@ async def doc_to_markdown(
 
     is_url = path_str.startswith(("http://", "https://"))
 
-    # PDF guard. Real-world A/B testing showed markitdown's structure-
-    # first parsing loses field-label-value pairing on form PDFs
-    # (resumes, applications, recruitment trackers, contracts) — see
-    # the trade-off note in the module docstring. pypdf is the
-    # canonical PDF tool in OpenTeddy. We hard-block here instead of
-    # relying on the planner prompt to route correctly, because Gemma
-    # 4B-class models miss the routing rule under prompt pressure.
-    if not is_url and path_str.lower().endswith(".pdf"):
-        return make_result(
-            False,
-            error=(
-                "doc_to_markdown does not handle PDFs to avoid form-field "
-                "loss on resume / application / contract PDFs. Use "
-                "`pdf_extract_text` instead — it's OpenTeddy's canonical "
-                "PDF reader. doc_to_markdown is for .pptx / .docx / "
-                ".xlsx / .epub / images / audio / YouTube URLs only."
-            ),
-            duration_ms=int((time.monotonic() - start) * 1000),
-        )
+    # Note: the PDF hard-block was reverted on 2026-06-XX so the user
+    # can A/B test markitdown's PDF path against pdf_extract_text in
+    # Analytic mode (Code mode's planner prompt has routing rules
+    # pointing to pdf_extract_text for form PDFs; Analytic doesn't).
+    # If the A/B confirms markitdown is worse on PDFs across modes,
+    # re-add the guard here as a code-level guarantee.
 
     # Resolve relative paths against the session workspace — same
     # behaviour as file_tool's read_file / write_file. Without this,
