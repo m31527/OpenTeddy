@@ -374,6 +374,27 @@ _PLAN_INTENT_FIRST_HEADER = """\
   ❌ 反例：「pip install PyPDF2 + 寫 scraper.py」這條死路。
      我們已經有兩個工具，不要重複造輪子。
 
+【研究 / 趨勢分析任務 — 第一步先查 skill catalogue】
+
+若 goal 含以下意圖之一：
+  - 「跨平台研究」/「多平台討論」（Reddit + X + YouTube + HN…）
+  - 「最近 N 天熱門話題」/「近期趨勢」/「大家在聊什麼」
+  - 「特定關鍵字討論趨勢」/「social listening」
+  - 「資安標準流程」/「incident response」/「forensics」/「threat hunting」
+  - MITRE / NIST / D3FEND / ATLAS 識別碼（T1566.001, RS.MA-01 等）
+
+  ✅ **第一個 subtask 必須是 `cyber_skill_lookup`** 去查相關 workflow
+     範例：「用 cyber_skill_lookup 查 "trend research reddit twitter"
+            取得 last30days workflow」
+
+  ✅ 第二個 subtask 起，照查到的 workflow 步驟，用我們現有工具
+     (browser_fetch / fetch_url / shell_exec_write / python_exec)
+     執行。
+
+  ❌ **不要直接衝 `browser_fetch X 搜尋頁`** — X / Reddit 都有反爬
+     機制，直接打會被擋。skill catalogue 裡有 Nitter mirror、Reddit
+     JSON API、yt-dlp 等替代路徑。先查再爬，省 10 分鐘瞎撞。
+
 ──────────────────────────────────────────────────────────────────
 
 """

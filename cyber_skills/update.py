@@ -51,7 +51,19 @@ except ImportError:
     _SSL_CTX = ssl.create_default_context()
 from typing import Any, Dict, List, Optional
 
-REPO = "mukul975/Anthropic-Cybersecurity-Skills"
+# Repositories to index. Each entry is a (owner/name, label) pair —
+# label gets stamped as the `source_repo` field on every skill so the
+# lookup tool can filter / cite the origin.
+#
+# All sources must follow the agentskills.io layout: top-level
+# `skills/<slug>/SKILL.md`. New sources go here and rebuild — no
+# code changes needed.
+SOURCES = [
+    ("mukul975/Anthropic-Cybersecurity-Skills",
+     "754 cybersecurity workflows mapped to MITRE / NIST / D3FEND"),
+    ("mvanhorn/last30days-skill",
+     "Multi-platform trend research (Reddit / X / YouTube / HN / Polymarket)"),
+]
 API_BASE = "https://api.github.com"
 HEADERS = {
     "Accept":         "application/vnd.github.v3+json",
@@ -165,11 +177,14 @@ def _parse_skill_md(text: str) -> Dict[str, Any]:
 
 # ── Index build ─────────────────────────────────────────────────────────────
 
-def build_index(limit: Optional[int] = None, verbose: bool = True) -> List[Dict[str, Any]]:
-    """List skills/ subdirs, fetch SKILL.md from each, build the index."""
+def _index_one_repo(
+    repo: str, limit: Optional[int], verbose: bool,
+) -> List[Dict[str, Any]]:
+    """Walk one repo's skills/ tree, fetch each SKILL.md, return a list
+    of index entries with `source_repo` already stamped."""
     if verbose:
-        print(f"Listing skills/ in {REPO}…")
-    listing = _api_get(f"/repos/{REPO}/contents/skills")
+        print(f"\nListing skills/ in {repo}…")
+    listing = _api_get(f"/repos/{repo}/contents/skills")
     subdirs = [item["name"] for item in listing if item.get("type") == "dir"]
     if verbose:
         print(f"  found {len(subdirs)} skills")
@@ -182,7 +197,7 @@ def build_index(limit: Optional[int] = None, verbose: bool = True) -> List[Dict[
     for i, name in enumerate(subdirs, 1):
         try:
             skill_md_meta = _api_get(
-                f"/repos/{REPO}/contents/skills/{name}/SKILL.md"
+                f"/repos/{repo}/contents/skills/{name}/SKILL.md"
             )
             download_url = skill_md_meta.get("download_url")
             if not download_url:
@@ -205,7 +220,11 @@ def build_index(limit: Optional[int] = None, verbose: bool = True) -> List[Dict[
                 "d3fend":       fm.get("d3fend") or [],
                 "version":      fm.get("version") or "",
                 "license":      fm.get("license") or "Apache-2.0",
+                # Multi-source provenance — lookup tool can cite source
+                # repo and filter by it ("cyber only" / "research only").
+                "source_repo":   repo,
                 "upstream_path": f"skills/{name}/SKILL.md",
+                "upstream_url":  f"https://github.com/{repo}/blob/main/skills/{name}/SKILL.md",
                 "body":         parsed["body"],
             })
             if verbose and (i % 50 == 0 or i == len(subdirs)):
@@ -214,7 +233,16 @@ def build_index(limit: Optional[int] = None, verbose: bool = True) -> List[Dict[
             if verbose:
                 print(f"  [{i:3}] {name:55} ERROR: {exc}")
             continue
+    return out
 
+
+def build_index(limit: Optional[int] = None, verbose: bool = True) -> List[Dict[str, Any]]:
+    """Walk every configured source repo + concatenate the results."""
+    out: List[Dict[str, Any]] = []
+    for repo, label in SOURCES:
+        if verbose:
+            print(f"\n── source: {repo} ({label}) ──")
+        out.extend(_index_one_repo(repo, limit, verbose))
     return out
 
 
@@ -235,10 +263,9 @@ def main() -> int:
 
     payload = {
         "_meta": {
-            "source":      f"https://github.com/{REPO}",
+            "sources":     [{"repo": r, "label": l} for r, l in SOURCES],
             "fetched_at":  time.strftime("%Y-%m-%dT%H:%M:%SZ"),
             "skill_count": len(index),
-            "license":     "Apache-2.0",
         },
         "skills": index,
     }
