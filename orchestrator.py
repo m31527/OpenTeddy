@@ -363,37 +363,16 @@ _PLAN_INTENT_FIRST_HEADER = """\
   • **不可以**只是把使用者 goal 複製貼上、或重寫得更冗長
   • **不可以**包含 "deliverable:" / "acceptance criteria:" 等 meta 描述
 
-【讀文件的任務 — 依文件型態挑工具，這條很重要】
+【讀文件的任務 — 依檔案類型挑工具】
 
-`pdf_extract_text` 跟 `doc_to_markdown` 兩個工具有不同的強項，
-**不是新的取代舊的**，是各自擅長的場景不同。對 PDF 要會分流：
+  📄 .pdf  → `pdf_extract_text`（pypdf）
+     不要用 `doc_to_markdown` — 它對 PDF 會 hard-reject。
 
-  ✅ 用 `pdf_extract_text`（pypdf 平面抽文字）的場景：
-    - 履歷、應徵資料、招募追蹤
-    - 申請表、報名表、表單型 PDF（雙欄 label-value 排版）
-    - 帶「現任 vs 前任」/「申請 vs 核准」這類欄位狀態的 PDF
-    - 任何「填表 / 表格欄位」結構的 PDF
-    理由：pypdf 按**空間順序**讀，label 跟 value 的鄰近性會保留下來。
-    例如「現任狀態」緊跟「待業中」、「前任公司」緊跟「字節跳動」，
-    LLM 不會把「前任」搞成「現任」。
+  📊 .pptx / .docx / .xlsx / .epub / 圖片 / 音檔 / .html / YouTube URL
+     → `doc_to_markdown`（markitdown，支援這些非 PDF 格式）
 
-  ✅ 用 `doc_to_markdown`（markitdown 結構化）的場景：
-    - 報告、規格書、白皮書、技術文件
-    - 投影片（.pptx）、Word（.docx）、Excel（.xlsx / .xls）
-    - EPUB 電子書、YouTube URL、HTML、圖片（EXIF + OCR）、音檔
-    - 文件有清楚章節標題 / 表格 / 列表結構
-    理由：markitdown 保留 heading + table + list 結構，LLM 能引用
-    「第三章第二節」、表格欄位、巢狀條列。
-
-  判斷不出來 / 不確定 → 先 `pdf_extract_text` 看純文字夠不夠用，
-  不夠再加一個 subtask 用 `doc_to_markdown` 補結構。
-
-  ❌ 反例（無論 PDF 是哪型，都不要這樣規劃）：
-    「pip install PyPDF2 / pdfplumber / playwright + 寫 scraper.py」
-    我們已經有兩個工具直接讀，不要重複造輪子。
-
-非 PDF 文件 → 一律用 `doc_to_markdown`（pdf_extract_text 只認 PDF）：
-  - .pptx / .docx / .xlsx / .epub / .html / 圖片 / 音檔 / YouTube URL
+  ❌ 反例：「pip install PyPDF2 + 寫 scraper.py」這條死路。
+     我們已經有兩個工具，不要重複造輪子。
 
 ──────────────────────────────────────────────────────────────────
 

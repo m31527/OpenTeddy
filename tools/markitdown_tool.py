@@ -121,12 +121,33 @@ async def doc_to_markdown(
 
     is_url = path_str.startswith(("http://", "https://"))
 
-    # Note: the PDF hard-block was reverted on 2026-06-XX so the user
-    # can A/B test markitdown's PDF path against pdf_extract_text in
-    # Analytic mode (Code mode's planner prompt has routing rules
-    # pointing to pdf_extract_text for form PDFs; Analytic doesn't).
-    # If the A/B confirms markitdown is worse on PDFs across modes,
-    # re-add the guard here as a code-level guarantee.
+    # PDF hard-block — final form of phase 3a.
+    #
+    # Real-world A/B testing across Code mode + Analytic mode showed
+    # markitdown's PDF path is consistently *worse* than pypdf for the
+    # kinds of PDFs OpenTeddy users actually drop into chat (resumes,
+    # recruitment trackers, application forms, contracts). The failure
+    # mode is structure-first parsing eating field-label-value
+    # pairings — "現任 vs 前任" collapses to a single "公司:" entry.
+    #
+    # The user's verdict: phase 3a should be "expansion only". PDFs
+    # already work via pdf_extract_text; markitdown's job here is
+    # adding NEW formats (.pptx / .docx / .xlsx / .epub / images /
+    # audio / YouTube URLs / HTML) that pypdf can't reach at all.
+    # Hard-rejecting PDFs at the tool level guarantees the existing
+    # path stays untouched regardless of which mode the user is in
+    # and regardless of what the planner decides.
+    if not is_url and path_str.lower().endswith(".pdf"):
+        return make_result(
+            False,
+            error=(
+                "doc_to_markdown does not handle PDFs. Use "
+                "`pdf_extract_text` instead — it's OpenTeddy's canonical "
+                "PDF reader. doc_to_markdown is for .pptx / .docx / "
+                ".xlsx / .epub / images / audio / YouTube URLs only."
+            ),
+            duration_ms=int((time.monotonic() - start) * 1000),
+        )
 
     # Resolve relative paths against the session workspace — same
     # behaviour as file_tool's read_file / write_file. Without this,
