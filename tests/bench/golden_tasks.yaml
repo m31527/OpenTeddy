@@ -1,0 +1,95 @@
+# OpenTeddy benchmark golden task set
+#
+# Add a task here when you find a real-world use case that broke or
+# silently regressed. Resist the urge to pad — every entry slows the
+# bench by ~10-30 s, and a bench that takes 20 min to run is one that
+# nobody runs.
+#
+# Distribution target:
+#   30 % chat-mode fast-path (the "feels slow vs Open WebUI" regression risk)
+#   30 % single-tool scrape / read / shell (the planner-correctness risk)
+#   30 % multi-step code task (the agent-loop hardening risk)
+#   10 % sanity bait — looks like a task but isn't ("explain X")
+#
+# `mode` matches the SessionMode enum (chat / code / analytic).
+# `expect_*` fields drive WARNINGS at compare time — they do NOT make
+# the bench fail. Reality drifting from expectations is information,
+# not a test failure.
+
+# ── 30 % chat-mode fast-path ────────────────────────────────────────
+- id: chat_lunar_date
+  goal: "今天是農曆幾月幾號"
+  mode: chat
+  expect_max_duration_s: 6
+  expect_max_tokens_out: 500
+  expect_max_subtasks: 1
+
+- id: chat_python_lambda
+  goal: "Python 的 lambda 怎麼用？給一個 1-2 行範例"
+  mode: chat
+  expect_max_duration_s: 6
+  expect_max_tokens_out: 400
+  expect_max_subtasks: 1
+
+- id: chat_what_can_you_do
+  goal: "你可以做哪些事情"
+  mode: chat
+  expect_max_duration_s: 6
+  expect_max_subtasks: 1
+
+# ── 30 % single-tool scrape / read ──────────────────────────────────
+- id: scrape_github_trending
+  goal: "用 browser_fetch 抓 https://github.com/trending 取得前 10 個 trending repo 的名稱與描述"
+  mode: code
+  expect_max_duration_s: 15
+  expect_max_subtasks: 2
+  expect_must_use_tool: browser_fetch
+
+- id: scrape_example_dot_com
+  goal: "用 browser_fetch 抓 https://example.com 並告訴我 page title"
+  mode: code
+  expect_max_duration_s: 8
+  expect_max_subtasks: 2
+  expect_must_use_tool: browser_fetch
+
+- id: pdf_extract_simple
+  # NB: docs/sample.pdf must exist in the agent workspace before bench
+  # runs this. The bench runner injects it as a workspace fixture.
+  goal: "讀取 sample.pdf 並用 3 句話總結內容"
+  mode: code
+  expect_max_duration_s: 20
+  expect_max_subtasks: 2
+  expect_must_use_tool: pdf_extract_text
+  workspace_fixture: sample.pdf
+
+# ── 30 % multi-step code task ───────────────────────────────────────
+- id: code_write_fibonacci
+  goal: "在 workspace 寫一個 fibonacci.py，能算前 10 個費氏數列並 print 出來，然後跑一次驗證輸出"
+  mode: code
+  expect_max_duration_s: 30
+  expect_max_subtasks: 3
+  expect_must_use_tool: file_write
+
+- id: code_git_inspect
+  goal: "用 shell_exec_readonly 在 ~/OpenTeddy 跑 git log --oneline -5，把最近 5 個 commit 列出來"
+  mode: code
+  expect_max_duration_s: 10
+  expect_max_subtasks: 2
+  expect_must_use_tool: shell_exec_readonly
+
+# ── 10 % sanity bait — looks tool-like but isn't ────────────────────
+- id: bait_explain_browser_fetch
+  goal: "解釋一下 browser_fetch 這個工具大概在做什麼，請用一段話說明，不要實際呼叫"
+  mode: chat
+  expect_max_duration_s: 7
+  expect_max_tokens_out: 600
+  expect_max_subtasks: 1
+  # Warning if the model ACTUALLY calls browser_fetch — it shouldn't
+  expect_must_not_use_tool: browser_fetch
+
+- id: bait_just_say_hi
+  goal: "說 hi"
+  mode: chat
+  expect_max_duration_s: 4
+  expect_max_tokens_out: 100
+  expect_max_subtasks: 1

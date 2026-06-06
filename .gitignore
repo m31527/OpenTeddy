@@ -69,3 +69,9 @@ agent-workspace/
 
 # ChromaDB local vector store — recreated at runtime from tasks.
 memory_db/
+
+# Cyber-skills index — built locally via `python cyber_skills/update.py`
+# (~5 MB; fetched from upstream Apache 2.0 repo). Don't commit — the
+# upstream tags monthly + each install rebuilds with one command, and
+# 5 MB of JSON would inflate git history fast.
+cyber_skills/index.json

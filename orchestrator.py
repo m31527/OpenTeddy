@@ -358,10 +358,42 @@ _PLAN_INTENT_FIRST_HEADER = """\
   description 寫作檢查清單：
   • 動詞開頭：「用 X 工具做 Y」/「執行 Z 命令」/「讀取 W 檔案的 X 欄」
   • 提到具體工具名（browser_fetch / fetch_url / shell_exec_write /
-    read_file / python_exec / db_query 等）
+    read_file / python_exec / db_query / doc_to_markdown 等）
   • 長度 ≤ 80 字。超過代表你在貼 goal，不是寫動作。
   • **不可以**只是把使用者 goal 複製貼上、或重寫得更冗長
   • **不可以**包含 "deliverable:" / "acceptance criteria:" 等 meta 描述
+
+【讀文件的任務 — 依檔案類型挑工具】
+
+  📄 .pdf  → `pdf_extract_text`（pypdf）
+     不要用 `doc_to_markdown` — 它對 PDF 會 hard-reject。
+
+  📊 .pptx / .docx / .xlsx / .epub / 圖片 / 音檔 / .html / YouTube URL
+     → `doc_to_markdown`（markitdown，支援這些非 PDF 格式）
+
+  ❌ 反例：「pip install PyPDF2 + 寫 scraper.py」這條死路。
+     我們已經有兩個工具，不要重複造輪子。
+
+【研究 / 趨勢分析任務 — 第一步先查 skill catalogue】
+
+若 goal 含以下意圖之一：
+  - 「跨平台研究」/「多平台討論」（Reddit + X + YouTube + HN…）
+  - 「最近 N 天熱門話題」/「近期趨勢」/「大家在聊什麼」
+  - 「特定關鍵字討論趨勢」/「social listening」
+  - 「資安標準流程」/「incident response」/「forensics」/「threat hunting」
+  - MITRE / NIST / D3FEND / ATLAS 識別碼（T1566.001, RS.MA-01 等）
+
+  ✅ **第一個 subtask 必須是 `cyber_skill_lookup`** 去查相關 workflow
+     範例：「用 cyber_skill_lookup 查 "trend research reddit twitter"
+            取得 last30days workflow」
+
+  ✅ 第二個 subtask 起，照查到的 workflow 步驟，用我們現有工具
+     (browser_fetch / fetch_url / shell_exec_write / python_exec)
+     執行。
+
+  ❌ **不要直接衝 `browser_fetch X 搜尋頁`** — X / Reddit 都有反爬
+     機制，直接打會被擋。skill catalogue 裡有 Nitter mirror、Reddit
+     JSON API、yt-dlp 等替代路徑。先查再爬，省 10 分鐘瞎撞。
 
 ──────────────────────────────────────────────────────────────────
 

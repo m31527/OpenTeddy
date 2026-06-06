@@ -810,6 +810,8 @@ class Executor:
             # Document / data extraction (read-only, often hit many
             # different files in one analytic flow)
             "pdf_extract_text":   10,
+            "doc_to_markdown":    12,   # markitdown-backed, broader coverage
+            "cyber_skill_lookup": 8,    # multi-query refinement common
             "csv_describe":       10,
             # DB introspection — auditing a schema needs many describes
             "db_list_tables":     10,
@@ -1311,6 +1313,19 @@ class Executor:
                     # a stray "command not found" inside scraped article
                     # text trigger objective_failure.
                     "browser_fetch",
+                    # doc_to_markdown is markitdown-backed; its output is
+                    # *the document content itself*, identical signal
+                    # shape to read_file. A user's invoice PDF that
+                    # happens to contain the words "Error 1045" must not
+                    # be treated as a failure signal.
+                    "doc_to_markdown",
+                    "pdf_extract_text",
+                    # cyber_skill_lookup returns workflow markdown that
+                    # naturally contains command examples (shell, SQL,
+                    # forensic tool invocations) — documentation, not
+                    # error signals, even when strings look like the
+                    # failure regex.
+                    "cyber_skill_lookup",
                 }
                 if not objective_failure_seen and tool_name not in _DATA_ONLY_TOOLS:
                     tool_result_text = json.dumps(

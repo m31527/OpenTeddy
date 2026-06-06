@@ -39,6 +39,8 @@
 - **小模型 loop 強化** — 自適應 prompt、低風險工具並行、重複呼叫上限、circuit breaker、發現 memo、context watchdog 自動壓縮舊輪次、釘住 session workspace 防路徑 drift。
 - **永跑指令防呆** — shell tool 自動拒絕 `tail -f`、`journalctl -f`、`watch …`，並把 `docker compose up` 自動加上 `-d`，restart-crash 容器的 log 串流不會把 subtask 卡死。
 - **內建 web search** — Chat mode 開啟 `web_search` 工具（Brave Search API），地端模型可以查最新資料而不是亂編訓練 cutoff 後的事件。
+- **`doc_to_markdown` — 8+ 種文件格式直接讀** *(v1.1.0)* — PowerPoint / Word / Excel / EPUB / 圖片（EXIF + OCR）/ 音檔（EXIF + 轉錄）/ HTML / CSV / JSON / XML / ZIP / YouTube URL，全部用一個工具吃，後端是 [markitdown](https://github.com/microsoft/markitdown)。PDF 維持用 pypdf（A/B 測試在履歷/表單 PDF 上勝過 markitdown）。
+- **`cyber_skill_lookup` — 755 個專家工作流** *(v1.1.0)* — 索引 [Anthropic-Cybersecurity-Skills](https://github.com/mukul975/Anthropic-Cybersecurity-Skills)（754 個資安 workflow，映射 MITRE ATT&CK / NIST CSF / D3FEND / ATLAS / NIST AI RMF）+ [last30days-skill](https://github.com/mvanhorn/last30days-skill)（多平台趨勢研究）。Agent 遇到資安 / IR / forensics / 跨平台研究類任務會**先查 catalogue**，拿到 Nitter / Reddit JSON API 等繞過反爬的 workflow 才開始爬，省下「browser_fetch → 被擋 → 失敗」的 10 分鐘無效迴圈。
 - **斷線可恢復的 WS** — 600 筆 ring buffer + `?since=` 重播，網路抖一下、刷新分頁都不會卡 UI。
 - **技能會自己長出來** — 透過 ChromaDB embedding 偵測重複的 goal pattern（不依賴小模型自我反思），當過去有 N 個語意相近的 goal 達標時自動合成技能名稱+描述，交給 Claude 寫成 Python 函式。可在 Settings 調整門檻（預設 3 次重複、相似度 0.75）。
 - **Web 儀表板** — 提交任務、即時看工具呼叫、審核敏感指令、管理記憶、即時顯示「已省 $X vs GPT-4」，還有 GFM 表格 + Chart.js 數值標籤 HTML 報表。
