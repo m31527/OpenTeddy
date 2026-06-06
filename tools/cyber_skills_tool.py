@@ -227,15 +227,19 @@ _SCHEMA_LOOKUP: Dict[str, Any] = {
     "function": {
         "name": "cyber_skill_lookup",
         "description": (
-            "Search the cybersecurity-skills index (754 expert workflows "
-            "mapped to MITRE ATT&CK / NIST CSF / D3FEND / ATLAS / NIST "
-            "AI RMF) and return the top matching skills. Call this when "
-            "the user's goal touches incident response, digital "
-            "forensics, malware analysis, threat hunting, red/blue "
-            "team, cloud security, AppSec, or any other security "
-            "workflow where there might be a standard procedure worth "
-            "following. Also accepts framework identifiers directly "
-            "(e.g. 'T1566.001', 'RS.MA-01'). Read-only."
+            "Search the indexed expert-skill catalogue and return the "
+            "top matching workflows. Current sources:\n"
+            "  • mukul975/Anthropic-Cybersecurity-Skills (754 entries) — "
+            "incident response, digital forensics, malware analysis, "
+            "threat hunting, red/blue team, cloud security, AppSec, "
+            "AI/ML threats. Maps to MITRE ATT&CK / NIST CSF / D3FEND / "
+            "ATLAS / NIST AI RMF.\n"
+            "  • mvanhorn/last30days-skill (1 entry) — multi-platform "
+            "trend research across Reddit / X / YouTube / HN / Polymarket "
+            "with engagement-weighted ranking.\n"
+            "Call this when the user's goal touches any of those domains. "
+            "Also accepts framework identifiers directly (e.g. "
+            "'T1566.001', 'RS.MA-01'). Read-only."
         ),
         "parameters": {
             "type": "object",
