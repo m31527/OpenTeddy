@@ -411,12 +411,17 @@ class ToolRegistry:
         # pages actually surface their content. See browser_tool.py for
         # when to prefer it over fetch_url.
         from tools.browser_tool import BROWSER_TOOLS
+        # Phase 3a (next-major-v2): markitdown universal doc → markdown
+        # tool. Read-only, low risk. Wider format coverage than the
+        # legacy pdf_extract_text; planner prompt nudges new plans
+        # toward it. pdf_extract_text stays registered for back-compat.
+        from tools.markitdown_tool import MARKITDOWN_TOOLS
 
         for fn, schema, risk in (
             SHELL_TOOLS + FILE_TOOLS + HTTP_TOOLS
             + PACKAGE_TOOLS + DB_TOOLS + GCP_TOOLS + DEPLOY_TOOLS
             + NOTIFY_TOOLS + REPORT_TOOLS + ANALYTIC_TOOLS
-            + SEARCH_TOOLS + BROWSER_TOOLS
+            + SEARCH_TOOLS + BROWSER_TOOLS + MARKITDOWN_TOOLS
         ):
             self.register(fn, schema, risk)
 

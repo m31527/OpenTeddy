@@ -358,10 +358,24 @@ _PLAN_INTENT_FIRST_HEADER = """\
   description 寫作檢查清單：
   • 動詞開頭：「用 X 工具做 Y」/「執行 Z 命令」/「讀取 W 檔案的 X 欄」
   • 提到具體工具名（browser_fetch / fetch_url / shell_exec_write /
-    read_file / python_exec / db_query 等）
+    read_file / python_exec / db_query / doc_to_markdown 等）
   • 長度 ≤ 80 字。超過代表你在貼 goal，不是寫動作。
   • **不可以**只是把使用者 goal 複製貼上、或重寫得更冗長
   • **不可以**包含 "deliverable:" / "acceptance criteria:" 等 meta 描述
+
+【讀文件的任務 — 預設用 doc_to_markdown】
+
+如果用戶丟一份檔案進來（PDF / PowerPoint / Word / Excel / 圖片 /
+音檔 / HTML / CSV / EPUB / YouTube URL），第一個 subtask 預設用
+`doc_to_markdown(path=...)` 把內容轉成 markdown。
+
+  ✅ 範例：「用 doc_to_markdown 讀 ./spec.pdf 取得內容」
+  ❌ 反例：「寫一個 python 腳本用 PyPDF2 抓 spec.pdf 的文字」
+     （重複造輪子；markitdown 已經處理好了，不要規劃 pip install 腳本）
+
+`pdf_extract_text`（舊工具）只剩 PDF 且只取文字，新計畫請優先用
+`doc_to_markdown`。它涵蓋 PDF + PPTX + DOCX + XLSX + 圖片 + 音檔 +
+EPUB + YouTube URL 一站搞定。
 
 ──────────────────────────────────────────────────────────────────
 
