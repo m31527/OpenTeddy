@@ -492,11 +492,12 @@
        because it doesn't flash visible while waiting for the render
        functions to settle, which matters for screen-recording. */
     body.in-browser .profile-avatar-wrap,
-    body.in-browser .upgrade-pill,
     body.in-browser .cloud-pill,
     body.in-browser .sidebar-login-btn {
       display: none !important;
     }
+    /* Note: #coffeeBtn is intentionally NOT hidden in plain-browser —
+       the support CTA is universal (web + desktop). */
     .sidebar-login-btn {
       display: flex;
       align-items: center;
@@ -3460,26 +3461,18 @@
             <span class="nav-icon" id="langBtnFlag">🌐</span>
             <span class="nav-label" id="langBtnLabel" data-i18n="lang_switcher_title">Language</span>
           </button>
+          <!-- "Buy Me a Coffee" — universal support CTA. Works in both
+               Tauri shell and plain-browser web UI; no gating on auth
+               state or subscription. Click → openInBrowser routes to
+               the Lemon Squeezy buy link (postMessage → open_external
+               inside Tauri, window.open in plain browser). Replaces
+               the old upgrade-pill ($99 Lifetime) which only appeared
+               for signed-in Tauri users. -->
+          <button class="sidebar-nav-btn" id="coffeeBtn" onclick="onCoffeeBtnClick()" data-i18n-title="nav_coffee_title" title="Buy Me a Coffee">
+            <span class="nav-icon">☕</span>
+            <span class="nav-label" data-i18n="nav_coffee">Buy Me a Coffee</span>
+          </button>
         </nav>
-        <!-- Upgrade pill — desktop-only, signed-in-non-anon-only,
-             subscription.status === 'free' only. Once the user is on
-             a real Google account but not yet paying, this is the
-             primary monetisation surface. Click → desktop shell
-             builds a Lemon Squeezy checkout URL with the user's
-             email + uid (so the Phase C-2 webhook can link payment
-             back to Firebase) and opens it in the system browser.
-             Hidden in plain browser, hidden for anon users, hidden
-             once subscription.status flips to 'active'. -->
-        <button class="upgrade-pill" id="upgradePill" hidden
-                onclick="onUpgradePillClick()"
-                data-i18n-title="upgrade_pill_title"
-                title="Get OpenTeddy Lifetime">
-          <span class="upgrade-pill-icon">✨</span>
-          <span class="upgrade-pill-body">
-            <span class="upgrade-pill-cta" data-i18n="upgrade_pill_cta">Get Lifetime</span>
-            <span class="upgrade-pill-price">$99</span>
-          </span>
-        </button>
 
         <!-- Cloud-sync pill — desktop-only. Lit when running inside the
              Tauri shell (which owns the Firebase Auth state). Three
@@ -6752,6 +6745,25 @@
         (_cloudAuthState.subscription?.status || 'free') === 'free';
       pill.hidden = !eligible;
     }
+    // ── Buy Me a Coffee button ──────────────────────────────────────────
+    // Universal support CTA in the sidebar nav. Visible in BOTH the Tauri
+    // desktop shell and the plain-browser web UI, for ALL users (no auth
+    // gate, no subscription gate). The URL is a public Lemon Squeezy buy
+    // link — same one we'd hand-paste into a tweet — so no per-user
+    // tokens, no Firebase webhook coupling, and the same code path works
+    // in either runtime via the existing openInBrowser() helper.
+    const COFFEE_CHECKOUT_URL =
+      'https://openteddy-app.lemonsqueezy.com/checkout/buy/103ae6c2-36cf-48e1-aefc-71faca140657';
+    function onCoffeeBtnClick() {
+      console.info('[coffee] click — opening', COFFEE_CHECKOUT_URL);
+      try {
+        openInBrowser(COFFEE_CHECKOUT_URL);
+      } catch (e) {
+        console.error('[coffee] openInBrowser threw:', e);
+        toast(e.message, true);
+      }
+    }
+
     function onUpgradePillClick() {
       // Heavy logging on the upgrade-pill click path so we can trace
       // the chain from iframe → Tauri shell → Lemon Squeezy URL when
