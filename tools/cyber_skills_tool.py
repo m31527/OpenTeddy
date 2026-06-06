@@ -168,9 +168,12 @@ async def cyber_skill_lookup(
         return make_result(
             False,
             error=(
-                "Cyber-skill index is empty. Run "
-                "`python cyber_skills/update.py` from the repo root to "
-                "build it (one-off ~12 min)."
+                "Cyber-skill index is not built yet. The server auto-"
+                "builds it on first startup (one-off, ~12 min via the "
+                "GitHub API) — check the toast notifications. If it's "
+                "still empty after ~15 min OR the toast says 'failed', "
+                "run `python cyber_skills/update.py` from the repo root "
+                "to retry manually."
             ),
             duration_ms=int((time.monotonic() - start) * 1000),
         )

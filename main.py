@@ -212,6 +212,113 @@ ws_manager = _WSManager()
 _running_tasks: dict[str, asyncio.Task] = {}
 
 
+async def _maybe_build_cyber_skills_index() -> None:
+    """Auto-build cyber_skills/index.json on startup if it's missing.
+
+    The cyber_skill_lookup tool needs a populated index to work, and
+    building it requires ~755 GitHub API requests (~12 min). Asking
+    every new user to remember to run `python cyber_skills/update.py`
+    once is a UX bug — they install OpenTeddy, the tool silently
+    no-ops, and they don't realise security workflows + trend research
+    aren't available.
+
+    So: at server startup, if the index file is missing, fire off
+    update.py as a background subprocess and stream its `--progress-json`
+    output to ws_manager so the UI can render a toast. The server is
+    fully usable while this runs; only `cyber_skill_lookup` is gated.
+
+    Skipped (no-op) if:
+      - The index already exists (one-time build, doesn't re-run on
+        every restart). To force a refresh, delete index.json + restart,
+        or POST /admin/cyber_skills/refresh (not implemented in this
+        commit — manual delete is the v1.1.0 escape hatch).
+      - update.py is missing (corrupted install, etc.) — log + skip
+        rather than crash.
+
+    Failures are surfaced via ws_manager too, so the UI can show a
+    "build failed, retry" toast instead of leaving the user wondering
+    why the tool keeps returning empty results.
+    """
+    import sys
+    from pathlib import Path
+
+    project_root = Path(__file__).parent
+    index_path = project_root / "cyber_skills" / "index.json"
+    updater_path = project_root / "cyber_skills" / "update.py"
+
+    if index_path.exists():
+        # Already built. The tool will pick it up via its own lazy load.
+        return
+    if not updater_path.exists():
+        logger.warning(
+            "cyber-skills auto-build skipped — updater missing at %s",
+            updater_path,
+        )
+        return
+
+    logger.info(
+        "cyber-skills index missing; spawning %s in background "
+        "(~12 min, progress streamed via ws_manager)",
+        updater_path,
+    )
+    await ws_manager.broadcast({
+        "event": "cyber_skills.progress",
+        "stage": "spawning",
+        "message": "Building cyber-skills knowledge index (one-off, ~12 min)…",
+    })
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            sys.executable, str(updater_path), "--progress-json", "--quiet",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            cwd=str(project_root),
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "cyber-skills auto-build failed to spawn (non-fatal): %s", exc,
+        )
+        await ws_manager.broadcast({
+            "event": "cyber_skills.progress",
+            "stage": "failed",
+            "error": f"could not spawn updater: {exc}",
+        })
+        return
+
+    # Stream stdout — each line is one JSON progress event from the
+    # updater. Forward verbatim to ws_manager (already-stamped fields
+    # become part of the broadcast envelope).
+    assert proc.stdout is not None
+    while True:
+        line = await proc.stdout.readline()
+        if not line:
+            break
+        try:
+            payload = json.loads(line.decode("utf-8", errors="replace"))
+        except Exception:  # noqa: BLE001
+            continue  # non-JSON line; ignore
+        await ws_manager.broadcast({
+            "event": "cyber_skills.progress",
+            **payload,
+        })
+
+    rc = await proc.wait()
+    if rc == 0:
+        logger.info("cyber-skills index built successfully (rc=0)")
+    else:
+        stderr_bytes = await proc.stderr.read() if proc.stderr else b""
+        err = stderr_bytes.decode("utf-8", errors="replace")[-500:]
+        logger.warning(
+            "cyber-skills auto-build exited with rc=%d. stderr tail: %s",
+            rc, err,
+        )
+        await ws_manager.broadcast({
+            "event": "cyber_skills.progress",
+            "stage": "failed",
+            "error": f"updater exited rc={rc}",
+        })
+
+
 async def _warmup_ollama_models() -> None:
     """Fire-and-forget background warmup that asks Ollama to pre-load
     both the orchestrator (Gemma) and the executor (Qwen) into VRAM.
@@ -432,6 +539,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:  # type: ignore[type-arg]
     # user request — they queue, the user's gets priority once the warm
     # call returns its single token).
     asyncio.create_task(_warmup_ollama_models(), name="ollama_warmup")
+
+    # Auto-build the cyber-skills index if it's missing — a one-off ~12
+    # min download via the GitHub API. Streams progress through ws_manager
+    # so the chat UI can render a toast instead of leaving the user
+    # wondering why cyber_skill_lookup returns nothing. No-op if the
+    # index file already exists. See _maybe_build_cyber_skills_index.
+    asyncio.create_task(
+        _maybe_build_cyber_skills_index(),
+        name="cyber_skills_autobuild",
+    )
 
     yield
 

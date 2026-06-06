@@ -5308,6 +5308,7 @@
           if (data.type  === 'context.compressed') handleContextCompressed(data);
           if (data.event === 'circuit_breaker')   handleCircuitBreaker(data);
           if (data.type  === 'subtask.progress')  handleSubtaskProgress(data);
+          if (data.event === 'cyber_skills.progress') handleCyberSkillsProgress(data);
           // Side effect on the live pill: every tool_call bumps the
           // tool counter so the user sees activity even between
           // subtask boundaries.
@@ -9265,6 +9266,50 @@
       toastEl.style.borderColor = isError ? 'var(--error)' : 'var(--border)';
       toastEl.classList.add('show');
       setTimeout(() => toastEl.classList.remove('show'), 3000);
+    }
+
+    // Throttle progress toasts so a 75-event auto-build doesn't spawn 75
+    // toasts. We show "spawning" + "complete" + "failed" always, plus a
+    // milestone "fetching" toast at 25 / 50 / 75 % so the user sees
+    // movement without the chat scrolling away under them.
+    let _cyberSkillsLastPctMilestone = 0;
+    function handleCyberSkillsProgress(data) {
+      const stage = data.stage || '?';
+      if (stage === 'spawning') {
+        _cyberSkillsLastPctMilestone = 0;
+        toast('🧠 ' + (data.message || 'Building cyber-skills index (~12 min)…'));
+        return;
+      }
+      if (stage === 'source_started') {
+        const idx = (data.source_idx ?? 0) + 1;
+        const total = data.source_total ?? 1;
+        toast(`🧠 [${idx}/${total}] fetching ${data.source || '?'}`);
+        return;
+      }
+      if (stage === 'fetching') {
+        const pct = data.total > 0 ? Math.round((data.current / data.total) * 100) : 0;
+        // Only toast on quartile crossings so the user sees motion
+        // without the chat being swamped by 75 individual updates.
+        const milestone = Math.floor(pct / 25) * 25;
+        if (milestone > _cyberSkillsLastPctMilestone && milestone >= 25) {
+          _cyberSkillsLastPctMilestone = milestone;
+          toast(`🧠 indexing ${data.source || '?'}: ${pct}% (${data.current}/${data.total})`);
+        }
+        return;
+      }
+      if (stage === 'complete') {
+        const n = data.skill_count || '?';
+        const sec = data.duration_s || '?';
+        toast(`✅ Cyber-skills index ready: ${n} skills in ${sec}s`);
+        return;
+      }
+      if (stage === 'failed') {
+        toast(
+          '❌ Cyber-skills build failed: ' + (data.error || 'unknown') +
+          '. Run `python cyber_skills/update.py` to retry manually.',
+          true,
+        );
+      }
     }
 
     function escHtml(s) {

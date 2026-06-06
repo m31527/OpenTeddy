@@ -177,13 +177,33 @@ def _parse_skill_md(text: str) -> Dict[str, Any]:
 
 # ── Index build ─────────────────────────────────────────────────────────────
 
+def _emit_progress(progress_json: bool, payload: Dict[str, Any]) -> None:
+    """When --progress-json is set, emit one JSON line to stdout — the
+    server-side launcher picks these up and broadcasts them via WS for
+    the toast UI. No-op when running interactively (the human reader
+    gets the regular `print()` output instead)."""
+    if not progress_json:
+        return
+    try:
+        print(json.dumps(payload, ensure_ascii=False), flush=True)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _index_one_repo(
     repo: str, limit: Optional[int], verbose: bool,
+    progress_json: bool = False, source_idx: int = 0, source_total: int = 1,
 ) -> List[Dict[str, Any]]:
     """Walk one repo's skills/ tree, fetch each SKILL.md, return a list
     of index entries with `source_repo` already stamped."""
     if verbose:
         print(f"\nListing skills/ in {repo}…")
+    _emit_progress(progress_json, {
+        "stage": "source_started",
+        "source": repo,
+        "source_idx": source_idx,
+        "source_total": source_total,
+    })
     listing = _api_get(f"/repos/{repo}/contents/skills")
     subdirs = [item["name"] for item in listing if item.get("type") == "dir"]
     if verbose:
@@ -229,6 +249,16 @@ def _index_one_repo(
             })
             if verbose and (i % 50 == 0 or i == len(subdirs)):
                 print(f"  [{i:3}/{len(subdirs)}] indexed")
+            # Emit every 10 to keep toast lively without spamming WS.
+            if progress_json and (i % 10 == 0 or i == len(subdirs)):
+                _emit_progress(progress_json, {
+                    "stage":         "fetching",
+                    "source":        repo,
+                    "source_idx":    source_idx,
+                    "source_total":  source_total,
+                    "current":       i,
+                    "total":         len(subdirs),
+                })
         except Exception as exc:  # noqa: BLE001
             if verbose:
                 print(f"  [{i:3}] {name:55} ERROR: {exc}")
@@ -236,13 +266,20 @@ def _index_one_repo(
     return out
 
 
-def build_index(limit: Optional[int] = None, verbose: bool = True) -> List[Dict[str, Any]]:
+def build_index(
+    limit: Optional[int] = None, verbose: bool = True,
+    progress_json: bool = False,
+) -> List[Dict[str, Any]]:
     """Walk every configured source repo + concatenate the results."""
     out: List[Dict[str, Any]] = []
-    for repo, label in SOURCES:
+    for i, (repo, label) in enumerate(SOURCES):
         if verbose:
             print(f"\n── source: {repo} ({label}) ──")
-        out.extend(_index_one_repo(repo, limit, verbose))
+        out.extend(_index_one_repo(
+            repo, limit, verbose,
+            progress_json=progress_json,
+            source_idx=i, source_total=len(SOURCES),
+        ))
     return out
 
 
@@ -252,12 +289,23 @@ def main() -> int:
                     help="Index only the first N skills (smoke testing)")
     ap.add_argument("--quiet", action="store_true",
                     help="Suppress per-skill progress logs")
+    ap.add_argument("--progress-json", action="store_true",
+                    help="Emit one JSON line of progress per ~10 skills "
+                         "(used by the server's auto-refresh launcher to "
+                         "broadcast WS events for the toast UI)")
     ap.add_argument("--output", default=str(INDEX_PATH),
                     help=f"Where to write the index (default {INDEX_PATH})")
     args = ap.parse_args()
 
     started = time.monotonic()
-    index = build_index(limit=args.limit, verbose=not args.quiet)
+    _emit_progress(args.progress_json, {
+        "stage": "started",
+        "sources": [r for r, _ in SOURCES],
+    })
+    index = build_index(
+        limit=args.limit, verbose=not args.quiet,
+        progress_json=args.progress_json,
+    )
     out_path = Path(args.output)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -269,12 +317,24 @@ def main() -> int:
         },
         "skills": index,
     }
-    with open(out_path, "w", encoding="utf-8") as fh:
+    # Atomic write: tmp file then rename. Without this, a crash mid-
+    # write leaves a truncated index.json which the server would happily
+    # load as "empty/broken", silently disabling the lookup tool.
+    tmp_path = out_path.with_suffix(out_path.suffix + ".tmp")
+    with open(tmp_path, "w", encoding="utf-8") as fh:
         json.dump(payload, fh, ensure_ascii=False, indent=2)
+    tmp_path.replace(out_path)
 
     size_kb = out_path.stat().st_size / 1024
+    duration_s = time.monotonic() - started
     print(f"\nDone — wrote {len(index)} skills to {out_path} "
-          f"({size_kb:.1f} KB) in {time.monotonic() - started:.1f}s")
+          f"({size_kb:.1f} KB) in {duration_s:.1f}s")
+    _emit_progress(args.progress_json, {
+        "stage": "complete",
+        "skill_count": len(index),
+        "size_kb": int(size_kb),
+        "duration_s": round(duration_s, 1),
+    })
     return 0
 
 
