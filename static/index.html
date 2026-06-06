@@ -3763,8 +3763,27 @@
                    PDF as selectable. Safari < 17 and some Linux file
                    dialogs only honour MIME types and would grey out PDFs
                    when given a pure-extension list. -->
+              <!-- Accept list spans markitdown[all]'s full format coverage
+                   so anything the agent can read via doc_to_markdown
+                   shows up as droppable. Categories:
+                     - tabular:        .csv .tsv .xlsx .xls .parquet
+                     - structured text: .json .yaml .yml .xml .toml
+                     - markup:         .md .markdown .html .htm
+                     - documents:      .pdf .pptx .ppt .docx .doc
+                                       .odt .ods .odp
+                     - books:          .epub
+                     - images (EXIF + OCR): .png .jpg .jpeg .gif .bmp
+                                            .webp .svg .tiff .tif
+                     - audio (EXIF + transcription): .mp3 .wav .m4a
+                                                     .flac .ogg .aac
+                     - archives:       .zip
+                     - plain:          .txt .log
+                   MIME entries cover Windows / Linux native dialogs
+                   that filter by MIME rather than extension; image/*
+                   and audio/* wildcards catch anything camera apps
+                   / DAWs save with vendor extensions. -->
               <input type="file" id="fileInput" multiple
-                accept=".csv,.tsv,.json,.xlsx,.xls,.txt,.md,.log,.yaml,.yml,.parquet,.pdf,application/pdf,text/csv,application/json"
+                accept=".csv,.tsv,.xlsx,.xls,.parquet,.json,.yaml,.yml,.xml,.toml,.md,.markdown,.html,.htm,.pdf,.pptx,.ppt,.docx,.doc,.odt,.ods,.odp,.epub,.png,.jpg,.jpeg,.gif,.bmp,.webp,.svg,.tiff,.tif,.mp3,.wav,.m4a,.flac,.ogg,.aac,.zip,.txt,.log,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.presentationml.presentation,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/epub+zip,application/zip,application/json,text/csv,text/html,text/markdown,text/plain,image/*,audio/*"
                 onchange="onFilesPicked(event)" style="display:none">
               <!-- Attach-source menu. Previously the + was a direct
                    file-picker trigger; now it opens a small popup so the

@@ -25,19 +25,34 @@ Read-only by design — never writes to the workspace. The output goes
 back to the LLM as the tool result, the LLM decides whether to
 summarise it / save a derived file / pull specific sections.
 
-Trade-offs vs `pdf_extract_text`
----------------------------------
-We keep `pdf_extract_text` registered for backward compatibility:
+Trade-offs vs `pdf_extract_text` — complementary, not a swap
+------------------------------------------------------------
+A real user A/B test on a recruitment-tracking PDF revealed that
+markitdown isn't a strict upgrade for every PDF shape:
 
-  - Existing skills/plans that name it explicitly still work
-  - It's marginally faster on PDFs that are pure text (pypdf doesn't
-    pay markitdown's setup cost)
-  - It has a page-range argument that markitdown doesn't expose
-    (markitdown converts the whole file)
+  - Form-style PDFs (resumes, application forms, recruitment trackers,
+    contracts with section labels): markitdown's structure-first
+    extraction CAN lose the spatial pairing between a label and its
+    value. The actual example case: an HR sheet had two columns
+    [現任狀態 | 待業中] [前任公司 | 北京字節跳動]. pypdf reads each
+    cell in space-order, the LLM sees "現任狀態 待業中 前任公司
+    北京字節跳動" and pairs correctly. markitdown tried to be smart
+    about the structure, dropped the "前任" prefix during
+    markdownification, and the LLM ended up answering "current
+    company: ByteDance" — wrong.
 
-For new plans, `doc_to_markdown` is the better default — wider format
-coverage, cleaner output, MS's parsing is well-tuned for the formats
-users actually drop into chat.
+  - Structured documents (reports, specs, whitepapers, slides, .docx,
+    .xlsx, .epub, .html): markitdown wins clearly because it
+    preserves headings + tables + lists. pypdf flattens these into
+    space-separated tokens and the LLM loses chapter / table
+    structure.
+
+So neither tool deprecates the other. The planner prompt
+(_PLAN_SYSTEM_CODE in orchestrator.py) routes between them based on
+PDF shape; the executor honours whichever the planner picked. New
+formats markitdown alone reaches (.pptx / .docx / .xlsx / .epub /
+images / audio / YouTube URLs) all unambiguously go through
+doc_to_markdown — there's no pypdf alternative for those.
 """
 
 from __future__ import annotations
