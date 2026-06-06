@@ -4195,8 +4195,30 @@
                     placeholder="sk-ant-api03-…" autocomplete="off" />
                 </div>
                 <div class="field">
-                  <label data-i18n="claude_model_label">Claude Model (Escalation)</label>
-                  <input type="text" id="inp_claude_model" data-i18n-placeholder="claude_model_placeholder" placeholder="claude-opus-4-6" />
+                  <label class="label-with-info">
+                    <span data-i18n="claude_model_label">Claude Model (Escalation)</span>
+                    <a class="info-dot" href="https://docs.anthropic.com/en/docs/about-claude/models"
+                       target="_blank" rel="noopener noreferrer"
+                       data-i18n-title="claude_model_info"
+                       title="Full model list at docs.anthropic.com/en/docs/about-claude/models">i</a>
+                  </label>
+                  <input type="text" id="inp_claude_model"
+                         list="claude_model_suggestions"
+                         data-i18n-placeholder="claude_model_placeholder"
+                         placeholder="claude-opus-4-7" />
+                  <datalist id="claude_model_suggestions">
+                    <!-- Latest generation (Claude 4.7) — recommended baseline -->
+                    <option value="claude-opus-4-7">Claude Opus 4.7 — strongest reasoning, default for escalation</option>
+                    <option value="claude-sonnet-4-7">Claude Sonnet 4.7 — balanced (fast + capable)</option>
+                    <option value="claude-haiku-4-7">Claude Haiku 4.7 — cheapest + fastest, simple tasks</option>
+                    <!-- Previous generation (Claude 4.6) — well-tested fallbacks -->
+                    <option value="claude-opus-4-6">Claude Opus 4.6 — previous flagship, well-tested</option>
+                    <option value="claude-sonnet-4-6">Claude Sonnet 4.6 — previous mid-tier</option>
+                    <option value="claude-haiku-4-6">Claude Haiku 4.6 — previous fast tier</option>
+                    <!-- Legacy (Claude 3.x) — still usable, may be deprecated soon -->
+                    <option value="claude-3-7-sonnet-latest">Claude 3.7 Sonnet (legacy alias)</option>
+                    <option value="claude-3-5-haiku-latest">Claude 3.5 Haiku (legacy alias)</option>
+                  </datalist>
                 </div>
               </div>
 
@@ -4224,15 +4246,44 @@
                   </label>
                   <input type="text" id="inp_openrouter_model"
                          list="openrouter_model_suggestions"
-                         placeholder="anthropic/claude-sonnet-4" />
+                         placeholder="anthropic/claude-sonnet-4-7" />
                   <datalist id="openrouter_model_suggestions">
-                    <option value="anthropic/claude-sonnet-4">Claude Sonnet 4 — same tier as Anthropic default</option>
-                    <option value="anthropic/claude-opus-4">Claude Opus 4 — strongest reasoning</option>
-                    <option value="openai/gpt-4o">GPT-4o — fast, cheap, good tool use</option>
-                    <option value="openai/gpt-4-turbo">GPT-4 Turbo — older but stable</option>
-                    <option value="google/gemini-2.0-pro">Gemini 2.0 Pro — Google's tier-1</option>
-                    <option value="meta-llama/llama-3.3-70b-instruct">Llama 3.3 70B — open weights</option>
-                    <option value="deepseek/deepseek-chat">Deepseek Chat — cheapest tier</option>
+                    <!-- Anthropic Claude (current — 4.7 generation) -->
+                    <option value="anthropic/claude-opus-4-7">Claude Opus 4.7 — strongest reasoning</option>
+                    <option value="anthropic/claude-sonnet-4-7">Claude Sonnet 4.7 — recommended balanced</option>
+                    <option value="anthropic/claude-haiku-4-7">Claude Haiku 4.7 — fastest + cheapest</option>
+                    <option value="anthropic/claude-opus-4-6">Claude Opus 4.6 — previous flagship</option>
+                    <option value="anthropic/claude-sonnet-4-6">Claude Sonnet 4.6 — previous balanced</option>
+                    <!-- OpenAI (current — GPT-5 + GPT-4.1) -->
+                    <option value="openai/gpt-5">GPT-5 — newest, strongest reasoning + tool use</option>
+                    <option value="openai/gpt-5-mini">GPT-5 mini — cheaper GPT-5</option>
+                    <option value="openai/gpt-5-nano">GPT-5 nano — cheapest GPT-5 tier</option>
+                    <option value="openai/gpt-4.1">GPT-4.1 — long-context (1M tokens)</option>
+                    <option value="openai/gpt-4.1-mini">GPT-4.1 mini — cheaper long-context</option>
+                    <option value="openai/o3">o3 — extended-thinking reasoning model</option>
+                    <option value="openai/o3-mini">o3-mini — cheaper reasoning model</option>
+                    <option value="openai/gpt-4o">GPT-4o — older but very stable, good tool use</option>
+                    <option value="openai/gpt-4o-mini">GPT-4o mini — older budget tier</option>
+                    <!-- Google Gemini (current — 2.5 generation) -->
+                    <option value="google/gemini-2.5-pro">Gemini 2.5 Pro — Google's flagship, 2M context</option>
+                    <option value="google/gemini-2.5-flash">Gemini 2.5 Flash — fast + cheap, 1M context</option>
+                    <option value="google/gemini-2.5-flash-lite">Gemini 2.5 Flash Lite — cheapest Gemini</option>
+                    <option value="google/gemini-2.0-flash">Gemini 2.0 Flash — older but stable</option>
+                    <!-- Deepseek (current — V3 + Reasoner R1) -->
+                    <option value="deepseek/deepseek-chat-v3">Deepseek V3 — cheap + strong, open weights</option>
+                    <option value="deepseek/deepseek-r1">Deepseek R1 — reasoning model, extended thinking</option>
+                    <option value="deepseek/deepseek-chat">Deepseek Chat — legacy alias for V3</option>
+                    <!-- Open weights — popular OSS choices on OpenRouter -->
+                    <option value="meta-llama/llama-3.3-70b-instruct">Llama 3.3 70B — open weights baseline</option>
+                    <option value="meta-llama/llama-4-maverick">Llama 4 Maverick — Meta's latest</option>
+                    <option value="meta-llama/llama-4-scout">Llama 4 Scout — small + fast Llama 4</option>
+                    <option value="mistralai/mistral-large-2411">Mistral Large 2411 — strongest Mistral</option>
+                    <option value="mistralai/mistral-small-3.1">Mistral Small 3.1 — small + cheap</option>
+                    <option value="qwen/qwen-3-235b">Qwen 3 235B — Alibaba flagship</option>
+                    <option value="qwen/qwen-3-coder">Qwen 3 Coder — coding-specialised Qwen</option>
+                    <!-- xAI Grok -->
+                    <option value="x-ai/grok-4">Grok 4 — xAI flagship</option>
+                    <option value="x-ai/grok-3">Grok 3 — previous Grok</option>
                   </datalist>
                 </div>
               </div>
@@ -4260,11 +4311,23 @@
                   </label>
                   <input type="text" id="inp_openai_model"
                          list="openai_model_suggestions"
-                         placeholder="gpt-4o" />
+                         placeholder="gpt-5" />
                   <datalist id="openai_model_suggestions">
-                    <option value="gpt-4o">GPT-4o — recommended (fast, good tool use)</option>
-                    <option value="gpt-4o-mini">GPT-4o mini — cheaper</option>
-                    <option value="gpt-4-turbo">GPT-4 Turbo — older but stable</option>
+                    <!-- Current generation (GPT-5) — recommended baseline -->
+                    <option value="gpt-5">GPT-5 — recommended (strong reasoning + tool use)</option>
+                    <option value="gpt-5-mini">GPT-5 mini — cheaper GPT-5</option>
+                    <option value="gpt-5-nano">GPT-5 nano — cheapest GPT-5 tier</option>
+                    <!-- Long-context tier (GPT-4.1) -->
+                    <option value="gpt-4.1">GPT-4.1 — 1M context for large codebase tasks</option>
+                    <option value="gpt-4.1-mini">GPT-4.1 mini — cheaper long-context</option>
+                    <option value="gpt-4.1-nano">GPT-4.1 nano — cheapest long-context</option>
+                    <!-- Reasoning models (o-series) -->
+                    <option value="o3">o3 — extended-thinking, deep reasoning</option>
+                    <option value="o3-mini">o3-mini — cheaper reasoning model</option>
+                    <option value="o4-mini">o4-mini — newer mid-tier reasoning</option>
+                    <!-- Legacy (GPT-4o) — still solid for tool use -->
+                    <option value="gpt-4o">GPT-4o — older but stable, good tool use</option>
+                    <option value="gpt-4o-mini">GPT-4o mini — older budget tier</option>
                   </datalist>
                 </div>
               </div>
@@ -4285,14 +4348,26 @@
                 <div class="field">
                   <label class="label-with-info">
                     <span data-i18n="gemini_model_label">Gemini Model</span>
+                    <a class="info-dot" href="https://ai.google.dev/gemini-api/docs/models"
+                       target="_blank" rel="noopener noreferrer"
+                       data-i18n-title="gemini_model_info"
+                       title="Full model list at ai.google.dev/gemini-api/docs/models">i</a>
                   </label>
                   <input type="text" id="inp_gemini_model"
                          list="gemini_model_suggestions"
-                         placeholder="gemini-2.0-flash" />
+                         placeholder="gemini-2.5-flash" />
                   <datalist id="gemini_model_suggestions">
-                    <option value="gemini-2.0-flash">Gemini 2.0 Flash — recommended (fast + cheap)</option>
-                    <option value="gemini-2.0-pro">Gemini 2.0 Pro — strongest reasoning</option>
-                    <option value="gemini-1.5-flash-8b">Gemini 1.5 Flash 8B — cheapest</option>
+                    <!-- Current generation (Gemini 2.5) — recommended baseline -->
+                    <option value="gemini-2.5-flash">Gemini 2.5 Flash — recommended (fast, 1M context)</option>
+                    <option value="gemini-2.5-pro">Gemini 2.5 Pro — flagship, 2M context</option>
+                    <option value="gemini-2.5-flash-lite">Gemini 2.5 Flash Lite — cheapest tier</option>
+                    <!-- Previous generation (Gemini 2.0) — well-tested fallbacks -->
+                    <option value="gemini-2.0-flash">Gemini 2.0 Flash — older but stable</option>
+                    <option value="gemini-2.0-flash-lite">Gemini 2.0 Flash Lite — older budget tier</option>
+                    <option value="gemini-2.0-pro">Gemini 2.0 Pro — older flagship</option>
+                    <!-- Legacy (Gemini 1.5) — still usable -->
+                    <option value="gemini-1.5-flash">Gemini 1.5 Flash (legacy)</option>
+                    <option value="gemini-1.5-flash-8b">Gemini 1.5 Flash 8B (legacy, very cheap)</option>
                   </datalist>
                 </div>
               </div>
@@ -4313,13 +4388,26 @@
                 <div class="field">
                   <label class="label-with-info">
                     <span data-i18n="deepseek_model_label">Deepseek Model</span>
+                    <a class="info-dot" href="https://api-docs.deepseek.com/quick_start/pricing"
+                       target="_blank" rel="noopener noreferrer"
+                       data-i18n-title="deepseek_model_info"
+                       title="Pricing + model list at api-docs.deepseek.com">i</a>
                   </label>
                   <input type="text" id="inp_deepseek_model"
                          list="deepseek_model_suggestions"
                          placeholder="deepseek-chat" />
                   <datalist id="deepseek_model_suggestions">
-                    <option value="deepseek-chat">deepseek-chat — recommended</option>
-                    <option value="deepseek-reasoner">deepseek-reasoner — slower, more capable</option>
+                    <!-- Note: Deepseek's API uses simple aliases that always
+                         point at the current versions. So `deepseek-chat`
+                         always means "latest V-series" and `deepseek-reasoner`
+                         always means "latest R-series". Pinning to a version
+                         requires the explicit form like `deepseek-chat-v3`. -->
+                    <option value="deepseek-chat">deepseek-chat — recommended (always-latest V3 alias)</option>
+                    <option value="deepseek-reasoner">deepseek-reasoner — extended thinking (always-latest R1 alias)</option>
+                    <option value="deepseek-chat-v3">deepseek-chat-v3 — pinned V3 (current)</option>
+                    <option value="deepseek-chat-v3.1">deepseek-chat-v3.1 — newer V-series</option>
+                    <option value="deepseek-r1">deepseek-r1 — pinned R1 reasoning</option>
+                    <option value="deepseek-coder-v3">deepseek-coder-v3 — coding-specialised</option>
                   </datalist>
                 </div>
               </div>

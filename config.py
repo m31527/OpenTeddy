@@ -149,7 +149,11 @@ class Config:
         default_factory=lambda: os.getenv("ANTHROPIC_API_KEY", "")
     )
     claude_model: str = field(
-        default_factory=lambda: os.getenv("CLAUDE_MODEL", "claude-opus-4-6")
+        # Default rolls forward with each Claude generation. Existing
+        # installs that pinned a specific model via Settings keep it —
+        # this default only fires for fresh installs and env-var-only
+        # configs.
+        default_factory=lambda: os.getenv("CLAUDE_MODEL", "claude-opus-4-7")
     )
 
     # ── Cloud LLM provider switch ────────────────────────────────────────────
@@ -173,7 +177,7 @@ class Config:
         default_factory=lambda: os.getenv("OPENROUTER_API_KEY", "")
     )
     openrouter_model: str = field(
-        default_factory=lambda: os.getenv("OPENROUTER_MODEL", "anthropic/claude-sonnet-4")
+        default_factory=lambda: os.getenv("OPENROUTER_MODEL", "anthropic/claude-sonnet-4-7")
     )
 
     # OpenAI direct (ChatGPT)
@@ -181,7 +185,10 @@ class Config:
         default_factory=lambda: os.getenv("OPENAI_API_KEY", "")
     )
     openai_model: str = field(
-        default_factory=lambda: os.getenv("OPENAI_MODEL", "gpt-4o")
+        # GPT-5 is OpenAI's current flagship (June 2026). Existing
+        # installs that pinned gpt-4o etc. via Settings keep their
+        # choice — this default only applies to fresh installs.
+        default_factory=lambda: os.getenv("OPENAI_MODEL", "gpt-5")
     )
 
     # Google Gemini direct (OpenAI-compat endpoint)
@@ -189,7 +196,9 @@ class Config:
         default_factory=lambda: os.getenv("GEMINI_API_KEY", "")
     )
     gemini_model: str = field(
-        default_factory=lambda: os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+        # Gemini 2.5 is current (June 2026). Flash variant balances
+        # cost + 1M context — the right baseline for everyday agent work.
+        default_factory=lambda: os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
     )
 
     # Deepseek direct (OpenAI-compat)
