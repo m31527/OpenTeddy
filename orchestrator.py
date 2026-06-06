@@ -358,10 +358,21 @@ _PLAN_INTENT_FIRST_HEADER = """\
   description 寫作檢查清單：
   • 動詞開頭：「用 X 工具做 Y」/「執行 Z 命令」/「讀取 W 檔案的 X 欄」
   • 提到具體工具名（browser_fetch / fetch_url / shell_exec_write /
-    read_file / python_exec / db_query 等）
+    read_file / python_exec / db_query / doc_to_markdown 等）
   • 長度 ≤ 80 字。超過代表你在貼 goal，不是寫動作。
   • **不可以**只是把使用者 goal 複製貼上、或重寫得更冗長
   • **不可以**包含 "deliverable:" / "acceptance criteria:" 等 meta 描述
+
+【讀文件的任務 — 依檔案類型挑工具】
+
+  📄 .pdf  → `pdf_extract_text`（pypdf）
+     不要用 `doc_to_markdown` — 它對 PDF 會 hard-reject。
+
+  📊 .pptx / .docx / .xlsx / .epub / 圖片 / 音檔 / .html / YouTube URL
+     → `doc_to_markdown`（markitdown，支援這些非 PDF 格式）
+
+  ❌ 反例：「pip install PyPDF2 + 寫 scraper.py」這條死路。
+     我們已經有兩個工具，不要重複造輪子。
 
 ──────────────────────────────────────────────────────────────────
 

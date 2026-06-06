@@ -46,6 +46,16 @@ xlrd>=2.0.0
 # of scope here; this handles the 90% case of text-bearing PDFs.
 pypdf>=4.0.0
 
+# Universal "any document → markdown" backend (Microsoft markitdown).
+# Powers tools/markitdown_tool.py::doc_to_markdown which extends the
+# agent's reading list from "just PDFs" to PowerPoint, Word, Excel,
+# images, audio, EPUB, YouTube URLs, etc. The [all] extra pulls
+# format-specific readers (python-pptx, openpyxl, mammoth, …) — all
+# pure-Python or PyPI-distributed wheels, no LibreOffice / poppler /
+# ImageMagick system deps. PyInstaller-friendly. ~80 MB on disk;
+# pre-1.0 (0.1.x) but actively maintained by Microsoft.
+markitdown[all]>=0.1.6
+
 # ── Browser Tool ───────────────────────────────────────────────────────────────
 # Real-browser fetcher for JS-heavy sites (SPAs, Cloudflare-protected pages
 # like tixcraft / KKTIX). `tools/browser_tool.py` drives a headless Chromium
