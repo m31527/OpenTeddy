@@ -1836,6 +1836,50 @@ async def run_task(body: RunRequest) -> RunResponse:
         except Exception:  # noqa: BLE001
             pass
 
+    # ── Natural-language scheduling shortcut ──────────────────────────────
+    # Before kicking off the orchestrator, check if the user is actually
+    # asking for a recurring task ("每天早上 9 點 ...", "every Monday at 8
+    # ..."). The detector runs a cheap regex pre-screen first and only
+    # calls the LLM when the wording matches a time-recurrence pattern, so
+    # normal chat messages pay zero cost. When a schedule is detected we
+    # add it via scheduler.add_schedule() and return a 200 with a
+    # confirmation message — the orchestrator never runs for this turn,
+    # which is what users want: "schedule it, don't do it now".
+    if body.session_id:
+        try:
+            from scheduling_intent import detect_scheduling_intent
+            from scheduler import add_schedule
+            intent = await detect_scheduling_intent(body.goal)
+            if intent is not None:
+                row = await add_schedule(
+                    session_id=body.session_id,
+                    cron=intent.cron,
+                    goal=intent.task_goal,
+                )
+                short_id = (row.get("id") or "")[:8]
+                next_at = (row.get("next_run_at") or "").replace("T", " ")[:16]
+                msg = (
+                    f"✓ 已排好：{intent.summary}\n"
+                    f"任務：{intent.task_goal}\n"
+                    f"下次執行：{next_at or '(scheduler 計算中)'} · id: {short_id}\n"
+                    f"取消請說「取消那個排程」"
+                )
+                # Use TaskStatus.COMPLETED so the UI doesn't render this
+                # as an error — it's a successful (very fast) outcome.
+                from models import TaskStatus
+                return RunResponse(
+                    task_id=task_id,
+                    status=TaskStatus.COMPLETED,
+                    message=msg,
+                )
+        except Exception as exc:  # noqa: BLE001
+            # Detector / scheduler crash MUST NOT block the chat. Log
+            # at warning so we notice but fall through to the planner.
+            logger.warning(
+                "scheduling_intent detection failed (falling through to "
+                "planner): %s", exc, exc_info=False,
+            )
+
     # Run the orchestrator as a tracked asyncio.Task so /tasks/{id}/cancel
     # can call .cancel() on it mid-flight. Without this wrapper we'd have
     # no handle to interrupt the coroutine from another HTTP handler.

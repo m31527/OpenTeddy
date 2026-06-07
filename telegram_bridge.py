@@ -841,6 +841,40 @@ async def _run_goal_for_chat(chat_id: str, goal_text: str) -> None:
         _running_chats.pop(chat_id, None)
         return
 
+    # ── Natural-language scheduling shortcut ──────────────────────────────
+    # Before the typing indicator + orchestrator dance, check whether the
+    # user is asking for a recurring task ("每天早上 9 點 ...", "every
+    # weekday at 18:00 ..."). The regex pre-screen makes this cheap on
+    # the 99 %+ of messages that aren't schedules; only matches pay the
+    # LLM round-trip. When a schedule is detected we persist it via
+    # scheduler.add_schedule() and reply with the confirmation — no
+    # orchestrator run for this turn. Failures here fall through to the
+    # normal planner path so a flaky classifier never silences the bot.
+    try:
+        from scheduling_intent import detect_scheduling_intent
+        from scheduler import add_schedule
+        intent = await detect_scheduling_intent(goal_text)
+        if intent is not None:
+            row = await add_schedule(
+                session_id=session_id, cron=intent.cron, goal=intent.task_goal,
+            )
+            short_id = (row.get("id") or "")[:8]
+            next_at = (row.get("next_run_at") or "").replace("T", " ")[:16]
+            await _send_reply(
+                chat_id,
+                f"⏰ 已排好：{intent.summary}\n"
+                f"任務：{intent.task_goal}\n"
+                f"下次執行：{next_at or '(scheduler 計算中)'} · id: `{short_id}`\n"
+                f"取消請說「取消那個排程」或 `/cron cancel {short_id}`",
+            )
+            _running_chats.pop(chat_id, None)
+            return
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "Telegram: scheduling_intent detection failed for chat=%s, "
+            "falling through: %s", chat_id, exc,
+        )
+
     # Fire the native "typing…" indicator immediately and keep it alive
     # in the background. The previous version sent a static text ack
     # ("🐻 Got it. Working on: ... could take minutes") immediately —
