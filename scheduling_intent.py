@@ -67,30 +67,82 @@ class SchedulingIntent:
 
 # ── Stage 1: regex pre-filter ────────────────────────────────────────────────
 
-# Looks for ANY of:
-#   - Chinese time recurrence words: 每天 / 每週 / 每月 / 每小時 / 每分 /
-#                                    每年 / 每隔
-#   - Chinese weekday markers: 週X / 星期X
-#   - Chinese time-of-day words: 凌晨 / 早上 / 清晨 / 中午 / 下午 / 傍晚 /
-#                                晚上 / 半夜 / 午夜
-#   - Clock formats: 9:30, 9：30, 9 點, 9點半 (covered by 9 點 + 9:30)
-#   - English time-recurrence: every X / each X / daily / weekly / monthly
-#                              / hourly / nightly
-#   - English clock: at 9, at 9:30, at 9am
-#   - English time-of-day: noon / midnight / morning / evening
-#   - Literal: cron
+# Looks for ANY time-recurrence hint across 9 major languages plus a
+# universal numeric clock-format catch-all. Goal is high recall — false
+# positives are filtered by the LLM stage, false negatives silently
+# skip the schedule (degrading to a one-shot planner run).
 #
-# We DON'T match plain dates ("明天", "tomorrow") since those are
-# one-shot tasks — scheduler.py only supports recurring crons today.
+# Languages covered: Chinese, English, Japanese, Korean, Spanish,
+# French, German, Portuguese, Vietnamese. Less common languages
+# (Thai, Arabic, Hindi, etc.) still work IF the message contains a
+# numeric clock format ("09:00" is language-neutral).
+#
+# We DON'T match plain dates ("明天", "tomorrow", "mañana") since those
+# are one-shot tasks — scheduler.py only supports recurring crons today.
 # When we add one-shot date triggers we'll widen this.
 _PREFILTER_RE = re.compile(
     r"""
     (
+        # ── Chinese ─────────────────────────────────────────────────────
         每\s*(天|日|週|周|月|小時|個小時|分鐘?|年|隔)
       | (週|周|星期)\s*(一|二|三|四|五|六|日|天)
       | (凌晨|早上|清晨|中午|下午|傍晚|晚上|半夜|午夜)
-      | \d{1,2}\s*[:：.]\s*\d{2}
       | \d{1,2}\s*點(半|鐘)?
+
+        # ── Japanese ────────────────────────────────────────────────────
+      | 毎\s*(日|週|月|時間|時|分|年|晩|朝|夜)
+      | (月|火|水|木|金|土|日)曜日
+      | (朝|昼|夜|午前|午後|深夜|正午)
+      | \d{1,2}\s*時(半)?
+
+        # ── Korean ──────────────────────────────────────────────────────
+      | 매\s*(일|주|월|시간|분|년)
+      | (월|화|수|목|금|토|일)요일
+      | (오전|오후|새벽|아침|점심|저녁|밤|자정|정오)
+      | \d{1,2}\s*시(\s*\d{1,2}\s*분)?
+
+        # ── Spanish ─────────────────────────────────────────────────────
+      | \bcada\s+(d[ií]a|semana|mes|hora|minuto|lunes|martes|
+                  mi[eé]rcoles|jueves|viernes|s[áa]bado|domingo)\b
+      | \btodos\s+los\s+(d[ií]as|lunes|martes|mi[eé]rcoles|jueves|
+                         viernes|s[áa]bados|domingos)\b
+      | \b(diariamente|semanalmente|mensualmente|diaria|semanal|mensual)\b
+      | \ba\s+las\s+\d{1,2}(:\d{2})?\b
+      | \b(mediod[ií]a|medianoche)\b
+
+        # ── French ──────────────────────────────────────────────────────
+      | \bchaque\s+(jour|semaine|mois|heure|lundi|mardi|mercredi|
+                    jeudi|vendredi|samedi|dimanche)\b
+      | \btous\s+les\s+(jours|lundis|mardis|mercredis|jeudis|
+                        vendredis|samedis|dimanches)\b
+      | \b(quotidien(ne)?|hebdomadaire|mensuel(le)?|horaire)\b
+      | \b[àa]\s+\d{1,2}\s*h(\d{2})?\b
+      | \b(midi|minuit)\b
+
+        # ── German ──────────────────────────────────────────────────────
+      | \b(t[äa]glich|w[öo]chentlich|monatlich|st[üu]ndlich)\b
+      | \bjeden\s+(Tag|Woche|Monat|Stunde|Morgen|Abend|Montag|
+                   Dienstag|Mittwoch|Donnerstag|Freitag|Samstag|
+                   Sonntag)\b
+      | \bum\s+\d{1,2}(:\d{2})?\s*Uhr\b
+      | \b(Mittag|Mitternacht|morgens|abends|nachts)\b
+
+        # ── Portuguese ──────────────────────────────────────────────────
+      | \btodo\s+(dia|domingo|segunda|ter[çc]a|quarta|quinta|sexta|
+                  s[áa]bado)\b
+      | \bcada\s+(dia|semana|m[êe]s|hora|minuto)\b
+      | \b(diariamente|semanalmente|mensalmente)\b
+      | \b[àa]s\s+\d{1,2}(:\d{2})?\b
+      | \b(meio-?dia|meia-?noite)\b
+
+        # ── Vietnamese ──────────────────────────────────────────────────
+      | \bm[ỗo]i\s+(ng[àa]y|tu[ầa]n|th[áa]ng|gi[ờo]|ph[úu]t|n[ăa]m)\b
+      | \bh[ằa]ng\s+(ng[àa]y|tu[ầa]n|th[áa]ng|gi[ờo])\b
+      | \bth[ứu]\s+(hai|ba|t[ưu]|n[ăa]m|s[áa]u|b[ảa]y)\b
+      | \bch[ủu]\s+nh[ậa]t\b
+      | \bv[àa]o\s+l[úu]c\s+\d{1,2}\b
+
+        # ── English ─────────────────────────────────────────────────────
       | \b(every|each)\s+(day|week|month|hour|minute|morning|evening|
                           monday|tuesday|wednesday|thursday|friday|
                           saturday|sunday|night)\b
@@ -98,9 +150,15 @@ _PREFILTER_RE = re.compile(
       | \bat\s+\d{1,2}(:\d{2})?\s*(am|pm)?\b
       | \b(noon|midnight)\b
       | \bcron\b
+
+        # ── Universal numeric clock format ──────────────────────────────
+        # Catches "09:00" / "9:30" / "9．30" / "09：00" in any language.
+        # Most schedule expressions globally include a digit-only clock,
+        # which is the lowest-cost path to multilingual coverage.
+      | \d{1,2}\s*[:：.]\s*\d{2}
     )
     """,
-    re.IGNORECASE | re.VERBOSE,
+    re.IGNORECASE | re.VERBOSE | re.UNICODE,
 )
 
 
