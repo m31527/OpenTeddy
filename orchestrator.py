@@ -106,44 +106,63 @@ docker compose 也可以用 `-f /path/to/docker-compose.yml` 取代 cd。
 如果用戶的目標含「爬」/「抓」/「scrape」/「crawl」/「擷取網頁」/
 「get data from <網站>」/「list trending」/「top N from <網站>」等意圖：
 
-  ✅ 首選：直接用 `browser_fetch(url=...)` 工具，**1 個 subtask 搞定**
-     - browser_fetch 內建 headless Chromium，會跑 JavaScript
-     - 不需要 pip install，不需要寫 .py 腳本
-     - 適合 SPA、Cloudflare 站、tixcraft、github trending、新聞網
-     - 範例 subtask 描述：
-         「用 browser_fetch 抓 https://github.com/trending 的內容回傳
-          markdown」
-     - 拿到 markdown 直接就是答案；若需要篩選最多再加 1 個
-       python_exec subtask 處理。**總共 1-2 個 subtask 上限。**
+**鐵則：fetch + parse + output 一律壓進「1 個 python_exec subtask」。**
+**不要切兩個 subtask，因為 subtask 之間沒有可靠的資料管道。**
 
-  ✅ 次選：`fetch_url(url=...)` 如果確定目標是純 server-rendered HTML
-     (例如靜態 blog、純文字 API endpoint)。比 browser_fetch 快 ~5 倍。
+  ✅ 首選（90% 案例）：1 個 python_exec subtask 內聯做完所有事
+     - 在 python_exec 裡用 urllib / requests 直接抓
+     - BeautifulSoup 或 re 解析
+     - 直接 print 最終要交付的 markdown / JSON / 列表
 
-  ❌ **絕對禁止規劃以下路徑**（過去一週用戶踩了 7 次，全部失敗）：
+     範例 subtask 描述：
+       「用 python_exec 完成：
+        (1) urllib.request 抓 https://github.com/trending（帶 User-Agent）
+        (2) BeautifulSoup 解析 article.Box-row，取前 10 個
+        (3) 每個抽：名稱（h2 a）、描述（p）、語言
+            （span[itemprop=programmingLanguage]）、今日 stars
+            （.d-inline-block.float-sm-right）
+        (4) print markdown 無序列表」
+
+     為什麼這樣最穩：
+       1. 所有資料留在同一個 Python process，不會在 subtask 邊界遺失
+       2. github trending / 大部分網站是 server-rendered HTML，requests
+          就抓得到；不需要 headless Chromium
+       3. 失敗時你看到的就是 Python traceback，可直接除錯
+
+  ✅ 例外（10% 案例）：目標站確實需要 JavaScript 渲染才能拿到資料
+     （SPA / 無限滾動 / Cloudflare challenge）→ 改用 browser_fetch，
+     **但仍然只 1 個 subtask，不要切 2 個**：
+       「用 browser_fetch 抓 https://<spa-site>/ 並回傳前 10 個 X」
+     browser_fetch 內建 chromium，會跑 JS，直接回 markdown 就是答案。
+
+  ❌ **絕對禁止以下規劃**：
+
+     錯誤 1（兩個 subtask 接不上）：
+     ┌──────────────────────────────────────────────────────────┐
+     │  subtask 1: browser_fetch 抓 https://github.com/trending │
+     │  subtask 2: python_exec 解析剛抓到的 markdown           │
+     └──────────────────────────────────────────────────────────┘
+     失敗原因：subtask 1 的輸出在 tool_result 裡，**不會自動出現在
+     workspace 檔案系統**；subtask 2 的 python_exec 看不到那份 markdown，
+     會去檔案系統找 → FileNotFoundError → 整輪任務失敗。
+
+     錯誤 2（裝套件 + 寫獨立腳本）：
      ┌──────────────────────────────────────────────────────────┐
      │  subtask 1: pip install requests beautifulsoup4         │
      │  subtask 2: cat << EOF > scraper.py ...                 │
      │  subtask 3: python3 scraper.py                          │
      └──────────────────────────────────────────────────────────┘
-     失敗原因：
-       1. `pip install` 在 ARM / 低速網路要 >900 秒 → 自動升級
-          Claude → 浪費錢
-       2. 純 `requests` 拿不到 JS-rendered 內容
-       3. `browser_fetch` 工具已內建 chromium，重新裝 playwright 是
-          重複造輪子且更慢
-       4. 寫出來的 scraper.py 沒人會再用，是一次性 dead code
+     失敗原因：pip install 在 ARM 機可能 >900 秒、寫出來的 scraper.py
+     是一次性 dead code、且 python_exec 沙箱已有 requests + bs4。
 
   範例對照：
-    用戶：「爬 github trending top 10」
-    ❌ 錯誤規劃：3 個 subtask (install + write + run) → 通常 10-15 分鐘失敗
-    ✅ 正確規劃：1 個 subtask
-       [{"description": "用 browser_fetch 抓 https://github.com/trending，
-          回傳前 10 個 repo 名稱與描述", "skill_hint": null, "order": 0}]
-       → 通常 3-8 秒完成
+    用戶：「爬 github trending top 10」/「產出 GitHub Trending 列表」
+    ❌ 兩個 subtask（browser_fetch + python_exec）→ 解析失敗
+    ✅ 1 個 python_exec subtask，內聯 fetch + parse + print → 30 秒完成
 
     用戶：「抓 X 網站列表」/「擷取 Y 網頁資料」
-    → 同樣：first subtask 用 browser_fetch 抓網頁，second subtask (僅
-       當需要時) 用 python_exec 處理結果。**不要寫獨立 scraper 腳本。**
+    → 一律 1 個 python_exec 內聯做完。除非目標站需要 JS，才換 browser_fetch
+       （依然 1 個 subtask）。**不要寫獨立 scraper 腳本，不要切 2 個 subtask。**
 
 【部署任務的標準流程 — 很重要】
 如果用戶的目標包含「部署／啟動／架設／跑起來／deploy／serve／install」，
