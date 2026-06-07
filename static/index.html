@@ -9272,12 +9272,36 @@
     }
 
     // ── Toast / helpers ─────────────────────────────────────────────────────
-    function toast(msg, isError = false) {
+    // toast(msg)                          → 3s auto-dismiss notification
+    // toast(msg, true)                    → 3s error toast (red border)
+    // toast(msg, false, () => {...})      → 8s clickable toast (cursor:pointer,
+    //                                       click fires the handler then
+    //                                       hides the toast). Used by the
+    //                                       update reminder so a clear CTA
+    //                                       sits next to the message instead
+    //                                       of forcing the user to hunt for
+    //                                       the small sidebar pill.
+    function toast(msg, isError = false, onClick = null) {
       const toastEl = document.getElementById('toast');
       toastEl.textContent       = msg;
       toastEl.style.borderColor = isError ? 'var(--error)' : 'var(--border)';
+      toastEl.style.cursor      = onClick ? 'pointer' : '';
+      if (toastEl._teddyClickHandler) {
+        toastEl.removeEventListener('click', toastEl._teddyClickHandler);
+        toastEl._teddyClickHandler = null;
+      }
+      if (onClick) {
+        const handler = () => {
+          try { onClick(); } catch (e) { console.error('[toast.click]', e); }
+          toastEl.classList.remove('show');
+        };
+        toastEl._teddyClickHandler = handler;
+        toastEl.addEventListener('click', handler);
+      }
       toastEl.classList.add('show');
-      setTimeout(() => toastEl.classList.remove('show'), 3000);
+      // Clickable toasts linger 8 s so the user has time to read + click;
+      // plain ones stay 3 s as before.
+      setTimeout(() => toastEl.classList.remove('show'), onClick ? 8000 : 3000);
     }
 
     // Throttle progress toasts so a 75-event auto-build doesn't spawn 75
@@ -9988,6 +10012,26 @@
       const txt  = document.getElementById('updatePillText');
       if (txt)  txt.textContent  = (t('update_pill_text') || 'New version') + ' ' + _updateState.tag;
       if (pill) pill.hidden = false;
+
+      // Also fire a clickable toast so users who don't look at the
+      // sidebar pill still notice the update. Gated by localStorage so
+      // we never nag the same user twice for the same version — once
+      // they see "v1.1.3 available" we shut up about it; the pill stays
+      // as a passive reminder until they actually upgrade. Click on the
+      // toast (or the pill) routes to https://openteddy.net which holds
+      // the download CTA + upgrade instructions for both web and
+      // desktop users — single canonical destination, no platform
+      // branching, easy to update without shipping a JS change.
+      try {
+        const lastToasted = localStorage.getItem('teddy.update.toasted') || '';
+        if (data.latest && lastToasted !== data.latest) {
+          localStorage.setItem('teddy.update.toasted', data.latest);
+          const tmpl = t('update_toast_msg')
+            || 'OpenTeddy {tag} is available — click to upgrade';
+          const msg = tmpl.replace('{tag}', _updateState.tag);
+          toast('🆕 ' + msg, false, () => openInBrowser('https://openteddy.net'));
+        }
+      } catch (_) { /* localStorage unavailable (private mode?) — skip */ }
     }
 
     function openUpdateModal() {
@@ -10005,15 +10049,15 @@
       const deskView = document.getElementById('updateDesktopView');
       if (deskView) deskView.hidden = !_IN_TAURI;
       document.getElementById('updateModalApply').disabled = false;
-      // Button label flips per context. Desktop users get a button
-      // that opens the GitHub Release in their browser (Tauri's
-      // shell.open via the existing teddy.open_external bridge);
-      // web users keep the in-place "Upgrade now" that triggers git
-      // pull + pip install.
+      // Both web and desktop click → openteddy.net (single canonical
+      // destination). Previously the button split: desktop opened the
+      // GitHub Release page, web ran an in-place git pull + pip install.
+      // Sending everyone to the website lets us update download links /
+      // upgrade instructions without shipping a frontend change and
+      // keeps the auto-upgrade out of the path for web users who
+      // shouldn't have their backend yanked out under them mid-task.
       document.getElementById('updateModalApply').textContent =
-        _IN_TAURI
-          ? (t('update_open_download') || 'Open download page →')
-          : (t('update_apply') || 'Upgrade now →');
+        t('update_open_website') || 'Open openteddy.net →';
       document.getElementById('updateNotesContent').innerHTML =
         renderMarkdown(_updateState.notes || '_No release notes._');
       // Reset the steps + log
@@ -10040,47 +10084,28 @@
     }
 
     async function onUpdateApplyClick() {
+      // Unified destination: both desktop and web open openteddy.net
+      // (single canonical place users learn how to upgrade, regardless
+      // of how they installed). Previously this branched: desktop opened
+      // the GitHub Release / direct .dmg, web ran `git pull + pip install`
+      // in-place. Two problems with that:
+      //   1. Web users on a managed server probably shouldn't have their
+      //      backend git-pull'd from a click — too risky mid-task.
+      //   2. Maintaining one download CTA on openteddy.net is way easier
+      //      than keeping the GitHub Release asset extraction + Tauri
+      //      open_external bridge + git-pull progress UI all working.
+      // The git-pull /update/apply backend route stays in place — power
+      // users can still call it from curl if they want — but it's not the
+      // surfaced UX anymore.
+      openInBrowser('https://openteddy.net');
+      closeUpdateModal();
+    }
+
+    // Legacy git-pull progress path — no longer invoked from the UI but
+    // kept callable so any external triggers (e.g. webhooks) still work.
+    async function _legacyWebGitPullUpgrade() {
       const applyBtn = document.getElementById('updateModalApply');
       const laterBtn = document.getElementById('updateModalLater');
-
-      // ── Desktop branch ──────────────────────────────────────────────
-      // Inside Tauri we never call /update/apply (git pull + pip install
-      // can't touch a notarised .app bundle). Instead, postMessage a
-      // URL up to the shell which uses Tauri's shell.open to launch the
-      // user's default browser.
-      //
-      // 2026-05-20 UX fix: prefer the DIRECT .dmg asset URL so the
-      // browser immediately starts the download (GitHub serves these
-      // with Content-Disposition: attachment) instead of opening the
-      // release tag page and forcing the user to hunt for the right
-      // asset. Falls back to the release page URL if the server-side
-      // asset extraction didn't find a match (e.g. running against an
-      // older /update/check that doesn't expose download_url_mac).
-      if (_IN_TAURI) {
-        // Pick platform-specific direct download. Mac-first since
-        // that's the only signed/notarised bundle we ship right now;
-        // Linux falls back to the release page until the GHA Linux
-        // workflow is set up (needs DESKTOP_REPO_TOKEN PAT).
-        const platformDirect = (navigator.platform || '').toLowerCase().includes('mac')
-          ? _updateState.dlMac
-          : _updateState.dlLinux;
-        const url = platformDirect
-          || _updateState.url
-          || `https://github.com/m31527/OpenTeddy/releases/latest`;
-        try {
-          if (window.parent && window.parent !== window) {
-            window.parent.postMessage({ type: 'teddy.open_external', url }, '*');
-          } else {
-            window.open(url, '_blank', 'noopener');
-          }
-        } catch (_) {
-          window.open(url, '_blank', 'noopener');
-        }
-        closeUpdateModal();
-        return;
-      }
-
-      // ── Web (OSS git-pull) branch ───────────────────────────────────
       applyBtn.disabled = true;
       laterBtn.disabled = true;
       // Swap views: hide notes, show progress.
