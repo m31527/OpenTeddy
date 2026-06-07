@@ -1642,39 +1642,70 @@ class Orchestrator:
             return None
 
     async def _gemma_summarize(self, goal: str, tool_log: str, task_id: str = "") -> str:
-        """用 Gemma 讀取工具執行記錄，產出**簡潔**的繁體中文完成摘要。
+        """用 Gemma 讀取工具執行記錄，產出最後要交回給使用者的回應。
 
-        重點是簡潔 —— subtask 逐條狀態 UI 會另外渲染成可展開的清單，
-        這裡只需要一個一眼能看完的結果。
+        關鍵設計：分辨「成品任務」vs「動作任務」。
+          - 動作任務（部署 / 安裝 / 設定 / 啟動）→ 30-200 字簡潔簡報。
+          - 成品任務（產出列表 / 整理表格 / 生成 / 寫 / 翻譯 / 提取）
+            → 直接把工具產出的內容**原封不動**交回，不寫摘要。
+
+        歷史 bug：以前 prompt 把每個任務都當「動作任務」寫簡報。
+        「產出 GitHub trending top 10」這種任務，python_exec 明明已經
+        印出 markdown 列表，最後使用者卻只看到「已完成提取與格式化」
+        的摘要，列表被吃掉。
         """
         system_prompt = """\
-你是任務執行的**簡報**生成器。根據工具執行記錄，寫一段簡潔清楚的繁體中文結果摘要。
+你是任務結果產生器。根據工具執行記錄，產出最後要交回給使用者的內容。
 
-【格式 — 一定要照這樣寫，不要加 ✅/❌/📋 大標題】
-第一行：一句話結果（做完了 / 卡住在哪），最多 30 字。
-接下來 1-3 行：重點 bullet（只列關鍵發現或結果，不要每個 subtask 都列一遍）。
-若有產出檔案：最後加一行「📎 產出：<relative/path.html>」。
+【核心分辨：成品任務 vs 動作任務】
 
-【範例】
-  ✅ 正確範例（簡潔）：
-    完成 Q1 銷售分析，3 張圖表已產出。
+▸ 成品任務（使用者要的就是內容本身）
+  關鍵動詞：產出 / 生成 / 列出 / 整理 / 寫 / 編輯 / 翻譯 / 摘要 /
+            提取 / 抓取（並輸出）/ produce / generate / list /
+            extract / write / draft / summarize / translate
+  → 把工具產出的實質內容（markdown 列表、表格、JSON、程式碼、
+     文字）原封不動貼上來。不要寫「已完成」，不要寫「成功解析」。
+     使用者要的就是那段內容本身。
+  → 若 python_exec / write_file 印出了結構化內容，那段就是成品。
 
-    - 總營收 $380K（較去年 Q1 +12%）
-    - 電子類目領先，佔 43%
-    - 二月中旬銷售最弱
+▸ 動作任務（使用者要做一件事，結果是 side effect）
+  關鍵動詞：部署 / 安裝 / 修復 / 設定 / 啟動 / 確認 / 跑 / deploy /
+            install / fix / configure / run / start
+  → 寫一段簡潔的繁體中文簡報（30-200 字），描述做了什麼、結果如何。
 
-    📎 產出：reports/analysis_report.html
+【判斷流程】
+  1. 看使用者的 goal 動詞 → 推斷是「成品」還是「動作」。
+  2. 看工具記錄裡有沒有「結構化的實質產出」
+     （markdown 列表 / 表格 / JSON / 程式碼 / 大段文字）。
+  3. 兩者吻合 → 那段產出就是答案，原樣返回。
+  4. 若是動作任務 → 才寫摘要報告。
+  5. 不確定時優先「原樣返回」，不要硬寫摘要。
 
-  ❌ 錯誤範例（太囉唆）：
-    「✅ 完成的步驟... ❌ 失敗的步驟... 📋 當前狀態...」
-    —— 不要這樣寫，也不要加「本任務容器狀態」、「目錄內容」等 dump
+【成品任務範例】
+  Goal: 產出 GitHub Trending 今日前 10 名專案的 markdown 列表
+  python_exec 印出：
+    - **microsoft/markitdown** — Lightweight tool for converting... (Python, 2,341 stars today)
+    - **vllm-project/vllm** — A high-throughput inference engine... (Python, 1,852 stars today)
+    - ...
+  ✅ 正確回應：直接把上面那 10 條 markdown 貼回，一字不改。
+  ❌ 錯誤回應：「已完成 GitHub Trending 前 10 名熱門專案的提取與格式化」
+
+【動作任務範例】
+  Goal: 部署 Q1 銷售分析報告到 nginx
+  ✅ 正確回應：
+    完成 Q1 銷售分析報告部署。
+    - 容器 sales-nginx 已啟動，listen :8080
+    - 3 張圖表渲染完成
+    📎 產出：reports/q1_analysis.html
 
 【規則】
-- 絕不要寫「我是 AI 我不能...」—— 只描述實際發生的事
-- 只能描述記錄裡真實存在的容器/檔案/錯誤；不相關的忽略
-- 如果 render_chart_report / write_file 有產出檔案，明確寫 relative_path
-- 保持短 —— 整個回覆目標 < 200 字
-- 完全使用繁體中文
+- 絕不要寫「我是 AI 我不能...」—— 只描述實際發生的事。
+- 只能描述記錄裡真實存在的內容；不相關的忽略。
+- 成品任務優先：使用者明確要產出 X，就交付 X 的內容本身。
+- 不確定就傾向把 python_exec 最後一段結構化 stdout 原樣返回。
+- 動作任務才用繁體中文簡報；成品任務跟隨使用者原本的語言。
+- 若 render_chart_report / write_file 有產出檔案，動作摘要末尾
+  加一行「📎 產出：<relative/path.html>」。
 """
         prompt = (
             f"用戶的目標：{goal}\n\n"
@@ -1687,9 +1718,12 @@ class Orchestrator:
             task_id=task_id,
             task_description=f"[summary] {goal[:100]}",
         )
-        # Fallback if Gemma / cloud returns empty
+        # Fallback if Gemma / cloud returns empty. We dump a generous slice
+        # of the tool log so a markdown list / table / JSON deliverable
+        # doesn't get sliced in half mid-row — better to show the user
+        # 8 KB of raw output than a half-rendered list.
         if not result or result.strip() in ("[]", ""):
-            lines = [f"{_L(goal, 'task_completed')}: {goal}", "", tool_log[:1000]]
+            lines = [f"{_L(goal, 'task_completed')}: {goal}", "", tool_log[:8000]]
             return "\n".join(lines)
         return result
 
