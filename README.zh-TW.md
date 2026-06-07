@@ -302,4 +302,16 @@ OpenTeddy 是一個人在做的 side project，想證明一套小而開源的組
 
 ## 授權
 
-MIT
+OpenTeddy 本體：**MIT**。
+
+repo 內附帶的第三方內容：
+
+| 附帶檔案 | 上游來源 | 上游授權 |
+|---|---|---|
+| `cyber_skills/index.json`（內建 755 個專家工作流程的索引） | [mukul975/Anthropic-Cybersecurity-Skills](https://github.com/mukul975/Anthropic-Cybersecurity-Skills)（754 條）+ [mvanhorn/last30days-skill](https://github.com/mvanhorn/last30days-skill)（1 條） | Apache 2.0 + MIT |
+| `tools/doc_to_markdown.py`（包裝 [microsoft/markitdown](https://github.com/microsoft/markitdown)） | 上游 PyPI 套件 | Apache 2.0 |
+
+`cyber_skills/index.json` 是**衍生作品（derivative work）** — 詳見
+`cyber_skills/README.md`。索引中的每一筆都有 `source_repo` 與
+`upstream_url` 欄位，可以追溯到原始 repo。完整的授權條款與
+NOTICE 檔（若有）請看上面連結的上游 repo。

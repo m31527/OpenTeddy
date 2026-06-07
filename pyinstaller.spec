@@ -105,6 +105,15 @@ OPENTEDDY_MODULES = (
 # Format: list of (source, destination_within_bundle) tuples.
 DATA_DIRS = [
     ("static", "static"),  # web UI: index.html, i18n.js, styles.css, OpenTeddy-logo.svg, …
+    # cyber_skills/index.json is the prebuilt 755-skill catalogue used
+    # by cyber_skill_lookup(). It MUST ship in the bundle, otherwise the
+    # desktop app's first launch tries to subprocess update.py to fetch
+    # it from the GitHub API — which (a) fails because PyInstaller's
+    # sys.executable isn't a Python interpreter and (b) would 401 anyway
+    # if the host machine has no `gh` auth / OPENTEDDY_GH_TOKEN set.
+    # Maintainer rebuilds via `python cyber_skills/update.py` before
+    # each release and commits the refreshed index.
+    ("cyber_skills/index.json", "cyber_skills"),
 ]
 
 

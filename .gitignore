@@ -70,8 +70,10 @@ agent-workspace/
 # ChromaDB local vector store — recreated at runtime from tasks.
 memory_db/
 
-# Cyber-skills index — built locally via `python cyber_skills/update.py`
-# (~5 MB; fetched from upstream Apache 2.0 repo). Don't commit — the
-# upstream tags monthly + each install rebuilds with one command, and
-# 5 MB of JSON would inflate git history fast.
-cyber_skills/index.json
+# Cyber-skills index — committed to the repo so new installs work out
+# of the box (no GitHub API token needed on first launch). Rebuild it
+# before each release with `python cyber_skills/update.py`; the bumped
+# version goes in with the same commit as the version bump. We tried
+# the "rebuild on first launch" approach earlier — it failed on macOS
+# desktop builds (PyInstaller bundles can't subprocess update.py) and
+# on servers with no `gh` auth (GitHub API 401 + 60/hr rate limit).

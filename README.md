@@ -796,4 +796,17 @@ get close to the big commercial agents. If you want to see it keep growing:
 
 ## License
 
-MIT
+OpenTeddy itself is **MIT**.
+
+Third-party content bundled in this repo:
+
+| Bundled artifact | Source | Upstream license |
+|---|---|---|
+| `cyber_skills/index.json` (the indexed 755-workflow catalogue) | [mukul975/Anthropic-Cybersecurity-Skills](https://github.com/mukul975/Anthropic-Cybersecurity-Skills) (754 entries) + [mvanhorn/last30days-skill](https://github.com/mvanhorn/last30days-skill) (1 entry) | Apache 2.0 + MIT |
+| `tools/doc_to_markdown.py` wrapper around [microsoft/markitdown](https://github.com/microsoft/markitdown) | upstream PyPI package | Apache 2.0 |
+
+`cyber_skills/index.json` is a **derivative work** — see
+`cyber_skills/README.md` for attribution details. Every indexed entry
+carries `source_repo` + `upstream_url` fields so any single workflow
+can be traced back to its origin. Refer to the linked upstream repos
+for the full license text and NOTICE files where applicable.
