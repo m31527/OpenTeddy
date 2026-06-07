@@ -422,13 +422,20 @@ class ToolRegistry:
         # only lookup — agent calls it when a goal touches security
         # workflows. See cyber_skills/README.md for the lifecycle.
         from tools.cyber_skills_tool import CYBER_SKILLS_TOOLS
+        # v1.1.4: dedicated GitHub Trending scraper. Small models can't
+        # reliably write scraping code for this even with a step-by-step
+        # recipe in the planner prompt — they substitute wrong selectors
+        # or mis-treat the HTML. Moving the parsing into a tested-working
+        # Python tool means the planner just CALLS it instead of writing
+        # the code. See tools/github_trending_tool.py for the story.
+        from tools.github_trending_tool import GITHUB_TRENDING_TOOLS
 
         for fn, schema, risk in (
             SHELL_TOOLS + FILE_TOOLS + HTTP_TOOLS
             + PACKAGE_TOOLS + DB_TOOLS + GCP_TOOLS + DEPLOY_TOOLS
             + NOTIFY_TOOLS + REPORT_TOOLS + ANALYTIC_TOOLS
             + SEARCH_TOOLS + BROWSER_TOOLS + MARKITDOWN_TOOLS
-            + CYBER_SKILLS_TOOLS
+            + CYBER_SKILLS_TOOLS + GITHUB_TRENDING_TOOLS
         ):
             self.register(fn, schema, risk)
 

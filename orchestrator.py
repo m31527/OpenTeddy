@@ -106,8 +106,17 @@ docker compose 也可以用 `-f /path/to/docker-compose.yml` 取代 cd。
 如果用戶的目標含「爬」/「抓」/「scrape」/「crawl」/「擷取網頁」/
 「get data from <網站>」/「list trending」/「top N from <網站>」等意圖：
 
-**鐵則：fetch + parse + output 一律壓進「1 個 python_exec subtask」。**
+**鐵則：fetch + parse + output 一律壓進「1 個 subtask」。**
 **不要切兩個 subtask，因為 subtask 之間沒有可靠的資料管道。**
+
+【特殊：GitHub Trending 任務】
+若目標含「github trending」/「今日熱門 github 專案」/「top N trending」/
+「github 熱門排名」 → **直接用 `github_trending` 工具**（1 個 subtask）：
+    [{"description": "用 github_trending(top_n=10) 取得今日熱門排名前 10
+       並回傳結構化結果", "skill_hint": null, "order": 0}]
+為什麼：小模型寫 scraper 程式碼 50% 機率會用錯 CSS selector 或誤把 HTML
+當 Markdown 解析，最後跑出「[N/A](#)」placeholder。`github_trending`
+是專用工具，內部 scraping 已驗證可用，不需要再寫 python_exec。
 
   ✅ 首選（90% 案例）：1 個 python_exec subtask 內聯做完所有事
      - 在 python_exec 裡用 urllib / requests 直接抓
