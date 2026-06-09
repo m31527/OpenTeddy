@@ -97,20 +97,31 @@ def _cdp_ws_endpoint() -> Optional[str]:
 
 
 _NOT_RUNNING_HINT = (
-    "Chrome isn't reachable on the debugging port. Quit any running "
-    "Chrome window first, then start it with the debug port open:\n\n"
-    "  macOS:\n"
+    "Chrome / Chromium isn't reachable on the debugging port. Quit any "
+    "running browser window first, then start it with the debug port "
+    "open. Any Chromium-based browser works — the CDP wire protocol is "
+    "the same.\n\n"
+    "  macOS (Apple Silicon or Intel):\n"
     '    open -na "Google Chrome" --args --remote-debugging-port=9222 '
     "--user-data-dir=$HOME/Library/Application\\ Support/Google/Chrome\n\n"
-    "  Linux:\n"
-    "    google-chrome --remote-debugging-port=9222 &\n\n"
+    "  Linux x86_64 (Chrome):\n"
+    "    google-chrome --remote-debugging-port=9222 \\\n"
+    "                  --user-data-dir=$HOME/.config/google-chrome &\n\n"
+    "  Linux ARM64 (DGX Spark / Raspberry Pi / NVIDIA Jetson / etc.) —\n"
+    "  Google Chrome has no official ARM64 build, use Chromium instead:\n"
+    "    sudo apt install chromium-browser   # Ubuntu/Debian\n"
+    "    chromium-browser --remote-debugging-port=9222 \\\n"
+    "                     --user-data-dir=$HOME/.config/chromium &\n"
+    "    # OR Microsoft Edge (officially supports Linux ARM64):\n"
+    "    microsoft-edge --remote-debugging-port=9222 \\\n"
+    "                   --user-data-dir=$HOME/.config/microsoft-edge &\n\n"
     "  Windows (PowerShell):\n"
     '    & "$env:ProgramFiles\\Google\\Chrome\\Application\\chrome.exe" '
     "--remote-debugging-port=9222\n\n"
-    "After Chrome is up, log in to X / Twitter (or whatever site) once "
-    "manually, then run the OpenTeddy task again. The --user-data-dir "
-    "flag keeps your normal profile + cookies; without it Chrome will "
-    "boot a blank, signed-out session."
+    "After the browser is up, log in to X / Twitter (or whatever site) "
+    "once manually, then run the OpenTeddy task again. The "
+    "--user-data-dir flag keeps your normal profile + cookies; without "
+    "it the browser will boot a blank, signed-out session."
 )
 
 
