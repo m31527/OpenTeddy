@@ -76,18 +76,18 @@ echo "    listen port : ${LISTEN_PORT}"
 echo ""
 
 # ── 1. Microsoft apt repo ────────────────────────────────────────────────────
-if [ ! -f /etc/apt/sources.list.d/microsoft-edge.list ]; then
-  echo "▶ Adding Microsoft apt repo + GPG key…"
-  curl -fsSL https://packages.microsoft.com/keys/microsoft.asc \
-    | gpg --dearmor --yes -o /usr/share/keyrings/microsoft.gpg
-  ARCH="$(dpkg --print-architecture)"
-  cat > /etc/apt/sources.list.d/microsoft-edge.list <<EOF
+# Always (re)write the list and keyring so a previously-added entry with
+# the wrong arch (e.g. arch=amd64 on an arm64 host, which apt-get install
+# then "fixes" by reporting `Unable to locate package microsoft-edge-stable`)
+# gets cleanly overwritten. Cheap operation; safer than an existence check.
+echo "▶ (Re)writing Microsoft apt repo + GPG key…"
+curl -fsSL https://packages.microsoft.com/keys/microsoft.asc \
+  | gpg --dearmor --yes -o /usr/share/keyrings/microsoft.gpg
+ARCH="$(dpkg --print-architecture)"
+cat > /etc/apt/sources.list.d/microsoft-edge.list <<EOF
 deb [arch=${ARCH} signed-by=/usr/share/keyrings/microsoft.gpg] https://packages.microsoft.com/repos/edge stable main
 EOF
-  echo "  ✓ Added repo (arch=${ARCH})"
-else
-  echo "▶ Microsoft apt repo already present — skipping."
-fi
+echo "  ✓ Repo written (arch=${ARCH})"
 
 # ── 2. Install Edge ──────────────────────────────────────────────────────────
 echo "▶ Installing microsoft-edge-stable (apt update + install)…"
