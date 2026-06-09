@@ -924,13 +924,18 @@ _SCHEMA_CHECK: Dict[str, Any] = {
     "function": {
         "name": "chrome_attach_check",
         "description": (
-            "Verify that the user's Chrome is running with the remote-"
-            "debugging port open (so OpenTeddy can attach via CDP). "
-            "Returns the browser version + WebSocket URL on success, or "
-            "an exact 'how to start Chrome correctly' hint on failure. "
-            "Call this FIRST before x_search / chrome_attached_browse "
-            "if you're unsure whether the user has done the one-time "
-            "Chrome setup. Read-only, zero side effects."
+            "Verify that a Chromium-based browser (Chrome / Brave / "
+            "Microsoft Edge / Chromium — any of them works, CDP is a "
+            "vendor-neutral wire protocol) is running with the remote-"
+            "debugging port open so OpenTeddy can attach via CDP. "
+            "Returns the browser version + WebSocket URL on success, "
+            "or an exact 'how to start the browser correctly' hint on "
+            "failure (incl. ARM64-specific instructions — Linux ARM64 "
+            "has no Chrome build, defaults to Brave). Call this FIRST "
+            "before x_search / threads_search / chrome_attached_browse "
+            "if you're unsure whether the operator has run scripts/"
+            "setup-edge-cdp.sh + scripts/login-helper.sh. Read-only, "
+            "zero side effects."
         ),
         "parameters": {"type": "object", "properties": {}, "required": []},
     },
@@ -941,17 +946,19 @@ _SCHEMA_X_SEARCH: Dict[str, Any] = {
     "function": {
         "name": "x_search",
         "description": (
-            "Search X / Twitter using the user's already-authenticated "
-            "Chrome session and return the top N matching posts with "
-            "text, author, timestamp, and engagement (replies / reposts "
-            "/ likes / views). "
-            "PREFER this over python_exec / browser_fetch when the goal "
-            "mentions Twitter / X / 推文 / 推特, because X anti-bot "
-            "blocks anonymous scraping. Requires the user to have "
-            "started Chrome with --remote-debugging-port=9222 and "
-            "logged in to x.com manually once. Call "
-            "chrome_attach_check FIRST if you're not sure the setup "
-            "is in place."
+            "Search X / Twitter using the operator's already-"
+            "authenticated session in a Chromium-based browser (Chrome "
+            "on macOS / Brave on Linux ARM64 / Edge on Linux amd64 — "
+            "all speak the same CDP wire protocol). Returns top N "
+            "matching posts with text, author, timestamp, and "
+            "engagement (replies / reposts / likes / views). "
+            "PREFER this over python_exec / browser_fetch when the "
+            "goal mentions Twitter / X / 推文 / 推特 — X's anti-bot "
+            "actively blocks anonymous scraping and is the #1 reason "
+            "naive search tasks come back empty. Requires the "
+            "operator to have run scripts/setup-edge-cdp.sh + "
+            "scripts/login-helper.sh once. Call chrome_attach_check "
+            "FIRST if the setup state is unknown."
         ),
         "parameters": {
             "type": "object",
@@ -989,14 +996,16 @@ _SCHEMA_BROWSE: Dict[str, Any] = {
     "function": {
         "name": "chrome_attached_browse",
         "description": (
-            "Navigate to any URL inside the user's already-running "
-            "Chrome (attached via CDP on port 9222) and return the "
+            "Navigate to any URL inside the operator's already-running "
+            "Chromium-based browser (Chrome / Brave / Edge / Chromium "
+            "— whichever scripts/setup-edge-cdp.sh installed for the "
+            "host arch; all speak CDP identically) and return the "
             "rendered visible text + first 30 link hrefs. Use this "
             "for authenticated browsing of paid SaaS, corp wikis, "
-            "bug trackers, or any site where the user's login state "
-            "is required and there isn't a dedicated tool. For X / "
-            "Twitter use x_search instead — it knows the right "
-            "selectors and engagement metrics."
+            "bug trackers, or any site where the operator's login "
+            "state is required and there isn't a dedicated tool. For "
+            "X / Twitter use x_search; for Threads use threads_search "
+            "— those know the right selectors + engagement metrics."
         ),
         "parameters": {
             "type": "object",
