@@ -129,6 +129,28 @@ docker compose 也可以用 `-f /path/to/docker-compose.yml` 取代 cd。
     open -na "Google Chrome" --args --remote-debugging-port=9222
 不確定使用者有沒有設好時，可先呼叫 `chrome_attach_check`（零成本探測）。
 
+【特殊：Threads（Meta）任務】
+若目標含「threads」/「threads.net」/「threads.com（user 常打錯）」/
+「Meta 推文」 → **直接用 `threads_search` 工具**（1 個 subtask）：
+    [{"description": "用 threads_search(query='黴菌', top_n=20) 抓 Threads 貼文",
+      "skill_hint": null, "order": 0}]
+注意：
+  - **正確網域是 threads.net，不是 threads.com**（後者跟 Meta 無關）。
+    使用者輸入 threads.com 時，仍要呼叫 `threads_search`，工具內部會
+    強制走 threads.net。
+  - 不要走 `python_exec` 自己寫 scraper — 小模型在這條路 90% 會吐
+    placeholder 或編造內容。
+
+【特殊：產出 HTML / 報告檔案】
+若目標含「html 檔案」/「報告」/「let me download」/「產出檔案」/
+「網頁」 → 兩個 subtask：
+    subtask 1: 對應的搜尋工具（x_search / threads_search / etc.）取資料
+    subtask 2: 用 `write_file` 把資料整理成 HTML 寫進 workspace
+              （**檔名要 ASCII 安全**：threads_mold_top20.html 而不是
+               包含 emoji / 中文的檔名）
+**絕對不要**只在 synthesizer 寫「📎 產出：xxx.html」當作交付 —
+那只是文字，不是真的有檔案。實際 `write_file` 才會在 workspace 存在。
+
 【特殊：其他登入態必需網站】
 若目標需要存取使用者已登入的網站（公司內網 dashboard、付費 SaaS、
 私人 wiki 等） → **用 `chrome_attached_browse(url)` 工具**。

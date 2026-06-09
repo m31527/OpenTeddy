@@ -438,6 +438,13 @@ class ToolRegistry:
         # the authenticated session. See chrome_attached_tool.py for
         # the setup instructions and the full rationale.
         from tools.chrome_attached_tool import CHROME_ATTACHED_TOOLS
+        # v1.1.6: dedicated Threads (Meta) search. Follows the same
+        # pattern as x_search — tested CSS selectors + v1.1.6 anti-bot
+        # hardening (stealth, rate limit, sleep window). Avoids the
+        # "small model writes wrong scraper code and hallucinates the
+        # output" failure mode that hit the user on the first Threads
+        # task. Canonical URL is threads.net; threads.com is unrelated.
+        from tools.threads_search_tool import THREADS_TOOLS
 
         for fn, schema, risk in (
             SHELL_TOOLS + FILE_TOOLS + HTTP_TOOLS
@@ -445,7 +452,7 @@ class ToolRegistry:
             + NOTIFY_TOOLS + REPORT_TOOLS + ANALYTIC_TOOLS
             + SEARCH_TOOLS + BROWSER_TOOLS + MARKITDOWN_TOOLS
             + CYBER_SKILLS_TOOLS + GITHUB_TRENDING_TOOLS
-            + CHROME_ATTACHED_TOOLS
+            + CHROME_ATTACHED_TOOLS + THREADS_TOOLS
         ):
             self.register(fn, schema, risk)
 
