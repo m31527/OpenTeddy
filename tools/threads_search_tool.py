@@ -66,94 +66,128 @@ _CHROME_RATE_LIMITS.setdefault("threads_search", 20)
 
 
 # ── DOM extractor ────────────────────────────────────────────────────────────
-# Threads' DOM is React-rendered, similar shape to Instagram. Selectors
-# pinned to data-testid / role attributes where possible — Meta tends to
-# preserve those across UI refreshes more reliably than CSS class hashes.
-# Confirmed selectors as of 2026-06; update this single block when
-# Meta ships a redesign.
+# v1.1.7 rewrite: the first version used `article, div[role="article"]` as
+# post-container selectors. That worked on Instagram's DOM but Threads' web
+# app uses anonymous <div> wrappers with React-generated class hashes for
+# its post containers — no semantic article tags at all. Result: extractor
+# returned 0 posts even when the browser visibly showed dozens.
+#
+# New strategy is anchor-based and React-resilient: every post has EXACTLY
+# ONE <time datetime="..."> element (the timestamp) and exactly one
+# <a href=".../post/..."> element (the permalink). Both are semantic
+# elements Meta is unlikely to remove because accessibility tools and
+# search indexers rely on them. We:
+#
+#   1. Enumerate every <time datetime="...">
+#   2. From each, walk up to the nearest <a href*="/post/">  → that's the
+#      permalink anchor for this post
+#   3. Walk up further until we find an outer block that contains
+#      span[dir="auto"] (the body text) AND aria-label[*="like"] /
+#      [*="reply"] elements (the engagement row)
+#   4. Extract from that outer block
+#
+# Dedupe by post URL since Threads sometimes renders the same post twice
+# (once collapsed in a "more replies" stack, once expanded).
 
 _THREADS_EXTRACTOR_JS = r"""
 (() => {
     const out = [];
+    const seenUrls = new Set();
 
-    // Post containers — Threads wraps each thread in <article>; the
-    // search results page has them in the main feed.
-    const articles = document.querySelectorAll('article, div[role="article"]');
+    // Anchor: <time datetime="..."> — one per post, semantic, persistent.
+    const times = document.querySelectorAll('time[datetime]');
 
-    for (const art of articles) {
-        // Author handle + display name — usually in the first <a>
-        // that points at a user profile (/<handle>).
-        let handle = "";
+    for (const timeEl of times) {
+        // Step 1: walk up to the permalink anchor wrapping this timestamp.
+        const permalinkAnchor = timeEl.closest('a[href*="/post/"]');
+        if (!permalinkAnchor) continue;
+
+        const href = permalinkAnchor.getAttribute('href') || "";
+        if (!href || !/\/post\//.test(href)) continue;
+        const postUrl = new URL(href, location.origin).href;
+        if (seenUrls.has(postUrl)) continue;
+        seenUrls.add(postUrl);
+
+        const postedAt = timeEl.getAttribute('datetime');
+
+        // Handle parsed from the URL itself — /<handle>/post/<id>
+        // (Threads uses @handle in the path; sometimes preceded by a
+        // bare slug. Be permissive on the regex.)
+        const handleMatch = postUrl.match(/\/(@[\w.]+)\/post\//);
+        const handle = handleMatch ? handleMatch[1] : "";
+
+        // Step 2: walk up from the permalink anchor until we hit a
+        // container that has BOTH the body text (span[dir="auto"]) and
+        // the engagement row (aria-label with 'like' / 'repl').
+        // Threads' post block sits ~5-10 ancestors above the permalink.
+        let outer = permalinkAnchor.parentElement;
+        let bestOuter = null;
+        let bestScore = 0;
+        for (let i = 0; i < 15 && outer; i++) {
+            const hasBody = outer.querySelector('span[dir="auto"]') !== null;
+            const hasReact = outer.querySelector('[aria-label*="ike" i], [aria-label*="epl" i], [aria-label*="epost" i]') !== null;
+            const score = (hasBody ? 1 : 0) + (hasReact ? 2 : 0);
+            if (score > bestScore) { bestScore = score; bestOuter = outer; }
+            // Stop walking once we've found both — going further usually
+            // captures sibling posts and pollutes the extraction.
+            if (hasBody && hasReact) break;
+            outer = outer.parentElement;
+        }
+        const block = bestOuter || permalinkAnchor.parentElement || timeEl.parentElement;
+
+        // Display name — pull from the FIRST <a> in `block` whose href is
+        // a bare /@handle (not a post permalink).
         let displayName = "";
-        const authorAnchors = art.querySelectorAll('a[href^="/"]');
-        for (const a of authorAnchors) {
-            const href = a.getAttribute('href') || "";
-            // Profile URLs are /@handle (or /@handle/). Skip post
-            // permalinks (which are /@handle/post/...) here.
-            const m = href.match(/^\/(@[\w.]+)\/?$/);
-            if (m) {
-                handle = m[1];
-                displayName = a.innerText.trim() || handle;
-                break;
+        for (const a of block.querySelectorAll('a[href^="/@"]')) {
+            const h = a.getAttribute('href') || "";
+            if (/^\/@[\w.]+\/?$/.test(h)) {
+                displayName = (a.innerText || "").replace(/\s+/g, " ").trim();
+                if (displayName) break;
             }
         }
 
-        // Permalink + timestamp — find the first <a> that points at
-        // /@handle/post/...
-        let postUrl = null;
-        let postedAt = null;
-        for (const a of art.querySelectorAll('a[href*="/post/"]')) {
-            const href = a.getAttribute('href') || "";
-            if (/^\/@[\w.]+\/post\//.test(href)) {
-                postUrl = new URL(href, location.origin).href;
-                const t = a.querySelector('time');
-                if (t) postedAt = t.getAttribute('datetime');
-                break;
-            }
-        }
-
-        // Body text — Threads bundles the actual post body in a
-        // span with dir="auto" inside the article. Concatenate to
-        // handle multi-paragraph posts.
+        // Body text from span[dir="auto"]. Skip ones inside profile-link
+        // anchors (those are the author name we already captured).
         const bodyParts = [];
-        for (const span of art.querySelectorAll('span[dir="auto"]')) {
-            // Skip spans that are clearly just timestamps or author
-            // text (the author block also uses dir=auto, but it's
-            // wrapped in the author <a> we already captured).
+        for (const span of block.querySelectorAll('span[dir="auto"]')) {
             if (span.closest('a[href^="/@"]')) continue;
+            if (span.closest('time')) continue;
             const t = (span.innerText || "").trim();
             if (!t) continue;
-            // Avoid grabbing the same text twice if Threads renders
-            // it in nested spans.
             if (bodyParts.length && bodyParts[bodyParts.length - 1] === t) continue;
             bodyParts.push(t);
         }
-        const body = bodyParts.join("\n").trim();
+        const text = bodyParts.join("\n").trim();
 
-        // Engagement metrics — Threads uses aria-label like
-        // "12 replies" / "84 likes" / "3 reposts".
-        function getCount(labelSubstring) {
-            for (const el of art.querySelectorAll('[aria-label]')) {
+        // Engagement — aria-label is the stable contract. Threads uses
+        // "12 replies", "84 likes", "3 reposts" / its localised
+        // equivalents. Match case-insensitively on the English root since
+        // even localised UIs keep the English root in the aria-label for
+        // a11y compliance.
+        function getCount(rootRegex) {
+            for (const el of block.querySelectorAll('[aria-label]')) {
                 const lbl = el.getAttribute('aria-label') || "";
-                if (lbl.toLowerCase().includes(labelSubstring)) {
+                if (rootRegex.test(lbl)) {
                     const m = lbl.match(/([\d,\.]+)/);
-                    if (m) return parseFloat(m[1].replace(/,/g, '')) || null;
+                    if (m) {
+                        const n = parseFloat(m[1].replace(/,/g, ""));
+                        return Number.isFinite(n) ? n : null;
+                    }
+                    return 0;  // labeled but no number = zero
                 }
             }
             return null;
         }
-        const replies = getCount('repl');
-        const likes   = getCount('like');
-        const reposts = getCount('repost');
+        const replies = getCount(/repl/i);
+        const likes   = getCount(/like/i);
+        const reposts = getCount(/repost/i);
 
-        // Skip articles with no body — those are usually "follow
-        // suggestion" cards Threads sprinkles into search results.
-        if (!body || (!postUrl && !handle)) continue;
+        if (!text && !displayName) continue;
 
         out.push({
             handle:      handle,
             displayName: displayName,
-            text:        body,
+            text:        text,
             url:         postUrl,
             posted_at:   postedAt,
             replies:     replies,
@@ -230,16 +264,21 @@ async def threads_search(
         )
 
     n = max(1, min(int(top_n or 10), 50))
+    # threads.com is the canonical Meta domain (threads.net redirects);
+    # both work. Use .com so the URL matches what the operator sees in
+    # the browser address bar (less confusing for debugging).
     url = (
-        "https://www.threads.net/search?q="
+        "https://www.threads.com/search?q="
         + urllib.parse.quote(q)
         + "&serp_type=default"
     )
 
     page = browser = p = None
     try:
+        # Reuse any tab already on Threads (either domain — they share a
+        # session, so cookies / login state carry).
         page, browser, p = await _open_attached_page(
-            reuse_tab_url_contains="threads.net",
+            reuse_tab_url_contains="threads.",
         )
     except RuntimeError as exc:
         return make_result(
@@ -253,18 +292,23 @@ async def threads_search(
         )
 
     try:
-        await page.goto(url, wait_until="domcontentloaded", timeout=25000)
-        # Threads' results lazy-load after the initial DOM is ready; wait
-        # a little for the first article to appear, OR for a known
-        # logged-out marker. 15s budget covers slow first-paint on
-        # Threads' web app.
+        await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+        # Threads' results are React-rendered after JS bundles execute;
+        # the initial DOM load fires long before any post is visible.
+        # Wait for either a <time> element (real post timestamp) or a
+        # known logged-out marker. 18 s budget covers slow first-paint
+        # on the Threads web app + a cold React bundle.
         try:
             await page.wait_for_selector(
-                'article, [data-testid="login-button"], a[href^="/login"]',
-                timeout=15000,
+                'time[datetime], [data-testid="login-button"], a[href^="/login"]',
+                timeout=18000,
             )
         except Exception:
             pass
+        # Even after the first <time> appears, the React app keeps
+        # streaming more posts in for ~1-2 s. Brief settle pause so the
+        # extractor sees the full first batch.
+        await _human_pause(1.0, 2.0)
 
         # Login check — Threads bounces unauthed users to /login.
         current_url = page.url or ""
