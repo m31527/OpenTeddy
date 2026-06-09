@@ -277,6 +277,86 @@ uvicorn main:app --reload
 # API docs  → http://localhost:8000/docs
 ```
 
+## Linux Server Setup (DGX / Jetson / headless fleet) *(v1.1.5)*
+
+If you're deploying OpenTeddy on a Linux server (NVIDIA DGX Spark, Jetson, Raspberry Pi 5, a rack box, anywhere without a permanent monitor), there are extra moving parts beyond `uvicorn main:app`:
+
+- a **Chromium-based browser** running as a systemd service so OpenTeddy can scrape login-gated sites (X / Twitter, LinkedIn, paid SaaS, corp wikis) via the [`chrome_attached_tool`](tools/chrome_attached_tool.py) suite
+- a **one-time login** so the headless browser carries your real authenticated session — `x_search('黴菌', top_n=10)` is meaningless if the underlying browser is signed out
+- a **profile dir + systemd unit** so the setup survives reboots
+
+Three bundled scripts under [`scripts/`](scripts/) handle the entire flow:
+
+| Script | When to run |
+|---|---|
+| `scripts/quickstart.sh --login` | **First time only** on a fresh node. Sets up everything below in one command. |
+| `scripts/setup-edge-cdp.sh` | Manually invoked by quickstart. Installs Brave (ARM64) or Microsoft Edge (amd64) + writes the systemd unit. |
+| `scripts/login-helper.sh` | Whenever a site's cookies expire (X ~30 days, LinkedIn ~90). Just opens a GUI browser for you to re-login. |
+
+### One-command first-time setup
+
+On a GUI-capable session (AnyDesk, physical monitor, `ssh -X`, GNOME/KDE):
+
+```bash
+git clone https://github.com/m31527/OpenTeddy
+cd OpenTeddy
+bash scripts/quickstart.sh --login
+```
+
+This will:
+
+1. **Install the CDP browser stack** — auto-detects host arch:
+   - `aarch64` / `arm64` → **Brave Browser** (official ARM64 apt repo, no sandbox issues)
+   - `x86_64` → **Microsoft Edge** (official amd64 apt repo)
+2. **Write a systemd unit** (`openteddy-cdp.service`) that keeps the browser running headless on `127.0.0.1:9222` with `Restart=always`. Survives reboots.
+3. **Open a GUI browser window** for you to log in to X / LinkedIn / whatever. Close the window when done — the script automatically switches back to headless mode, cookies persisting in the profile dir.
+4. **Create the Python venv** + `pip install -r requirements.txt`.
+5. **Start the OpenTeddy backend** detached on `:8000` + healthcheck-verify it.
+
+After this, `http://<host>:8000` is a fully working OpenTeddy. Chat "整理 X 上最近討論黴菌的熱門推文 top 10" and the [`x_search`](tools/chrome_attached_tool.py) tool will pull real tweets through your logged-in session.
+
+### What if I'm pure-SSH without a GUI?
+
+You have two clean options:
+
+- **`ssh -X admin@<host>`** — Brave's window forwards to your local laptop's screen. Works as long as you have X11 on your laptop (Linux has it natively, macOS needs [XQuartz](https://www.xquartz.org/)).
+- **`scripts/setup-novnc-login.sh`** — installs Xvfb + noVNC so you can log in via a web browser:
+  ```bash
+  sudo bash scripts/setup-novnc-login.sh
+  sudo systemctl start openteddy-novnc-login.service
+  # On your laptop:
+  ssh -L 6080:localhost:6080 admin@<host>
+  # Then open http://localhost:6080/vnc.html in any browser
+  # Log in via the Brave window that appears, close the tab, then:
+  sudo systemctl stop openteddy-novnc-login.service
+  ```
+  noVNC binds to `127.0.0.1` only by default — the SSH tunnel is the auth + encryption layer. To expose more widely (Tailscale mesh, etc.), pass `OPENTEDDY_NOVNC_BIND=0.0.0.0` to the setup script; the install summary explains the security trade-offs.
+
+### Re-login when cookies expire
+
+You'll know cookies have expired when `x_search` starts returning empty `posts: []` or your scheduled trend-tracking task starts coming back blank. Just run:
+
+```bash
+bash scripts/login-helper.sh
+```
+
+It pauses the headless service, opens a GUI browser pointed at `https://x.com/login`, waits for you to log in and close the window, then automatically restarts the headless service. Takes about 2 minutes.
+
+### Fleet deployment (5-10 nodes)
+
+The same three scripts work as an Ansible playbook payload — each node gets identical setup, then each operator-trusted node gets its own login once. Pattern that we use on NVIDIA DGX Spark fleets:
+
+```bash
+# One-time per node (e.g. via Ansible / cloud-init)
+ansible all -m shell -a "git clone https://github.com/m31527/OpenTeddy /opt/openteddy"
+ansible all -m shell -a "bash /opt/openteddy/scripts/quickstart.sh"
+
+# Then on each node, an operator logs in via AnyDesk / VNC + runs:
+#   bash /opt/openteddy/scripts/login-helper.sh
+```
+
+Each node owns its own browser profile + cookies; no cross-node cookie sync needed. If you want fleet-wide cookie sharing (one login, all nodes inherit), drop a `storage_state.json` (Playwright format) at `/var/lib/openteddy/storage_state.json` — `chrome_attached_tool` auto-injects it on every attach. See [`scripts/capture-edge-state.md`](scripts/capture-edge-state.md) for the capture recipe.
+
 ## Remote Access (phone / Telegram / Tailscale)
 
 Two complementary ways to reach your OpenTeddy instance away from the machine

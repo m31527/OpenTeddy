@@ -108,6 +108,86 @@ uvicorn main:app --reload
 # API 文件： http://localhost:8000/docs
 ```
 
+## Linux 伺服器第一次設定（DGX / Jetson / 無螢幕節點） *(v1.1.5)*
+
+如果你要把 OpenTeddy 部署在 Linux 伺服器（NVIDIA DGX Spark、Jetson、Raspberry Pi 5、機房裡的機架機，任何沒有固定螢幕的環境），除了 `uvicorn main:app` 之外還需要：
+
+- 一支 **Chromium 系瀏覽器**用 systemd 跑著，這樣 OpenTeddy 的 [`chrome_attached_tool`](tools/chrome_attached_tool.py) 才能透過 CDP 抓需要登入的網站（X / Twitter、LinkedIn、付費 SaaS、公司內網 wiki）
+- 一次性的**手動登入**，讓 headless 瀏覽器帶著你的真實 session — `x_search('黴菌', top_n=10)` 在沒登入的 browser 上回的是空的
+- 一套 **profile 目錄 + systemd unit**，這樣重開機也還在
+
+[`scripts/`](scripts/) 底下三支 script 把整個流程包起來：
+
+| Script | 什麼時候跑 |
+|---|---|
+| `scripts/quickstart.sh --login` | **新機器只跑一次**。一行指令搞定下面所有事 |
+| `scripts/setup-edge-cdp.sh` | quickstart 內部會呼叫。裝 Brave（ARM64）或 Microsoft Edge（amd64）+ 寫 systemd unit |
+| `scripts/login-helper.sh` | 之後 cookies 過期（X 約 30 天、LinkedIn 約 90 天）就跑一次。會跳 GUI 視窗讓你登入 |
+
+### 一行指令搞定新機器
+
+在有 GUI 桌面的環境（AnyDesk、實體螢幕、`ssh -X`、GNOME/KDE）：
+
+```bash
+git clone https://github.com/m31527/OpenTeddy
+cd OpenTeddy
+bash scripts/quickstart.sh --login
+```
+
+它會：
+
+1. **裝好 CDP 瀏覽器** — 自動偵測 host arch：
+   - `aarch64` / `arm64` → **Brave Browser**（官方 ARM64 apt repo、無沙箱限制）
+   - `x86_64` → **Microsoft Edge**（官方 amd64 apt repo）
+2. **寫好 systemd unit**（`openteddy-cdp.service`）讓 browser headless 跑在 `127.0.0.1:9222`，`Restart=always`，重開機自動拉起來
+3. **跳出 GUI 瀏覽器視窗**讓你登入 X / LinkedIn / 任何需要的網站。關掉視窗 → script 自動切回 headless 模式，cookies 保留在 profile 裡
+4. **建 Python venv** + `pip install -r requirements.txt`
+5. **啟動 OpenTeddy backend** 跑在背景 `:8000` 並做 healthcheck
+
+完工之後 `http://<host>:8000` 就是完整可用的 OpenTeddy。在 chat 打「整理 X 上最近討論黴菌的熱門推文 top 10」， [`x_search`](tools/chrome_attached_tool.py) 工具會用你登入的 session 拉真實推文。
+
+### 如果只能純 SSH（沒 GUI 桌面）
+
+兩條乾淨的路：
+
+- **`ssh -X admin@<host>`** — Brave 視窗會透過 X11 forwarding 投影到你筆電的螢幕上。前提是筆電有 X11（Linux 原生有、macOS 要裝 [XQuartz](https://www.xquartz.org/)）
+- **`scripts/setup-novnc-login.sh`** — 在 server 上裝 Xvfb + noVNC，用網頁瀏覽器登入：
+  ```bash
+  sudo bash scripts/setup-novnc-login.sh
+  sudo systemctl start openteddy-novnc-login.service
+  # 在你筆電上：
+  ssh -L 6080:localhost:6080 admin@<host>
+  # 開瀏覽器 http://localhost:6080/vnc.html
+  # 在跳出來的 Brave 視窗登入 → 關 tab → 在 server 跑：
+  sudo systemctl stop openteddy-novnc-login.service
+  ```
+  noVNC 預設只 bind 在 `127.0.0.1`，靠 SSH tunnel 做認證 + 加密。要對 LAN 開放（Tailscale mesh 等場景）就設 `OPENTEDDY_NOVNC_BIND=0.0.0.0`，setup script 安裝結束時會提醒安全 trade-off
+
+### cookies 過期了怎麼補登
+
+`x_search` 開始回空的 `posts: []`、或者排程任務開始拿空結果，就代表 cookies 過期了。跑：
+
+```bash
+bash scripts/login-helper.sh
+```
+
+它會暫停 headless service、開 GUI Brave 並導到 `https://x.com/login`、等你登入完關掉視窗、自動把 headless service 拉回來。大概 2 分鐘。
+
+### Fleet 部署（5-10 台節點）
+
+同樣三支 script 直接當 Ansible playbook payload — 每台節點都跑一樣的安裝、每台都被 trusted operator 個別登入一次。我們在 NVIDIA DGX Spark fleet 用的模式：
+
+```bash
+# 每台節點一次性（cloud-init / Ansible 跑）
+ansible all -m shell -a "git clone https://github.com/m31527/OpenTeddy /opt/openteddy"
+ansible all -m shell -a "bash /opt/openteddy/scripts/quickstart.sh"
+
+# 然後 operator 從 AnyDesk / VNC 進每台跑：
+#   bash /opt/openteddy/scripts/login-helper.sh
+```
+
+每台節點擁有自己的 browser profile + cookies；不必跨節點同步。如果要做「一次登入、全 fleet 共用」，把 Playwright 格式的 `storage_state.json` 放到 `/var/lib/openteddy/storage_state.json`，`chrome_attached_tool` 會在每次 attach 時自動注入。詳見 [`scripts/capture-edge-state.md`](scripts/capture-edge-state.md)。
+
 ## 遠端存取（手機 / Telegram / Tailscale）
 
 兩條互補的路徑可以在不在主機旁邊時操作 OpenTeddy。兩者打到同一個 server、同一份 sessions —— 你可以在通勤時用 Telegram 開一個 goal，回家後在桌面 web UI 看完整 artifact。
