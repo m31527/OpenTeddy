@@ -466,6 +466,48 @@ _PLAN_INTENT_FIRST_HEADER = """\
 """
 
 
+# ── Current-time injection ────────────────────────────────────────────────────
+# LLMs have no built-in clock. Without an explicit "today is X" hint they
+# fall back to their training-cutoff year, which is exactly what produced
+# the reported bug: a user asked "今日農曆星期" and got "二〇二五年正月十三"
+# back when the actual date was 2026-06-10. The synthesizer doesn't know
+# better; the planner doesn't know better; even Claude doesn't know better
+# without being told.
+#
+# Fix: prepend a short, machine-readable "current system clock" block to
+# every system prompt the orchestrator builds. Same block goes into the
+# planner prompt, the executor's system prompt, and the synthesizer
+# prompt — so no matter which stage the model answers a time-sensitive
+# question at, it has the right anchor.
+
+def _current_time_header() -> str:
+    """Build a tiny system-prompt prelude that pins the model's clock to
+    real time. Uses the host's local time (which on a Taiwanese DGX is
+    UTC+8 / Asia/Taipei; on a US server it'll be whatever the host is
+    set to — that's fine, the LLM just needs SOMETHING factual to
+    anchor 'today / 今天 / now / 現在')."""
+    import datetime
+    now = datetime.datetime.now().astimezone()
+    iso = now.isoformat(timespec="seconds")
+    weekday_en = now.strftime("%A")
+    # Map ISO weekday → Chinese label so prompts that operate in zh
+    # don't need to translate it themselves.
+    weekday_zh = ["週一", "週二", "週三", "週四", "週五", "週六", "週日"][now.weekday()]
+    tz = now.tzname() or ""
+    return (
+        "[Current system clock — use THIS as 'today / 今天 / now / 現在'. "
+        "Do NOT default to your training cutoff year.]\n"
+        f"  - Date         : {now.strftime('%Y-%m-%d')} (Gregorian / 公曆)\n"
+        f"  - Day of week  : {weekday_en} / {weekday_zh}\n"
+        f"  - ISO 8601     : {iso}\n"
+        f"  - Timezone     : {tz}\n"
+        "  - If asked about Chinese lunar (農曆) date, derive it from the "
+        "Gregorian date above — do NOT pull a year from training data. "
+        "If you can't compute it reliably, say so honestly.\n"
+        "\n"
+    )
+
+
 def _plan_prompt_for_mode(mode: str, model_name: str = "") -> str:
     """Pick the plan-system prompt that matches the session's mode and
     bend its strictness to the model's tier (Adaptive Prompts #1).
@@ -481,11 +523,14 @@ def _plan_prompt_for_mode(mode: str, model_name: str = "") -> str:
         _PLAN_SYSTEM_ANALYTIC if mode == "analytic" else _PLAN_SYSTEM_CODE
     )
     tier = model_tier(model_name)
+    # Current-time header goes FIRST so every model (regardless of tier)
+    # has a real-clock anchor before reading anything else.
+    time_hdr = _current_time_header()
     if tier == "strict":
-        return _PLAN_INTENT_FIRST_HEADER + _PLAN_STRICT_HEADER + base
+        return time_hdr + _PLAN_INTENT_FIRST_HEADER + _PLAN_STRICT_HEADER + base
     # Mid-range and large models keep the existing prompt — the JSON
     # contract is already restrictive enough; loosening it doesn't help.
-    return _PLAN_INTENT_FIRST_HEADER + base
+    return time_hdr + _PLAN_INTENT_FIRST_HEADER + base
 
 
 def _is_local_only() -> bool:
@@ -1778,6 +1823,10 @@ class Orchestrator:
             f"工具執行記錄：\n{tool_log}\n\n"
             "請根據以上記錄生成完成報告。"
         )
+        # Prepend current-time header so synthesizer doesn't default to
+        # its training-cutoff year if the goal asks anything time-related
+        # (calendar, "what year is it", lunar date, etc).
+        system_prompt = _current_time_header() + system_prompt
         # Same cloud-aware routing as planning — see _orchestrator_complete.
         result = await self._orchestrator_complete(
             prompt, system_prompt,

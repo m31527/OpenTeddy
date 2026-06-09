@@ -426,14 +426,21 @@ def _system_prompt_for_mode(mode: str, model_name: str = "") -> str:
     This is the core of "Adaptive Prompts" (#1) — small thinking models
     (qwen3.5:2b etc.) get the strict preamble + few-shot examples; large
     models get a brief openness suffix; mid-range stays as-is.
+
+    Also prepends a real-clock anchor (current date / weekday / timezone)
+    so the executor doesn't default to its training-cutoff year when the
+    user asks anything time-sensitive (`今天 / now / current year /
+    lunar date / etc.`). Imported lazily so executor.py doesn't grow a
+    new hard dependency on orchestrator.py.
     """
+    from orchestrator import _current_time_header
     base = _SYSTEM_PROMPT_CHAT if mode == "chat" else _SYSTEM_PROMPT_CODE
     tier = model_tier(model_name)
     if tier == "strict":
-        return _STRICT_PREAMBLE + "\n" + base
+        return _current_time_header() + _STRICT_PREAMBLE + "\n" + base
     if tier == "open":
-        return base + _OPEN_SUFFIX
-    return base
+        return _current_time_header() + base + _OPEN_SUFFIX
+    return _current_time_header() + base
 
 
 # ── Workspace artifact scanner ────────────────────────────────────────────────
