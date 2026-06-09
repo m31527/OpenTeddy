@@ -118,6 +118,22 @@ docker compose 也可以用 `-f /path/to/docker-compose.yml` 取代 cd。
 當 Markdown 解析，最後跑出「[N/A](#)」placeholder。`github_trending`
 是專用工具，內部 scraping 已驗證可用，不需要再寫 python_exec。
 
+【特殊：X / Twitter 任務（要用使用者 Chrome 登入態）】
+若目標含「twitter」/「X」/「推特」/「推文」/「tweet」/「人在討論 / 在聊」+
+某個關鍵字 → **直接用 `x_search` 工具**（1 個 subtask）：
+    [{"description": "用 x_search(query='黴菌', top_n=10) 抓推文",
+      "skill_hint": null, "order": 0}]
+為什麼：X 對匿名抓取有嚴格反爬蟲，`browser_fetch` 抓不到任何有用內容。
+`x_search` 透過 CDP 連到使用者已登入的 Chrome（port 9222），用使用者
+本人的 session 拿資料 — 等同他自己捲那頁。前提是使用者一次性設定：
+    open -na "Google Chrome" --args --remote-debugging-port=9222
+不確定使用者有沒有設好時，可先呼叫 `chrome_attach_check`（零成本探測）。
+
+【特殊：其他登入態必需網站】
+若目標需要存取使用者已登入的網站（公司內網 dashboard、付費 SaaS、
+私人 wiki 等） → **用 `chrome_attached_browse(url)` 工具**。
+不要試圖讓 OpenTeddy 自己登入或記憶密碼 — 借用 Chrome session 就好。
+
   ✅ 首選（90% 案例）：1 個 python_exec subtask 內聯做完所有事
      - 在 python_exec 裡用 urllib / requests 直接抓
      - BeautifulSoup 或 re 解析

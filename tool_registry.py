@@ -429,6 +429,15 @@ class ToolRegistry:
         # Python tool means the planner just CALLS it instead of writing
         # the code. See tools/github_trending_tool.py for the story.
         from tools.github_trending_tool import GITHUB_TRENDING_TOOLS
+        # v1.1.4: Chrome-attached tools — connect to the user's already-
+        # running Chrome via CDP (--remote-debugging-port=9222) instead
+        # of spinning up our own headless browser. Critical for X /
+        # Twitter / LinkedIn / paid SaaS / any login-gated site where
+        # anonymous browser_fetch fails or gets anti-bot blocked. The
+        # user does a one-time Chrome setup; OpenTeddy then borrows
+        # the authenticated session. See chrome_attached_tool.py for
+        # the setup instructions and the full rationale.
+        from tools.chrome_attached_tool import CHROME_ATTACHED_TOOLS
 
         for fn, schema, risk in (
             SHELL_TOOLS + FILE_TOOLS + HTTP_TOOLS
@@ -436,6 +445,7 @@ class ToolRegistry:
             + NOTIFY_TOOLS + REPORT_TOOLS + ANALYTIC_TOOLS
             + SEARCH_TOOLS + BROWSER_TOOLS + MARKITDOWN_TOOLS
             + CYBER_SKILLS_TOOLS + GITHUB_TRENDING_TOOLS
+            + CHROME_ATTACHED_TOOLS
         ):
             self.register(fn, schema, risk)
 
