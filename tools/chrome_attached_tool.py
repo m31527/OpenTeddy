@@ -462,17 +462,62 @@ async def x_search(
             # case the page is just slow. We'll catch zero results below.
             pass
 
-        # Login check.
+        # Login check — multi-signal because X changes its UI markup
+        # often. Confirmed logged-out signals (any one triggers):
+        #   1. URL redirected to /i/flow/login
+        #   2. data-testid="loginButton" present (old UI)
+        #   3. data-testid="login" link present (current UI)
+        #   4. Page contains the X "sign in" CTA card
         if require_login:
-            login_btn = await page.query_selector('[data-testid="loginButton"]')
-            if login_btn is not None:
+            current_url = page.url or ""
+            logged_out_signals = []
+            if "/i/flow/login" in current_url or "/login" in current_url:
+                logged_out_signals.append(f"redirected to {current_url}")
+            for sel in (
+                '[data-testid="loginButton"]',
+                '[data-testid="login"]',
+                'a[href="/login"]',
+                'a[href="/i/flow/login"]',
+            ):
+                if await page.query_selector(sel):
+                    logged_out_signals.append(f"found {sel}")
+                    break
+            # Last resort: zero tweet articles AND we see one of X's
+            # "Don't miss what's happening" / "Sign in to X" upsell
+            # texts. That's the most common state right now.
+            if not logged_out_signals:
+                article_count = await page.evaluate(
+                    'document.querySelectorAll(\'article[data-testid="tweet"]\').length'
+                )
+                if article_count == 0:
+                    body_text = await page.evaluate(
+                        '() => document.body ? document.body.innerText.slice(0, 4000) : ""'
+                    )
+                    for phrase in (
+                        "Sign in to X",
+                        "Don't miss what's happening",
+                        "登入 X",
+                        "登錄 X",
+                        "登录 X",
+                        "Create account",
+                    ):
+                        if phrase in (body_text or ""):
+                            logged_out_signals.append(f"page text contains '{phrase}'")
+                            break
+
+            if logged_out_signals:
                 return make_result(
                     False,
                     error=(
-                        "Not logged in to X in this Chrome session. Open "
-                        "https://x.com/login in the same Chrome window, "
-                        "log in once, then re-run the OpenTeddy task. "
-                        "Your session persists between OpenTeddy calls."
+                        "Not logged in to X. Signals detected: "
+                        + "; ".join(logged_out_signals)
+                        + ". Fix: capture a storage_state.json on a "
+                        "workstation with a display (see scripts/"
+                        "capture-edge-state.md), scp it to "
+                        "/var/lib/openteddy/storage_state.json on this "
+                        "host, restart openteddy-cdp.service, then "
+                        "retry. The headless browser cannot accept an "
+                        "interactive login."
                     ),
                     duration_ms=int((time.monotonic() - start) * 1000),
                 )
