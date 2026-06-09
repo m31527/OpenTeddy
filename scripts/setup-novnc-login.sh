@@ -68,6 +68,18 @@ fi
 PROFILE_DIR="/var/lib/openteddy/edge-profile"
 SERVICE_FILE="/etc/systemd/system/openteddy-novnc-login.service"
 NOVNC_PORT="${OPENTEDDY_NOVNC_PORT:-6080}"
+# Bind address for noVNC's HTTP listener. DEFAULT: localhost-only
+# (127.0.0.1) because the VNC stream has no encryption + no password,
+# and one accidental router-rule change shouldn't expose a logged-in
+# browser session to the entire network.
+# Override with OPENTEDDY_NOVNC_BIND=0.0.0.0 if you've put the host
+# behind a private mesh (Tailscale, WireGuard) or strict firewall and
+# explicitly want LAN access from your phone etc.
+NOVNC_BIND="${OPENTEDDY_NOVNC_BIND:-127.0.0.1}"
+NOVNC_BIND_PREFIX=""
+if [ "${NOVNC_BIND}" != "0.0.0.0" ]; then
+  NOVNC_BIND_PREFIX="${NOVNC_BIND}:"
+fi
 VNC_DISPLAY=":99"
 VNC_PORT="5900"
 SCREEN_RES="1440x900x24"
@@ -146,13 +158,20 @@ DISPLAY=${VNC_DISPLAY} "${BROWSER_BIN}" \\
 BROWSER_PID=\$!
 sleep 2
 
-# 3. x11vnc on VNC_PORT, no password (we only bind to localhost; websockify
-#    is what listens publicly on NOVNC_PORT).
-x11vnc -display ${VNC_DISPLAY} -nopw -listen 0.0.0.0 -rfbport ${VNC_PORT} -forever -shared -bg
+# 3. x11vnc bound to 127.0.0.1 ONLY — the local-only x11vnc + local-only
+#    websockify combination means no remote endpoint can reach the VNC
+#    stream directly. Operators reach noVNC by SSH-forwarding 6080:
+#       ssh -L 6080:localhost:6080 admin@<host>
+#       open http://localhost:6080/vnc.html on the LOCAL machine
+#    SSH already handles auth + encryption; layering a separate VNC
+#    password here would be redundant. To expose more widely, see the
+#    OPENTEDDY_NOVNC_BIND env var note in setup.
+x11vnc -display ${VNC_DISPLAY} -nopw -localhost -rfbport ${VNC_PORT} -forever -shared -bg
 
 # 4. websockify wraps the VNC stream in a WebSocket so noVNC's vnc.html
-#    can connect from any browser. Foreground so systemd can supervise.
-exec websockify --web /usr/share/novnc ${NOVNC_PORT} localhost:${VNC_PORT}
+#    can connect from a browser. Bound to ${NOVNC_BIND} (default 127.0.0.1).
+#    Foreground so systemd can supervise.
+exec websockify --web /usr/share/novnc ${NOVNC_BIND_PREFIX}${NOVNC_PORT} localhost:${VNC_PORT}
 EOF
 chmod +x "${WRAPPER}"
 echo "  ✓ Wrapper written"
@@ -202,32 +221,54 @@ echo "    to log in to a site."
 HOST_IP="$(hostname -I | awk '{print $1}')"
 echo ""
 echo "✅ noVNC login helper installed."
+echo "    noVNC listening on : ${NOVNC_BIND}:${NOVNC_PORT}  (default: localhost only)"
 echo ""
-echo "When you need to log in to a site (X, LinkedIn, corp wiki, …):"
-echo ""
-echo "  1. Start the helper (this stops the headless CDP service):"
-echo "       sudo systemctl start openteddy-novnc-login.service"
-echo ""
-echo "  2. From any browser (phone, laptop, even this DGX over SSH X-fwd):"
-echo "       http://${HOST_IP}:${NOVNC_PORT}/vnc.html"
-echo "     Click 'Connect' (no password) → you'll see a ${BROWSER_LABEL}"
-echo "     window running on this host."
-echo ""
-echo "  3. In that window: open the site, log in, close the tab when done."
-echo "     Cookies are saved to ${PROFILE_DIR}."
-echo ""
-echo "  4. Stop the helper (this restarts the headless CDP service):"
-echo "       sudo systemctl stop openteddy-novnc-login.service"
-echo ""
-echo "  5. Verify OpenTeddy now sees the login:"
-echo "       cd ~/OpenTeddy && .venv/bin/python -c \\"
-echo "         'import asyncio,sys; sys.path.insert(0,\".\");"
-echo "          from tools.chrome_attached_tool import chrome_attach_check;"
-echo "          import json; print(json.dumps(asyncio.run("
-echo "            chrome_attach_check()), indent=2))'"
-echo ""
-echo "Security note: noVNC port ${NOVNC_PORT} is bound to 0.0.0.0 so other"
-echo "machines on your network can reach it (the whole point — VNC from"
-echo "your phone). If you don't want that, edit ${WRAPPER} and change the"
-echo "websockify line from '${NOVNC_PORT}' to '127.0.0.1:${NOVNC_PORT}',"
-echo "then access via SSH tunnel only."
+if [ "${NOVNC_BIND}" = "127.0.0.1" ]; then
+  echo "Default = localhost-only. You access via SSH tunnel (zero network"
+  echo "exposure, encrypted by SSH, no extra credentials to manage)."
+  echo ""
+  echo "Login workflow:"
+  echo ""
+  echo "  1. ON THIS DGX — start the helper (pauses the headless CDP service):"
+  echo "       sudo systemctl start openteddy-novnc-login.service"
+  echo ""
+  echo "  2. ON YOUR LAPTOP — open an SSH tunnel forwarding noVNC's port:"
+  echo "       ssh -L ${NOVNC_PORT}:localhost:${NOVNC_PORT} ${TARGET_USER}@${HOST_IP}"
+  echo ""
+  echo "  3. ON YOUR LAPTOP — open the URL in any local browser:"
+  echo "       http://localhost:${NOVNC_PORT}/vnc.html"
+  echo "     Click 'Connect' (no password) — the SSH tunnel is the auth."
+  echo ""
+  echo "  4. In the ${BROWSER_LABEL} window that appears: open the site,"
+  echo "     log in, close the tab when done. Cookies persist in"
+  echo "     ${PROFILE_DIR}."
+  echo ""
+  echo "  5. ON THIS DGX — stop the helper (restarts headless CDP service):"
+  echo "       sudo systemctl stop openteddy-novnc-login.service"
+  echo ""
+  echo "  6. Verify OpenTeddy now sees the cookies:"
+  echo "       cd ~/OpenTeddy && .venv/bin/python -c \\"
+  echo "         'import asyncio,sys; sys.path.insert(0,\".\");"
+  echo "          from tools.chrome_attached_tool import chrome_attach_check;"
+  echo "          import json; print(json.dumps(asyncio.run("
+  echo "            chrome_attach_check()), indent=2))'"
+  echo ""
+  echo "To allow LAN access from your phone (less safe — no encryption,"
+  echo "no password by default), re-run with:"
+  echo "       sudo OPENTEDDY_NOVNC_BIND=0.0.0.0 bash $0"
+  echo "ONLY do that if this host sits behind a private mesh (Tailscale /"
+  echo "WireGuard) or a strict firewall. Otherwise anyone reachable on"
+  echo "port ${NOVNC_PORT} gets full control of a logged-in browser."
+else
+  echo "⚠  noVNC bound to ${NOVNC_BIND}:${NOVNC_PORT} — accessible from"
+  echo "   the network. NO ENCRYPTION, NO PASSWORD by default. Confirm"
+  echo "   you trust everyone who can reach this address (Tailscale, LAN,"
+  echo "   etc.). To revert to localhost-only:"
+  echo "       sudo bash $0     # (no env var)"
+  echo ""
+  echo "Login workflow:"
+  echo "  1. sudo systemctl start openteddy-novnc-login.service"
+  echo "  2. Open http://${HOST_IP}:${NOVNC_PORT}/vnc.html in any browser"
+  echo "  3. Log in to the site, close the tab"
+  echo "  4. sudo systemctl stop openteddy-novnc-login.service"
+fi
