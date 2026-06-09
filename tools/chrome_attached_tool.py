@@ -66,14 +66,95 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import time
 import urllib.parse
 import urllib.request
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from tool_registry import RiskLevel, make_result
 
 logger = logging.getLogger(__name__)
+
+
+# ── storage_state.json loading ───────────────────────────────────────────────
+# Look-up order for a Playwright-format storage_state.json. Found cookies
+# get injected into the attached context on every CDP attach. Lifecycle:
+#   - Operator captures the state once on a workstation with a display
+#     (see scripts/capture-edge-state.md).
+#   - scp'd to each fleet node's /var/lib/openteddy/storage_state.json.
+#   - Edge / Chromium boots fresh (via systemd) and OpenTeddy injects
+#     these cookies before every x_search / chrome_attached_browse call.
+#
+# This means every fleet node scrapes X / LinkedIn / wherever as the
+# operator who captured the state, with no per-node login dance.
+_STATE_SEARCH_PATHS = [
+    # Highest priority — explicit override.
+    lambda: Path(os.environ["OPENTEDDY_CDP_STATE"])
+            if os.environ.get("OPENTEDDY_CDP_STATE") else None,
+    # Standard fleet location written by scripts/setup-edge-cdp.sh.
+    lambda: Path("/var/lib/openteddy/storage_state.json"),
+    # User-scoped fallback for single-user dev installs.
+    lambda: Path.home() / ".config" / "openteddy" / "storage_state.json",
+]
+
+
+def _find_state_file() -> Optional[Path]:
+    """Resolve the first existing storage_state.json from the search
+    path. Returns None when nothing is found — the tool still works,
+    cookies just aren't injected (so any login-gated site stays
+    logged out)."""
+    for resolver in _STATE_SEARCH_PATHS:
+        try:
+            p = resolver()
+        except Exception:  # noqa: BLE001
+            continue
+        if p and p.exists():
+            return p
+    return None
+
+
+async def _inject_state_if_present(context) -> int:
+    """If a storage_state.json exists, push its cookies into the
+    attached Playwright context. Returns the number of cookies
+    injected (0 on any failure — failures are logged but never
+    raised; the caller should still try to scrape, the worst case
+    is a logged-out page).
+
+    Why we re-inject on every attach instead of once per process:
+    the systemd-managed Edge instance can outlive OpenTeddy
+    restarts; cookies set in a previous attach do persist in the
+    profile dir, but cheap re-injection is the safest way to
+    guarantee freshness across restarts of either side.
+    """
+    state_path = _find_state_file()
+    if state_path is None:
+        return 0
+    try:
+        with open(state_path, "r", encoding="utf-8") as fh:
+            state = json.load(fh)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "storage_state at %s failed to parse: %s", state_path, exc,
+        )
+        return 0
+    cookies = state.get("cookies") or []
+    if not cookies:
+        return 0
+    try:
+        await context.add_cookies(cookies)
+        logger.info(
+            "Injected %d cookies from %s into CDP context",
+            len(cookies), state_path,
+        )
+        return len(cookies)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "Cookie injection failed: %s (cookies=%d, path=%s)",
+            exc, len(cookies), state_path,
+        )
+        return 0
 
 
 # ── CDP endpoint discovery ───────────────────────────────────────────────────
@@ -149,13 +230,28 @@ async def chrome_attach_check() -> Dict[str, Any]:
             meta = json.loads(r.read().decode("utf-8"))
     except Exception as exc:  # noqa: BLE001
         meta = {"error": str(exc)}
+    # Report storage_state status so the operator sees "yep, cookies will
+    # be injected" without having to read the source. Critical for fleet
+    # ops: if state_path is None on a node that's supposed to scrape X,
+    # somebody forgot to scp the file.
+    state_path = _find_state_file()
+    state_info: Dict[str, Any] = {"path": None, "cookie_count": 0}
+    if state_path is not None:
+        state_info["path"] = str(state_path)
+        try:
+            with open(state_path, "r", encoding="utf-8") as fh:
+                data = json.load(fh)
+            state_info["cookie_count"] = len(data.get("cookies") or [])
+        except Exception as exc:  # noqa: BLE001
+            state_info["parse_error"] = str(exc)
     return make_result(
         True,
         result={
-            "ws_endpoint": ws,
-            "browser":     meta.get("Browser", "Chrome"),
-            "user_agent":  meta.get("User-Agent", ""),
-            "cdp_url":     _CDP_URL,
+            "ws_endpoint":   ws,
+            "browser":       meta.get("Browser", "Chrome"),
+            "user_agent":    meta.get("User-Agent", ""),
+            "cdp_url":       _CDP_URL,
+            "storage_state": state_info,
         },
         duration_ms=int((time.monotonic() - start) * 1000),
     )
@@ -198,6 +294,13 @@ async def _open_attached_page(reuse_tab_url_contains: Optional[str] = None):
         ctx = await browser.new_context()
     else:
         ctx = contexts[0]
+
+    # Inject cookies from storage_state.json (if present) BEFORE we open
+    # / re-use a tab. Doing it after page.goto() works too but the first
+    # navigation can fire login-detection JS before our cookies land,
+    # producing a flicker of "Sign in" UI that messes up screenshots /
+    # accessibility checks.
+    await _inject_state_if_present(ctx)
 
     page = None
     if reuse_tab_url_contains:
