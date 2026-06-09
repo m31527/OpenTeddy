@@ -596,54 +596,19 @@ Tunable knobs live in Settings → Parameter Settings, or via the
 disable auto-detection entirely (skills can still be created manually
 via `POST /skills/generate?name=…&description=…`).
 
-## Pricing & licensing
+## ☕ Buy Me a Coffee
 
-OpenTeddy ships under an **open-core** model — the OSS backend stays MIT-
-licensed and free forever. The paid tier is the polished native desktop
-experience plus a few cloud-backed conveniences:
+OpenTeddy is a one-person side project. Hosting, cloud-LLM API testing,
+the macOS signing + notarisation pipeline, and the time it takes to keep
+shipping new tools all cost real money and weekends each month. If this
+project saves you time, please consider chipping in:
 
-| | **Free** (this repo) | **Lifetime — $99 once** |
-|---|---|---|
-| Backend (FastAPI + orchestrator + executor + tools) | ✅ | ✅ |
-| Local models via Ollama | ✅ | ✅ |
-| Loop hardening (verifier, watchdog, circuit breaker, parallel fan-out) | ✅ | ✅ |
-| Self-growing skills | ✅ | ✅ |
-| 22-locale i18n web dashboard | ✅ | ✅ |
-| Self-build the desktop from source | ✅ | ✅ |
-| Signed `.dmg` + auto-updates against GitHub Releases | ❌ | ✅ |
-| Cross-device cloud sync (skills, memory, settings) | ❌ | ✅ |
-| Premium skill packs (planned: Analytics / Marketing / Memory Pro) | ❌ | ✅ |
-| Priority bug-fix queue + private support channel | ❌ | ✅ |
-| Includes Claude API credits to get started | ❌ | ✅ (planned) |
+[**☕ Buy Me a Coffee →**](https://openteddy-app.lemonsqueezy.com/checkout/buy/103ae6c2-36cf-48e1-aefc-71faca140657)
 
-The whole identity + billing stack is built in stages, all visible in this
-codebase:
-
-- **Phase A** — Anonymous Firebase Auth on app start; `users/{uid}` doc tracks
-  device id, platform, app version, last-seen.
-- **Phase B** — Real Google sign-in via system-browser pairing (Tauri WebKit
-  can't do `signInWithPopup`, so we open the system browser, run the popup
-  there, and pass a custom token back via Firestore + a Cloud Function).
-  Account-merge carries the anonymous user's `deviceId` + `createdAt` onto
-  the new Google identity.
-- **Phase C** — Lemon Squeezy checkout flow. The desktop builds a buy URL with
-  `checkout[email]` and `checkout[custom][uid]` prefilled; the
-  `lemonSqueezyWebhook` Cloud Function verifies HMAC, looks up the buyer
-  (by `custom_data.uid` or email fallback), and writes
-  `users/{uid}.subscription = { status: 'active', plan: 'lifetime' }` plus
-  a canonical `licenses/{uid}` record. The desktop's Firestore listener
-  flips the upgrade pill off within ~1 sec of payment clearing.
-
-All Cloud Function code, Firestore Security Rules, and the auth bridge HTML
-live in [`desktop/`](desktop/) (functions/) and [`landing-page/`](https://openteddy.net/auth)
-respectively. Stripe-style webhook signatures are verified against
-HMAC-SHA256 of the raw body using a per-endpoint secret stored in Google
-Secret Manager (`firebase functions:secrets:set LEMONSQUEEZY_WEBHOOK_SECRET`).
-
-Anyone running the OSS backend in a plain browser sees **none of this** —
-the cloud-sync pill, upgrade pill, and sign-in dialog are gated on
-`window.parent !== window` (i.e. running inside the Tauri shell), so the
-Firebase JS bundle never loads on a self-hosted install.
+No pricing tiers, no feature gates, no "premium". Everything in this repo
+stays MIT-licensed and free forever — the coffee just buys me a few extra
+hours to keep adding tools, fixing planner edge cases, and writing the
+docs nobody else will write.
 
 ## Configuration Reference
 

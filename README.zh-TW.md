@@ -329,28 +329,17 @@ docker compose up -d
 
 然後讓代理人只在容器內的 `/workspace` 裡面活動。只有你明確掛進去的資料夾會被看到，其餘仍然隔離。
 
-## 定價（Open-Core 模式）
+## ☕ 請我喝咖啡贊助
 
-OpenTeddy 採用**開放核心**：OSS backend 永遠 MIT 免費，付費的是**polished
-desktop 體驗 + 雲端便利功能**：
+OpenTeddy 是一人 side project。Server 費、雲端 LLM API 測試、桌面版簽章
+公證流程、加上週末持續寫新工具的時間，每個月都是實際成本。如果這個專案
+幫你節省時間，歡迎贊助一杯：
 
-| | **Free**（這個 repo） | **Lifetime — $99 一次** |
-|---|---|---|
-| 完整 backend / 工具 / 強化 loop | ✅ | ✅ |
-| 自動成長技能 | ✅ | ✅ |
-| 22 語系 web 儀表板 | ✅ | ✅ |
-| 自己 build desktop | ✅ | ✅ |
-| 簽名 .dmg + 自動更新 | ❌ | ✅ |
-| 多裝置雲端同步（記憶 / 技能 / 設定）| ❌ | ✅ |
-| Premium 技能包（規劃中：Analytics / Marketing / Memory Pro）| ❌ | ✅ |
-| 優先 bug 修復 + 私密支援 | ❌ | ✅ |
+[**☕ Buy Me a Coffee →**](https://openteddy-app.lemonsqueezy.com/checkout/buy/103ae6c2-36cf-48e1-aefc-71faca140657)
 
-身分驗證 + 計費完整實作分三階段，code 都在這個 repo：
-- **Phase A**：app 啟動匿名 Firebase Auth、寫 `users/{uid}` 紀錄裝置 id
-- **Phase B**：Google 登入透過系統瀏覽器 pairing flow（Tauri WebKit 不能直接 popup），用 Cloud Function 簽 customToken 回來、merge 匿名身份
-- **Phase C**：Lemon Squeezy webhook → CF 驗 HMAC → 寫 `licenses/{uid}` 跟 `users/{uid}.subscription`，desktop 的 Firestore listener 1 秒內 reflect
-
-OSS user 在 plain browser 跑 — `cloud-sync pill` / `upgrade pill` / `sign-in dialog` 都會自動隱藏，Firebase JS bundle 完全不會載。
+沒有分級訂閱、沒有功能鎖、沒有「premium」 — repo 內所有功能永遠 MIT
+免費。贊助只是讓我能多花一點時間繼續加工具、修 planner edge case、
+寫沒有人會寫的文件。
 
 ## 跑大模型（DGX Spark / 35B 等級）的人請注意
 
