@@ -342,6 +342,37 @@ bash scripts/login-helper.sh
 
 It pauses the headless service, opens a GUI browser pointed at `https://x.com/login`, waits for you to log in and close the window, then automatically restarts the headless service. Takes about 2 minutes.
 
+### macOS desktop setup (same pattern, different OS)
+
+If you're running OpenTeddy on a Mac (Apple Silicon or Intel) and want
+the same browser-scraping capability without dropping into Terminal every
+time, the macOS counterpart of the above is in `scripts/setup-mac-chrome.sh`
++ `scripts/login-mac-helper.sh`:
+
+```bash
+# First-time setup — installs a LaunchAgent that keeps Chrome (or Brave /
+# Edge / Chromium if Chrome isn't installed) running headless on
+# 127.0.0.1:9222 across reboots. Idempotent.
+bash scripts/setup-mac-chrome.sh
+
+# Whenever you need to log in to a site (X / Threads / LinkedIn / etc.):
+bash scripts/login-mac-helper.sh
+# → temporarily swaps in a headful Chrome window pointed at the same
+#   profile; log in, close the window, the LaunchAgent restarts the
+#   headless instance automatically.
+
+# Uninstall:
+bash scripts/setup-mac-chrome.sh --uninstall
+```
+
+Key difference from Linux: the macOS setup uses a SEPARATE Chrome profile
+(`~/Library/Application Support/OpenTeddy/Chrome-CDP`) instead of sharing
+your day-to-day profile. That way OpenTeddy's scraping Chrome runs
+alongside the Chrome window you have open for normal browsing — no
+killing your existing tabs every time. Trade-off: you have to log in to
+scraping sites once inside the OpenTeddy profile (via
+`login-mac-helper.sh`), separately from your normal Chrome.
+
 ### Fleet deployment (5-10 nodes)
 
 The same three scripts work as an Ansible playbook payload — each node gets identical setup, then each operator-trusted node gets its own login once. Pattern that we use on NVIDIA DGX Spark fleets:

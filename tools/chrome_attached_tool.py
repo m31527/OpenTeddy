@@ -304,31 +304,34 @@ def _cdp_ws_endpoint() -> Optional[str]:
 
 
 _NOT_RUNNING_HINT = (
-    "Chrome / Chromium isn't reachable on the debugging port. Quit any "
-    "running browser window first, then start it with the debug port "
-    "open. Any Chromium-based browser works — the CDP wire protocol is "
-    "the same.\n\n"
-    "  macOS (Apple Silicon or Intel):\n"
+    "Chrome / Chromium isn't reachable on the debugging port. Recommended "
+    "fix — run the bundled setup script for your platform; it installs a "
+    "background service that keeps a Chromium-based browser on "
+    "127.0.0.1:9222 persistently and survives reboots:\n\n"
+    "  macOS:\n"
+    "    bash scripts/setup-mac-chrome.sh\n"
+    "    bash scripts/login-mac-helper.sh   # log in to X / Threads / etc.\n\n"
+    "  Linux (any distro, any arch — Brave on ARM64, Edge on amd64):\n"
+    "    sudo bash scripts/setup-edge-cdp.sh\n"
+    "    bash scripts/login-helper.sh\n\n"
+    "Manual one-off — if you'd rather not install a service, just start "
+    "any Chromium-based browser yourself with the debug port open:\n\n"
+    "  macOS one-liner:\n"
     '    open -na "Google Chrome" --args --remote-debugging-port=9222 '
-    "--user-data-dir=$HOME/Library/Application\\ Support/Google/Chrome\n\n"
+    '--user-data-dir="$HOME/Library/Application Support/OpenTeddy/Chrome-CDP"\n\n'
     "  Linux x86_64 (Chrome):\n"
     "    google-chrome --remote-debugging-port=9222 \\\n"
     "                  --user-data-dir=$HOME/.config/google-chrome &\n\n"
-    "  Linux ARM64 (DGX Spark / Raspberry Pi / NVIDIA Jetson / etc.) —\n"
-    "  Google Chrome has no official ARM64 build, use Chromium instead:\n"
-    "    sudo apt install chromium-browser   # Ubuntu/Debian\n"
-    "    chromium-browser --remote-debugging-port=9222 \\\n"
-    "                     --user-data-dir=$HOME/.config/chromium &\n"
-    "    # OR Microsoft Edge (officially supports Linux ARM64):\n"
-    "    microsoft-edge --remote-debugging-port=9222 \\\n"
-    "                   --user-data-dir=$HOME/.config/microsoft-edge &\n\n"
+    "  Linux ARM64 (DGX Spark / Raspberry Pi / Jetson) — no Chrome ARM64\n"
+    "  build, use Brave or Chromium:\n"
+    "    brave-browser --remote-debugging-port=9222 \\\n"
+    "                  --user-data-dir=$HOME/.config/brave-cdp &\n\n"
     "  Windows (PowerShell):\n"
     '    & "$env:ProgramFiles\\Google\\Chrome\\Application\\chrome.exe" '
     "--remote-debugging-port=9222\n\n"
-    "After the browser is up, log in to X / Twitter (or whatever site) "
-    "once manually, then run the OpenTeddy task again. The "
-    "--user-data-dir flag keeps your normal profile + cookies; without "
-    "it the browser will boot a blank, signed-out session."
+    "After the browser is up, log in once to whatever site you want to "
+    "scrape; cookies persist in --user-data-dir so future OpenTeddy "
+    "calls inherit the session."
 )
 
 
