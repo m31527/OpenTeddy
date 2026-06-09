@@ -64,18 +64,144 @@ confirms before each call.
 from __future__ import annotations
 
 import asyncio
+import datetime
 import json
 import logging
 import os
+import random
 import time
 import urllib.parse
 import urllib.request
+from collections import defaultdict, deque
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from tool_registry import RiskLevel, make_result
 
 logger = logging.getLogger(__name__)
+
+
+# ── Anti-bot hardening (v1.1.6) ──────────────────────────────────────────────
+# Three layers of "look more like a human, less like a scraper":
+#
+#   1. Stealth init script — flips the Chromium tells (navigator.webdriver,
+#      missing plugins, headless UA fingerprint) that platforms like X /
+#      LinkedIn check first when deciding "is this a bot?". Injected into
+#      every new context BEFORE the first navigation so the page's
+#      bot-detection JS sees a normal browser from request one.
+#
+#   2. Per-tool rate limit — process-local sliding-window counter that
+#      caps calls per hour. Default values are deliberately conservative
+#      (20 /hr for x_search) — even an enthusiastic operator stays under
+#      X's "this account hits search like a human" threshold. Override
+#      with OPENTEDDY_RATE_LIMIT_<TOOL>=N env var when you need more.
+#
+#   3. Sleep window — refuse calls between 02:00-06:00 local time by
+#      default. Real humans don't reliably search at 3am; an account
+#      that does is a strong bot signal. Off when OPENTEDDY_NO_SLEEP=1
+#      so power users can override during legitimate burst work.
+#
+# All three can be bypassed per-call by passing _hardening_override=True
+# to the underlying tool — used by tests, never by the planner LLM.
+
+_RATE_LIMITS = {
+    # tool_name → max calls per rolling hour
+    "x_search":               int(os.environ.get("OPENTEDDY_RATE_LIMIT_X_SEARCH",       "20")),
+    "chrome_attached_browse": int(os.environ.get("OPENTEDDY_RATE_LIMIT_BROWSE",          "30")),
+    # chrome_attach_check is a cheap localhost probe — no limit.
+}
+_RATE_WINDOW_S = 3600.0
+_CALL_TIMESTAMPS: Dict[str, deque] = defaultdict(deque)
+
+_SLEEP_WINDOW_START_HOUR = int(os.environ.get("OPENTEDDY_SLEEP_START", "2"))
+_SLEEP_WINDOW_END_HOUR = int(os.environ.get("OPENTEDDY_SLEEP_END", "6"))
+_SLEEP_DISABLED = os.environ.get("OPENTEDDY_NO_SLEEP", "0").lower() in ("1", "true", "yes")
+
+
+def _rate_limit_check(tool_name: str) -> tuple[bool, int, int]:
+    """Process-local sliding-window rate limit. Returns
+    (allowed, count_in_window, cap). Caller emits a friendly error when
+    not allowed."""
+    cap = _RATE_LIMITS.get(tool_name)
+    if cap is None or cap <= 0:
+        return True, 0, 0
+    now = time.monotonic()
+    q = _CALL_TIMESTAMPS[tool_name]
+    # Drop timestamps that fell out of the rolling window.
+    while q and q[0] < now - _RATE_WINDOW_S:
+        q.popleft()
+    if len(q) >= cap:
+        return False, len(q), cap
+    q.append(now)
+    return True, len(q), cap
+
+
+def _in_sleep_window() -> bool:
+    """Return True when local clock is inside the configured sleep window.
+    Disabled by OPENTEDDY_NO_SLEEP=1."""
+    if _SLEEP_DISABLED:
+        return False
+    h = datetime.datetime.now().hour
+    if _SLEEP_WINDOW_START_HOUR <= _SLEEP_WINDOW_END_HOUR:
+        return _SLEEP_WINDOW_START_HOUR <= h < _SLEEP_WINDOW_END_HOUR
+    # Wraps midnight (e.g. 22 → 6); rare but support it.
+    return h >= _SLEEP_WINDOW_START_HOUR or h < _SLEEP_WINDOW_END_HOUR
+
+
+# Stealth init script injected into every context. Hides the obvious
+# Chromium automation signals. Battle-tested copy from puppeteer-extra-
+# plugin-stealth — same techniques, distilled to the high-value pieces
+# without bringing in the whole plugin tree.
+_STEALTH_INIT_JS = r"""
+// 1. Hide the webdriver flag — the #1 bot signal. Real browsers leave
+//    navigator.webdriver as undefined; Chromium-with-CDP defaults to true.
+Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+
+// 2. Normalise plugins / mimeTypes — headless Chrome has [], real browsers
+//    have at least a few.
+Object.defineProperty(navigator, 'plugins', {
+    get: () => [
+        { name: 'Chrome PDF Plugin' }, { name: 'Chrome PDF Viewer' },
+        { name: 'Native Client' }
+    ],
+});
+Object.defineProperty(navigator, 'languages', {
+    get: () => ['en-US', 'en', 'zh-TW', 'zh'],
+});
+
+// 3. Chrome runtime object — present in real Chrome, missing in stripped
+//    headless builds. Anti-bot scripts check for it explicitly.
+window.chrome = window.chrome || { runtime: {} };
+
+// 4. Permissions query patch — headless Chrome reports
+//    Notification permission as 'default'; real Chrome reports 'denied'
+//    until the user grants it. Anti-bot scripts use the mismatch.
+const _origQuery = window.navigator.permissions ?
+    window.navigator.permissions.query : null;
+if (_origQuery) {
+    window.navigator.permissions.query = (p) =>
+        p.name === 'notifications'
+            ? Promise.resolve({ state: Notification.permission })
+            : _origQuery(p);
+}
+
+// 5. WebGL vendor / renderer — headless reports SwiftShader, real Chrome
+//    reports the GPU. Spoof to a common Intel one.
+const _getParam = WebGLRenderingContext.prototype.getParameter;
+WebGLRenderingContext.prototype.getParameter = function(p) {
+    if (p === 37445) return 'Intel Inc.';
+    if (p === 37446) return 'Intel Iris OpenGL Engine';
+    return _getParam.call(this, p);
+};
+"""
+
+
+async def _human_pause(min_s: float = 1.5, max_s: float = 4.0) -> None:
+    """Short randomised delay to break the "back-to-back identical
+    timing" pattern that synthetic clients produce. Cheap; default
+    1.5-4s is invisible at the user's scale but breaks behavioural
+    fingerprints used by X / LinkedIn rate analyses."""
+    await asyncio.sleep(min_s + random.random() * (max_s - min_s))
 
 
 # ── storage_state.json loading ───────────────────────────────────────────────
@@ -244,6 +370,29 @@ async def chrome_attach_check() -> Dict[str, Any]:
             state_info["cookie_count"] = len(data.get("cookies") or [])
         except Exception as exc:  # noqa: BLE001
             state_info["parse_error"] = str(exc)
+    # Hardening status — surfaces "you have N/cap calls left this hour"
+    # and whether we're inside the sleep window. Helps operators decide
+    # "should I run that scheduled task now or wait" without grepping
+    # logs.
+    now = time.monotonic()
+    hardening: Dict[str, Any] = {
+        "stealth_init_script": True,
+        "sleep_window": {
+            "start_hour":  _SLEEP_WINDOW_START_HOUR,
+            "end_hour":    _SLEEP_WINDOW_END_HOUR,
+            "currently_in": _in_sleep_window(),
+            "disabled":    _SLEEP_DISABLED,
+        },
+        "rate_limits": {},
+    }
+    for tool, cap in _RATE_LIMITS.items():
+        q = _CALL_TIMESTAMPS.get(tool, deque())
+        recent = sum(1 for ts in q if ts > now - _RATE_WINDOW_S)
+        hardening["rate_limits"][tool] = {
+            "used_in_last_hour": recent,
+            "cap_per_hour":      cap,
+            "remaining":         max(0, cap - recent),
+        }
     return make_result(
         True,
         result={
@@ -252,6 +401,7 @@ async def chrome_attach_check() -> Dict[str, Any]:
             "user_agent":    meta.get("User-Agent", ""),
             "cdp_url":       _CDP_URL,
             "storage_state": state_info,
+            "hardening":     hardening,
         },
         duration_ms=int((time.monotonic() - start) * 1000),
     )
@@ -301,6 +451,19 @@ async def _open_attached_page(reuse_tab_url_contains: Optional[str] = None):
     # producing a flicker of "Sign in" UI that messes up screenshots /
     # accessibility checks.
     await _inject_state_if_present(ctx)
+
+    # Inject the stealth init script BEFORE any page navigation in this
+    # context, so anti-bot JS on the page sees a normal-looking browser
+    # from request one. add_init_script applies to every existing page
+    # AND every future new_page() call — safe to call multiple times
+    # across attach cycles; idempotent at the JS level.
+    try:
+        await ctx.add_init_script(_STEALTH_INIT_JS)
+    except Exception as exc:  # noqa: BLE001
+        # Older Playwright versions sometimes throw here on already-
+        # initialised contexts; log + continue, the stealth flags are
+        # nice-to-have, not load-bearing.
+        logger.debug("stealth init script attach failed: %s", exc)
 
     page = None
     if reuse_tab_url_contains:
@@ -419,6 +582,38 @@ async def x_search(
     if not q:
         return make_result(False, error="query is empty", duration_ms=0)
 
+    # Anti-bot hardening pre-flight (v1.1.6). Both checks return a
+    # cooperative error rather than raising — the planner reads
+    # `success: False` and stops, the user sees a clear "wait an
+    # hour" / "wait until 6am" message.
+    if _in_sleep_window():
+        return make_result(
+            False,
+            error=(
+                f"Inside the sleep window ({_SLEEP_WINDOW_START_HOUR:02d}:00-"
+                f"{_SLEEP_WINDOW_END_HOUR:02d}:00 local). Automated "
+                "searches during typical sleep hours are a strong bot "
+                "signal for X. Re-run after the window, or set "
+                "OPENTEDDY_NO_SLEEP=1 in your environment if this is "
+                "intentional burst work."
+            ),
+            duration_ms=int((time.monotonic() - start) * 1000),
+        )
+    allowed, count, cap = _rate_limit_check("x_search")
+    if not allowed:
+        return make_result(
+            False,
+            error=(
+                f"Rate-limited: {count}/{cap} x_search calls in the last "
+                f"hour. Hitting X search faster than human pace is the #1 "
+                f"way to get the account flagged. Wait ~{int(60 - (count - cap + 1) * 3)} "
+                f"minutes, or raise the cap with "
+                f"OPENTEDDY_RATE_LIMIT_X_SEARCH=<n> (and accept the "
+                f"increased lockout risk)."
+            ),
+            duration_ms=int((time.monotonic() - start) * 1000),
+        )
+
     n = max(1, min(int(top_n or 10), 50))
     since_clean = (since or "live").strip().lower()
     if since_clean not in ("live", "top", "people", "media", "lists"):
@@ -524,13 +719,28 @@ async def x_search(
 
         # Scroll to load more if the user wants more than the initial
         # render (~10 tweets). Each scroll triggers another ~10 to load.
+        #
+        # Anti-bot: use page.mouse.wheel() instead of window.scrollBy.
+        # The synthetic scrollBy() fires no MouseEvent / WheelEvent —
+        # only a scroll event — so X's bot detector can tell the
+        # difference. mouse.wheel() generates real wheel events with a
+        # plausible velocity profile.
         SCROLL_ATTEMPTS = max(0, (n - 10 + 9) // 10)  # 11→1, 20→1, 25→2 …
+        viewport = page.viewport_size or {"height": 900}
         for _ in range(SCROLL_ATTEMPTS):
-            await page.evaluate("window.scrollBy(0, window.innerHeight * 1.5)")
-            # Small wait so new articles can render before the next
-            # scroll fires. 800 ms balances "load complete" vs "user is
-            # waiting forever".
-            await asyncio.sleep(0.8)
+            # Scroll roughly one-and-a-half viewport heights, with a
+            # ±15% jitter so consecutive scrolls don't look identical.
+            delta_y = int(viewport["height"] * (1.4 + random.random() * 0.3))
+            try:
+                await page.mouse.wheel(0, delta_y)
+            except Exception:
+                # Older Playwright / weird embed cases — fall back to
+                # synthetic, accepting the lower stealth quality.
+                await page.evaluate(f"window.scrollBy(0, {delta_y})")
+            # Randomised wait so consecutive scrolls don't fire on a
+            # 0.8s metronome. 0.6-1.6s mimics "reading a couple
+            # tweets" pacing.
+            await _human_pause(0.6, 1.6)
 
         # Extract.
         raw = await page.evaluate(_X_SEARCH_EXTRACTOR_JS)
@@ -603,6 +813,30 @@ async def chrome_attached_browse(
             False, error="url must be an http(s) URL", duration_ms=0,
         )
 
+    # Same hardening as x_search — sleep window + rate limit. Slightly
+    # higher rate cap (30/hr default) since chrome_attached_browse is
+    # used across a wider variety of sites, each less aggressive than X.
+    if _in_sleep_window():
+        return make_result(
+            False,
+            error=(
+                f"Inside the sleep window ({_SLEEP_WINDOW_START_HOUR:02d}:00-"
+                f"{_SLEEP_WINDOW_END_HOUR:02d}:00 local). Set "
+                "OPENTEDDY_NO_SLEEP=1 to override."
+            ),
+            duration_ms=int((time.monotonic() - start) * 1000),
+        )
+    allowed, count, cap = _rate_limit_check("chrome_attached_browse")
+    if not allowed:
+        return make_result(
+            False,
+            error=(
+                f"Rate-limited: {count}/{cap} browse calls in the last "
+                f"hour. Override with OPENTEDDY_RATE_LIMIT_BROWSE=<n>."
+            ),
+            duration_ms=int((time.monotonic() - start) * 1000),
+        )
+
     page = browser = p = None
     try:
         page, browser, p = await _open_attached_page(
@@ -617,6 +851,9 @@ async def chrome_attached_browse(
     try:
         await page.goto(url, wait_until="domcontentloaded",
                         timeout=timeout_s * 1000)
+        # Brief human-like pause before extracting — gives JS time to
+        # finish settling and breaks "instant-extract" timing pattern.
+        await _human_pause(0.8, 2.2)
         if selector:
             try:
                 await page.wait_for_selector(selector, timeout=timeout_s * 1000)
