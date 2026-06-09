@@ -75,28 +75,59 @@ echo "    profile dir : ${PROFILE_DIR}"
 echo "    listen port : ${LISTEN_PORT}"
 echo ""
 
-# ── 1. Microsoft apt repo ────────────────────────────────────────────────────
-# Always (re)write the list and keyring so a previously-added entry with
-# the wrong arch (e.g. arch=amd64 on an arm64 host, which apt-get install
-# then "fixes" by reporting `Unable to locate package microsoft-edge-stable`)
-# gets cleanly overwritten. Cheap operation; safer than an existence check.
-echo "▶ (Re)writing Microsoft apt repo + GPG key…"
-curl -fsSL https://packages.microsoft.com/keys/microsoft.asc \
-  | gpg --dearmor --yes -o /usr/share/keyrings/microsoft.gpg
+# ── 1. Browser apt repo — Brave on ARM64, Microsoft Edge on amd64 ────────────
+# Why this fork:
+#   - Microsoft Edge has an official apt repo + ARM64 builds were
+#     announced multiple times, but as of mid-2026 their stable
+#     binary-arm64/Packages.gz is empty (the directory exists, the
+#     Packages file 200s, but it contains zero packages — apt happily
+#     parses an empty index and reports "Unable to locate package").
+#     This burned ~30 minutes of operator time on a DGX Spark fleet
+#     node before we caught it.
+#   - Brave Software maintains an official apt repo with both
+#     arch=amd64 and arch=arm64 builds, signed and updated every
+#     ~2 weeks. Same Chromium internals, same CDP wire protocol,
+#     OpenTeddy's connect_over_cdp doesn't care.
+# Behaviour:
+#   - On ARM64 host    → Brave
+#   - On amd64 host    → Microsoft Edge (since Edge ARM64 may land
+#                        later; the amd64 build is rock-solid today)
 ARCH="$(dpkg --print-architecture)"
-cat > /etc/apt/sources.list.d/microsoft-edge.list <<EOF
+if [ "${ARCH}" = "arm64" ] || [ "${ARCH}" = "armhf" ]; then
+  BROWSER_NAME="brave-browser"
+  BROWSER_BIN="/usr/bin/brave-browser"
+  BROWSER_LABEL="Brave Browser"
+  echo "▶ (Re)writing Brave apt repo + GPG key (arch=${ARCH})…"
+  curl -fsSL https://brave-browser-apt-release.s3.brave.com/brave-browser-archive-keyring.gpg \
+    -o /usr/share/keyrings/brave-browser-archive-keyring.gpg
+  cat > /etc/apt/sources.list.d/brave-browser-release.list <<EOF
+deb [arch=amd64,arm64 signed-by=/usr/share/keyrings/brave-browser-archive-keyring.gpg] https://brave-browser-apt-release.s3.brave.com/ stable main
+EOF
+  # Remove any older Microsoft Edge repo we may have added on a
+  # previous setup run so apt doesn't waste time fetching it.
+  rm -f /etc/apt/sources.list.d/microsoft-edge.list
+else
+  BROWSER_NAME="microsoft-edge-stable"
+  BROWSER_BIN="/usr/bin/microsoft-edge"
+  BROWSER_LABEL="Microsoft Edge"
+  echo "▶ (Re)writing Microsoft Edge apt repo + GPG key (arch=${ARCH})…"
+  curl -fsSL https://packages.microsoft.com/keys/microsoft.asc \
+    | gpg --dearmor --yes -o /usr/share/keyrings/microsoft.gpg
+  cat > /etc/apt/sources.list.d/microsoft-edge.list <<EOF
 deb [arch=${ARCH} signed-by=/usr/share/keyrings/microsoft.gpg] https://packages.microsoft.com/repos/edge stable main
 EOF
-echo "  ✓ Repo written (arch=${ARCH})"
+  rm -f /etc/apt/sources.list.d/brave-browser-release.list
+fi
+echo "  ✓ Selected ${BROWSER_LABEL} for arch=${ARCH}"
 
-# ── 2. Install Edge ──────────────────────────────────────────────────────────
-echo "▶ Installing microsoft-edge-stable (apt update + install)…"
+# ── 2. Install the chosen browser ────────────────────────────────────────────
+echo "▶ Installing ${BROWSER_NAME} (apt update + install)…"
 apt-get update -qq
 DEBIAN_FRONTEND=noninteractive apt-get install -y \
-  microsoft-edge-stable \
+  "${BROWSER_NAME}" \
   >/dev/null
-EDGE_VERSION="$(/usr/bin/microsoft-edge --version 2>/dev/null | head -1 || echo '?')"
-echo "  ✓ Installed: ${EDGE_VERSION}"
+BROWSER_VERSION="$(${BROWSER_BIN} --version 2>/dev/null | head -1 || echo '?')"
+echo "  ✓ Installed: ${BROWSER_VERSION}"
 
 # ── 3. Profile directory ─────────────────────────────────────────────────────
 echo "▶ Provisioning profile dir at ${PROFILE_DIR}…"
@@ -127,7 +158,7 @@ fi
 echo "▶ Writing systemd unit to ${SERVICE_FILE}…"
 cat > "${SERVICE_FILE}" <<EOF
 [Unit]
-Description=OpenTeddy CDP browser (Microsoft Edge headless on 127.0.0.1:${LISTEN_PORT})
+Description=OpenTeddy CDP browser (${BROWSER_LABEL} headless on 127.0.0.1:${LISTEN_PORT})
 Documentation=https://github.com/m31527/OpenTeddy
 After=network-online.target
 Wants=network-online.target
@@ -141,7 +172,7 @@ RestartSec=5
 # gets full DevTools access to every cookie / page in this profile, which
 # includes the operator's X / LinkedIn / etc. sessions. Treat it like the
 # Docker daemon socket: localhost trust only.
-ExecStart=/usr/bin/microsoft-edge \\
+ExecStart=${BROWSER_BIN} \\
   --headless=new \\
   --remote-debugging-port=${LISTEN_PORT} \\
   --remote-debugging-address=127.0.0.1 \\
@@ -152,7 +183,7 @@ ExecStart=/usr/bin/microsoft-edge \\
   --window-size=1440,900 \\
   about:blank
 
-# Some hardening — Edge doesn't need to write outside its profile dir.
+# Some hardening — the browser doesn't need to write outside its profile dir.
 ProtectSystem=full
 ProtectHome=no
 PrivateTmp=yes
