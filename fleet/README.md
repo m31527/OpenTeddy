@@ -5,36 +5,78 @@ worker nodes; each worker runs the goal on its own OpenTeddy
 orchestrator and reports back. Off by default — single-machine installs
 never touch this. Full design: [docs/fleet-architecture.md](../docs/fleet-architecture.md).
 
-## Enabling a fleet
+## Try it first — single-machine demo (no second machine needed)
+
+Before wiring up real nodes, prove the fleet plumbing works on one box:
+
+```bash
+bash scripts/fleet-demo.sh
+```
+
+It spins up an in-process central + worker over a real localhost
+WebSocket, registers, dispatches a goal, and prints the result. A
+`🎉 fleet demo PASSED` line means register → dispatch → run → result all
+work — then real multi-node is just the `.env` files below.
+
+## Enabling a real fleet
 
 Every node is a normal OpenTeddy install. You turn it into a fleet node
-with environment variables — nothing else changes.
+by adding env vars to its `.env` (read at startup) — nothing else
+changes. There are **ready-made templates** so you don't hand-write them:
 
-### Shared token (set on EVERY node, same value)
+| Node | Command |
+|---|---|
+| Central (exactly one) | `cat fleet/env.orchestrator.example >> .env` |
+| Each worker | `cat fleet/env.worker.example >> .env` |
+
+### Step 1 — generate ONE shared token
+
+On any machine, once:
 
 ```bash
-export OPENTEDDY_FLEET_TOKEN="<a long random shared secret>"
+openssl rand -hex 32
 ```
 
-Without this, the orchestrator refuses to start and workers are rejected
-(fail-closed). Generate one with `openssl rand -hex 32`.
+Copy the output. It goes into `OPENTEDDY_FLEET_TOKEN` on **every** node —
+identical value. It's how nodes trust each other; without it the central
+refuses to start and workers are rejected (fail-closed).
 
-### Central node (exactly one)
+### Step 2 — central node (exactly one)
 
 ```bash
-export OPENTEDDY_FLEET_ROLE=orchestrator
-export OPENTEDDY_FLEET_PORT=8770        # WS port workers dial (default 8770)
-# start OpenTeddy normally — the orchestrator starts with it
+cat fleet/env.orchestrator.example >> .env
+# then edit .env: paste the token into OPENTEDDY_FLEET_TOKEN
 ```
 
-### Worker nodes (the rest)
+Restart OpenTeddy. The `.env` block sets:
+`OPENTEDDY_FLEET_ROLE=orchestrator` + `OPENTEDDY_FLEET_PORT=8770`.
+
+### Step 3 — each worker node
 
 ```bash
-export OPENTEDDY_FLEET_ROLE=worker
-export OPENTEDDY_FLEET_CENTRAL=ws://<central-host>:8770
-export OPENTEDDY_FLEET_NODE_ID=dgx-02            # defaults to hostname
-export OPENTEDDY_FLEET_NODE_ROLE=finance         # free-form role label
-# start OpenTeddy normally — the worker dials the central + waits for tasks
+cat fleet/env.worker.example >> .env
+# then edit .env:
+#   OPENTEDDY_FLEET_TOKEN     ← the same token from step 1
+#   OPENTEDDY_FLEET_CENTRAL   ← ws://<central-host-or-ip>:8770
+#   OPENTEDDY_FLEET_NODE_ID   ← a name for this node, e.g. dgx-02
+#   OPENTEDDY_FLEET_NODE_ROLE ← this node's job, e.g. finance
+```
+
+Restart OpenTeddy. The worker auto-dials the central + waits for tasks.
+
+### Step 4 — restart + confirm
+
+After editing each `.env`, restart that node's backend:
+
+```bash
+pkill -f "uvicorn.*main:app"; sleep 1
+nohup .venv/bin/uvicorn main:app --host 0.0.0.0 --port 8000 > /tmp/openteddy.log 2>&1 &
+```
+
+Then on the **central**, check the fleet came together:
+
+```bash
+curl -s http://localhost:8000/fleet/nodes | python3 -m json.tool
 ```
 
 ## Operating the fleet (from the central node)
