@@ -144,6 +144,32 @@ class Config:
         default_factory=lambda: os.getenv("OLLAMA_KEEP_ALIVE", "24h")
     )
 
+    # ── Local inference engine ────────────────────────────────────────────────
+    # Which backend serves the local (non-cloud) executor model:
+    #   "ollama" (default) — cross-platform, works on macOS / Linux / Windows.
+    #                        Hits Ollama's native /api/chat with per-request
+    #                        num_ctx + keep_alive.
+    #   "vllm"             — Linux + CUDA only (NVIDIA). ~3-5x throughput on
+    #                        DGX-class hardware via continuous batching +
+    #                        automatic prefix caching (huge win given
+    #                        OpenTeddy's ~2k-token system prompts get
+    #                        re-prefilled on every call). Hits vLLM's
+    #                        OpenAI-compatible /v1/chat/completions.
+    # macOS is hard-gated to "ollama" at runtime in local_engine.py —
+    # vLLM has no Metal backend and won't even install on a Mac — so a
+    # stale "vllm" setting carried over from a Linux config can't break a
+    # Mac install.
+    local_engine: str = field(
+        default_factory=lambda: os.getenv("OPENTEDDY_LOCAL_ENGINE", "ollama").lower()
+    )
+    # Base URL of the vLLM OpenAI-compatible server. Only consulted when
+    # local_engine == "vllm". vLLM's default serve port is 8000; we use
+    # 8001 in the bundled scripts/setup-vllm.sh to avoid colliding with
+    # OpenTeddy's own uvicorn on 8000.
+    vllm_base_url: str = field(
+        default_factory=lambda: os.getenv("VLLM_BASE_URL", "http://127.0.0.1:8001")
+    )
+
     # Claude upgrade / escalation
     anthropic_api_key: str = field(
         default_factory=lambda: os.getenv("ANTHROPIC_API_KEY", "")
@@ -597,6 +623,10 @@ class Config:
             self.qwen_base_url = settings["qwen_base_url"]
         if _s("ollama_keep_alive"):
             self.ollama_keep_alive = settings["ollama_keep_alive"]
+        if _s("local_engine"):
+            self.local_engine = settings["local_engine"].lower()
+        if _s("vllm_base_url"):
+            self.vllm_base_url = settings["vllm_base_url"]
 
         # Claude API key — only overwrite when the user actually saved one
         # in the UI. Empty string keeps the env-var fallback.

@@ -886,7 +886,14 @@ class Executor:
                 messages = await self._compress_messages(messages, system_prompt)
                 last_prompt_tokens = 0   # next call will re-measure
 
-            stream_on = bool(getattr(config, "streaming_enabled", True))
+            # Streaming is gated on both the user setting AND the active
+            # local engine — vLLM runs non-streamed in this cut (see
+            # local_engine.supports_streaming).
+            import local_engine
+            stream_on = (
+                bool(getattr(config, "streaming_enabled", True))
+                and local_engine.supports_streaming()
+            )
             # #A: stitch discovery memos onto the system prompt so the
             # model sees them every turn. Putting them in `system`
             # (not `messages`) keeps them safe from #4 compression
@@ -900,26 +907,23 @@ class Executor:
                     "use the info below directly:]\n"
                     + "\n".join(f"  • {m}" for m in discovery_memos)
                 )
-            payload: Dict[str, Any] = {
-                "model": config.qwen_model,
-                "messages": messages,
-                "system": effective_system,
-                "stream": stream_on,
-                "options": {
-                    "temperature": float(getattr(config, "qwen_temperature", 0.2)),
-                    "num_predict": config.qwen_max_tokens,
-                    # Tell Ollama how big a context window we want — this
-                    # is the real budget the watchdog is keeping us under.
-                    "num_ctx":     num_ctx,
-                },
-                # Per-request keep_alive override (e.g. "24h"). Ollama
-                # honours this regardless of its own OLLAMA_KEEP_ALIVE env
-                # var, so OpenTeddy users get long resident models without
-                # editing the Ollama service file.
-                "keep_alive": getattr(config, "ollama_keep_alive", "24h"),
-            }
-            if tools:
-                payload["tools"] = tools
+            # Engine-aware request body. local_engine.build_payload
+            # produces the Ollama /api/chat shape (with num_ctx +
+            # keep_alive) or the vLLM OpenAI shape depending on the
+            # active engine. num_ctx is the real budget the watchdog
+            # keeps us under (Ollama only; vLLM sets it at serve time).
+            payload: Dict[str, Any] = local_engine.build_payload(
+                model=config.qwen_model,
+                messages=messages,
+                system=effective_system,
+                tools=tools or None,
+                stream=stream_on,
+                temperature=float(getattr(config, "qwen_temperature", 0.2)),
+                num_predict=config.qwen_max_tokens,
+                num_ctx=num_ctx,
+                keep_alive=getattr(config, "ollama_keep_alive", "24h"),
+            )
+            _chat_url = local_engine.chat_endpoint()
 
             try:
                 if stream_on:
@@ -934,7 +938,7 @@ class Executor:
                     last_chunk: Dict[str, Any] = {}
                     async with self._http.stream(
                         "POST",
-                        f"{config.qwen_base_url}/api/chat",
+                        _chat_url,
                         json=payload,
                     ) as resp:
                         resp.raise_for_status()
@@ -988,11 +992,14 @@ class Executor:
                     })
                 else:
                     resp = await self._http.post(
-                        f"{config.qwen_base_url}/api/chat",
+                        _chat_url,
                         json=payload,
                     )
                     resp.raise_for_status()
-                    data = resp.json()
+                    # normalize_response maps vLLM's OpenAI shape to the
+                    # Ollama shape the rest of this loop reads; Ollama
+                    # responses pass through untouched.
+                    data = local_engine.normalize_response(resp.json())
             except Exception as exc:  # noqa: BLE001
                 logger.error("Qwen chat call failed (round %d): %s", round_idx, exc)
                 return f"Executor error: {exc}", 0.0, None, None
@@ -1016,7 +1023,7 @@ class Executor:
                 await self.tracker.record_usage(
                     task_id=task_id,
                     model=config.qwen_model,
-                    model_provider="ollama",
+                    model_provider=local_engine.usage_provider_label(),
                     tokens_in=_tokens_in,
                     tokens_out=_tokens_out,
                     task_description=description,
@@ -1561,22 +1568,22 @@ class Executor:
             ),
         })
         try:
+            import local_engine
             resp = await self._http.post(
-                f"{config.qwen_base_url}/api/chat",
-                json={
-                    "model": config.qwen_model,
-                    "messages": messages,
-                    "system": _SYSTEM_PROMPT,
-                    "stream": False,
-                    "options": {
-                        "temperature": float(getattr(config, "qwen_temperature", 0.2)),
-                        "num_predict": config.qwen_max_tokens,
-                    },
-                    "keep_alive": getattr(config, "ollama_keep_alive", "24h"),
-                },
+                local_engine.chat_endpoint(),
+                json=local_engine.build_payload(
+                    model=config.qwen_model,
+                    messages=messages,
+                    system=_SYSTEM_PROMPT,
+                    tools=None,
+                    stream=False,
+                    temperature=float(getattr(config, "qwen_temperature", 0.2)),
+                    num_predict=config.qwen_max_tokens,
+                    keep_alive=getattr(config, "ollama_keep_alive", "24h"),
+                ),
             )
             resp.raise_for_status()
-            _final_data = resp.json()
+            _final_data = local_engine.normalize_response(resp.json())
             _tokens_in  = _final_data.get("prompt_eval_count", 0) or 0
             _tokens_out = _final_data.get("eval_count", 0) or 0
             try:
@@ -1745,23 +1752,24 @@ class Executor:
         # model wants to ramble. num_ctx stays generous so the summary
         # call itself doesn't truncate the input we're trying to compress.
         try:
+            import local_engine
             resp = await self._http.post(
-                f"{config.qwen_base_url}/api/chat",
-                json={
-                    "model":    config.qwen_model,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "stream":   False,
-                    "options":  {
-                        "temperature": 0.1,
-                        "num_predict": 600,
-                        "num_ctx":     int(getattr(config, "qwen_num_ctx", 16384)),
-                    },
-                    "keep_alive": getattr(config, "ollama_keep_alive", "24h"),
-                },
+                local_engine.chat_endpoint(),
+                json=local_engine.build_payload(
+                    model=config.qwen_model,
+                    messages=[{"role": "user", "content": prompt}],
+                    system=None,
+                    tools=None,
+                    stream=False,
+                    temperature=0.1,
+                    num_predict=600,
+                    num_ctx=int(getattr(config, "qwen_num_ctx", 16384)),
+                    keep_alive=getattr(config, "ollama_keep_alive", "24h"),
+                ),
                 timeout=120,
             )
             resp.raise_for_status()
-            msg = resp.json().get("message") or {}
+            msg = local_engine.normalize_response(resp.json()).get("message") or {}
             recap = (msg.get("content") or msg.get("thinking") or "").strip()
         except Exception as exc:  # noqa: BLE001
             logger.warning(
