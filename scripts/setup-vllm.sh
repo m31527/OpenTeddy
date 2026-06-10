@@ -1,0 +1,221 @@
+#!/usr/bin/env bash
+# ─────────────────────────────────────────────────────────────────────────────
+# OpenTeddy vLLM engine setup — Linux / CUDA only
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# Installs vLLM into OpenTeddy's venv and registers a systemd service that
+# serves the executor model over an OpenAI-compatible endpoint on
+# 127.0.0.1:8001, so OpenTeddy's local_engine=vllm path has a persistent
+# backend that survives reboots (mirrors setup-edge-cdp.sh for the CDP
+# browser).
+#
+# WHEN TO USE THIS:
+#   vLLM helps OpenTeddy under CONCURRENT load — multiple operators +
+#   watcher loops + scheduled tasks hitting the same node. On a single-
+#   stream personal install it does NOT beat Ollama (both are memory-
+#   bandwidth-bound on a GB10-class box), and it's more operationally
+#   fragile. So: enable vLLM on the "hot" fleet nodes that serve real
+#   concurrency; leave the rest (and every Mac) on Ollama.
+#
+# REQUIREMENTS:
+#   - Linux + NVIDIA CUDA. vLLM has no macOS / Metal build — running this
+#     on a Mac is pointless (local_engine.py hard-gates Darwin to Ollama).
+#   - A model in HuggingFace format (vLLM does NOT read Ollama's GGUF).
+#     Default below is Qwen/Qwen2.5-7B-Instruct; override with --model.
+#   - Enough free unified memory. BF16 needs ~2 bytes/param (7B≈15GB,
+#     32B≈64GB). Quantize (--quantization fp8) to roughly halve that and
+#     to be bandwidth-competitive with Ollama's Q4 GGUF.
+#
+# Usage:
+#   sudo bash scripts/setup-vllm.sh                       # defaults
+#   sudo bash scripts/setup-vllm.sh --model Qwen/Qwen2.5-32B-Instruct \
+#        --max-model-len 16384 --gpu-mem 0.6 --quantization fp8
+#   sudo bash scripts/setup-vllm.sh --uninstall
+#
+# After setup, point OpenTeddy at it (or set these in the Settings UI):
+#   OPENTEDDY_LOCAL_ENGINE=vllm
+#   VLLM_BASE_URL=http://127.0.0.1:8001
+#   QWEN_MODEL=<the same --model you served>
+# ─────────────────────────────────────────────────────────────────────────────
+
+set -euo pipefail
+
+# ── Defaults (override via flags) ────────────────────────────────────────────
+MODEL="Qwen/Qwen2.5-7B-Instruct"
+PORT="8001"
+MAX_MODEL_LEN="16384"
+GPU_MEM="0.5"
+QUANTIZATION=""              # "", "fp8", "awq", "gptq", ...
+TOOL_PARSER="hermes"         # hermes for Qwen; llama3_json for Llama, etc.
+ENFORCE_EAGER="false"        # true = skip torch.compile (faster start, ~15% slower run)
+UNINSTALL="false"
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --model)          MODEL="$2"; shift 2 ;;
+    --port)           PORT="$2"; shift 2 ;;
+    --max-model-len)  MAX_MODEL_LEN="$2"; shift 2 ;;
+    --gpu-mem)        GPU_MEM="$2"; shift 2 ;;
+    --quantization)   QUANTIZATION="$2"; shift 2 ;;
+    --tool-parser)    TOOL_PARSER="$2"; shift 2 ;;
+    --enforce-eager)  ENFORCE_EAGER="true"; shift ;;
+    --uninstall|-u)   UNINSTALL="true"; shift ;;
+    -h|--help)        sed -n '4,46p' "$0"; exit 0 ;;
+    *) echo "Unknown arg: $1"; exit 1 ;;
+  esac
+done
+
+TARGET_USER="${OPENTEDDY_USER:-${SUDO_USER:-${USER:-openteddy}}}"
+if ! id -u "${TARGET_USER}" >/dev/null 2>&1; then
+  echo "✗ Target user '${TARGET_USER}' does not exist."; exit 1
+fi
+# Resolve OpenTeddy home + venv from the invoking user's checkout.
+OT_HOME="$(eval echo "~${TARGET_USER}")/OpenTeddy"
+VENV_PY="${OT_HOME}/.venv/bin/python"
+SERVICE_FILE="/etc/systemd/system/openteddy-vllm.service"
+LOG_PATH="/var/lib/openteddy/vllm.log"
+
+if [ "$(id -u)" -ne 0 ]; then
+  echo "✗ Run with sudo: sudo bash $0"; exit 1
+fi
+
+# ── Uninstall ────────────────────────────────────────────────────────────────
+if [ "${UNINSTALL}" = "true" ]; then
+  echo "▶ Uninstalling openteddy-vllm.service…"
+  systemctl disable --now openteddy-vllm.service 2>/dev/null || true
+  rm -f "${SERVICE_FILE}"
+  systemctl daemon-reload
+  echo "  ✓ Removed. (vLLM pip package + HF model cache left in place.)"
+  exit 0
+fi
+
+# ── Platform guard ───────────────────────────────────────────────────────────
+if [ "$(uname -s)" != "Linux" ]; then
+  echo "✗ vLLM is Linux/CUDA only. This host is $(uname -s)."
+  echo "  On macOS, OpenTeddy uses Ollama (local_engine hard-gates Darwin)."
+  exit 1
+fi
+if ! command -v nvidia-smi >/dev/null 2>&1; then
+  echo "⚠ nvidia-smi not found — vLLM needs an NVIDIA GPU + CUDA. Continuing"
+  echo "  anyway in case this is an unusual setup, but expect failure if"
+  echo "  there's no CUDA device."
+fi
+if [ ! -x "${VENV_PY}" ]; then
+  echo "✗ OpenTeddy venv not found at ${VENV_PY}."
+  echo "  Run the OpenTeddy install first, then re-run this script."
+  exit 1
+fi
+
+echo "▶ OpenTeddy vLLM setup"
+echo "    user         : ${TARGET_USER}"
+echo "    model        : ${MODEL}"
+echo "    port         : 127.0.0.1:${PORT}"
+echo "    max-model-len: ${MAX_MODEL_LEN}"
+echo "    gpu-mem-util : ${GPU_MEM}"
+echo "    quantization : ${QUANTIZATION:-none (bf16)}"
+echo "    tool-parser  : ${TOOL_PARSER}"
+echo "    enforce-eager: ${ENFORCE_EAGER}"
+echo ""
+
+# ── 1. Install vLLM into the venv ────────────────────────────────────────────
+echo "▶ Installing vLLM into ${VENV_PY} (this can take several minutes)…"
+sudo -u "${TARGET_USER}" "${VENV_PY}" -m pip install --quiet --upgrade vllm
+VLLM_VER="$(sudo -u "${TARGET_USER}" "${VENV_PY}" -c 'import vllm; print(vllm.__version__)' 2>/dev/null || echo '?')"
+echo "  ✓ vLLM ${VLLM_VER}"
+
+# ── 2. Log dir ───────────────────────────────────────────────────────────────
+mkdir -p "$(dirname "${LOG_PATH}")"
+chown -R "${TARGET_USER}:${TARGET_USER}" /var/lib/openteddy 2>/dev/null || true
+
+# ── 3. Build the ExecStart command ───────────────────────────────────────────
+# Assembled as an array so optional flags (quantization / enforce-eager)
+# only appear when set — vLLM rejects empty-string flag values.
+EXEC="${VENV_PY} -m vllm.entrypoints.openai.api_server"
+EXEC="${EXEC} --model ${MODEL}"
+EXEC="${EXEC} --port ${PORT}"
+EXEC="${EXEC} --host 127.0.0.1"
+EXEC="${EXEC} --max-model-len ${MAX_MODEL_LEN}"
+EXEC="${EXEC} --gpu-memory-utilization ${GPU_MEM}"
+EXEC="${EXEC} --enable-auto-tool-choice --tool-call-parser ${TOOL_PARSER}"
+if [ -n "${QUANTIZATION}" ]; then
+  EXEC="${EXEC} --quantization ${QUANTIZATION}"
+fi
+if [ "${ENFORCE_EAGER}" = "true" ]; then
+  EXEC="${EXEC} --enforce-eager"
+fi
+
+# ── 4. systemd unit ──────────────────────────────────────────────────────────
+echo "▶ Writing systemd unit to ${SERVICE_FILE}…"
+cat > "${SERVICE_FILE}" <<EOF
+[Unit]
+Description=OpenTeddy vLLM inference server (${MODEL} on 127.0.0.1:${PORT})
+Documentation=https://github.com/m31527/OpenTeddy
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=${TARGET_USER}
+WorkingDirectory=${OT_HOME}
+Restart=always
+RestartSec=10
+# vLLM cold-start (weight load + optional torch.compile) can take minutes;
+# give systemd a long startup grace so it doesn't kill a healthy-but-slow
+# boot.
+TimeoutStartSec=900
+Environment=HF_HUB_ENABLE_HF_TRANSFER=1
+ExecStart=${EXEC}
+StandardOutput=append:${LOG_PATH}
+StandardError=append:${LOG_PATH}
+
+[Install]
+WantedBy=multi-user.target
+EOF
+echo "  ✓ Unit written"
+
+# ── 5. Enable + start ────────────────────────────────────────────────────────
+echo "▶ Enabling + starting (first boot downloads the model — can be slow)…"
+systemctl daemon-reload
+systemctl enable --now openteddy-vllm.service
+
+# ── 6. Wait for readiness ────────────────────────────────────────────────────
+echo "▶ Waiting for vLLM to come up (polling /v1/models, up to 10 min)…"
+DEADLINE=$(( $(date +%s) + 600 ))
+UP="false"
+while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
+  if curl -sSf "http://127.0.0.1:${PORT}/v1/models" >/dev/null 2>&1; then
+    UP="true"; break
+  fi
+  sleep 5
+done
+
+echo ""
+if [ "${UP}" = "true" ]; then
+  echo "  ✓ vLLM serving on 127.0.0.1:${PORT}"
+else
+  echo "  ⚠ Not up after 10 min. It may still be loading (large model / slow"
+  echo "    download). Check progress:"
+  echo "      sudo journalctl -u openteddy-vllm.service -f"
+  echo "      tail -f ${LOG_PATH}"
+fi
+
+echo ""
+echo "✅ Setup done."
+echo ""
+echo "Point OpenTeddy at vLLM (env vars, or the Settings UI):"
+echo "    OPENTEDDY_LOCAL_ENGINE=vllm"
+echo "    VLLM_BASE_URL=http://127.0.0.1:${PORT}"
+echo "    QWEN_MODEL=${MODEL}"
+echo ""
+echo "Verify the round-trip:"
+echo "    cd ${OT_HOME} && OPENTEDDY_LOCAL_ENGINE=vllm \\"
+echo "      VLLM_BASE_URL=http://127.0.0.1:${PORT} QWEN_MODEL=${MODEL} \\"
+echo "      .venv/bin/python scripts/verify-vllm.py"
+echo ""
+echo "Service control:"
+echo "    sudo systemctl status  openteddy-vllm.service"
+echo "    sudo systemctl restart openteddy-vllm.service"
+echo "    sudo journalctl -u openteddy-vllm.service -f"
+echo ""
+echo "Uninstall:"
+echo "    sudo bash scripts/setup-vllm.sh --uninstall"

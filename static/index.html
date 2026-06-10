@@ -4434,6 +4434,34 @@
                   <input type="text" id="inp_qwen_base_url" data-i18n-placeholder="qwen_url_placeholder" placeholder="http://localhost:11434" />
                 </div>
               </div>
+
+              <!-- Local inference engine — Ollama (default, cross-platform)
+                   vs vLLM (Linux/CUDA only, helps under concurrent fleet
+                   load). The vLLM radio + URL field are disabled on macOS
+                   by renderLocalEngineUI() since vLLM has no Metal build.
+                   The backend (local_engine.py) also hard-gates Darwin, so
+                   this UI gating is belt-and-braces, not the only guard. -->
+              <div style="font-size:0.76rem;color:var(--text-muted);margin-bottom:0.5rem;font-weight:500" data-i18n="local_engine_heading">Local Inference Engine</div>
+              <div class="row" style="margin-bottom:0.75rem">
+                <div class="field" style="flex:0 0 auto">
+                  <label class="radio-inline">
+                    <input type="radio" name="local_engine" value="ollama" id="engine_ollama" onchange="onLocalEngineChange()" checked />
+                    <span data-i18n="local_engine_ollama">Ollama</span>
+                  </label>
+                  <label class="radio-inline" id="engineVllmLabel">
+                    <input type="radio" name="local_engine" value="vllm" id="engine_vllm" onchange="onLocalEngineChange()" />
+                    <span data-i18n="local_engine_vllm">vLLM</span>
+                    <span id="engineVllmHint" style="font-size:0.7rem;color:var(--text-muted)"></span>
+                  </label>
+                </div>
+              </div>
+              <div class="field" id="vllmUrlField" style="margin-bottom:1.25rem" hidden>
+                <label data-i18n="vllm_url_label">vLLM Server URL</label>
+                <input type="text" id="inp_vllm_base_url" placeholder="http://127.0.0.1:8001" />
+                <div style="font-size:0.7rem;color:var(--text-muted);margin-top:0.25rem" data-i18n="vllm_url_hint">
+                  Run scripts/setup-vllm.sh on the server first. Best for nodes serving concurrent load (multiple operators + watcher loops). Single-stream installs gain little over Ollama.
+                </div>
+              </div>
               <!-- #6 Auto-benchmark — passive perf stats from every
                    real task, plus a "your machine runs this slow"
                    suggestion banner when the configured model is below
@@ -9673,6 +9701,16 @@
         }
         _setInput('inp_gemma_base_url', s.gemma_base_url?.value ?? '');
         _setInput('inp_qwen_base_url',  s.qwen_base_url?.value  ?? '');
+        // Local inference engine radio + vLLM URL.
+        const _engine = String(s.local_engine?.value ?? 'ollama').toLowerCase();
+        const _engOllama = document.getElementById('engine_ollama');
+        const _engVllm   = document.getElementById('engine_vllm');
+        if (_engOllama && _engVllm) {
+          _engVllm.checked   = (_engine === 'vllm');
+          _engOllama.checked = (_engine !== 'vllm');
+        }
+        _setInput('inp_vllm_base_url', s.vllm_base_url?.value ?? 'http://127.0.0.1:8001');
+        renderLocalEngineUI();   // apply Mac gating + show/hide the vLLM URL field
         _setInput('inp_agent_workspace_dir', s.agent_workspace_dir?.value ?? './agent-workspace');
         _setInput('inp_telegram_bot_token',       s.telegram_bot_token?.value       ?? '');
         _setInput('inp_telegram_default_chat_id', s.telegram_default_chat_id?.value ?? '');
@@ -10296,6 +10334,44 @@
       }
     }
 
+    // ── Local inference engine (Ollama vs vLLM) ──────────────────────────
+    // vLLM is Linux/CUDA only — no Metal build — so on macOS the radio is
+    // disabled and forced to Ollama. We detect Mac from the UA; the
+    // backend also hard-gates Darwin in local_engine.py, so a wrong UA
+    // sniff can't actually point a Mac at a non-existent vLLM server.
+    function _isMacPlatform() {
+      const p = (navigator.userAgentData?.platform || navigator.platform || '').toLowerCase();
+      return p.includes('mac');
+    }
+    function renderLocalEngineUI() {
+      const isMac    = _isMacPlatform();
+      const vllmRadio = document.getElementById('engine_vllm');
+      const vllmLabel = document.getElementById('engineVllmLabel');
+      const vllmHint  = document.getElementById('engineVllmHint');
+      const urlField  = document.getElementById('vllmUrlField');
+      if (!vllmRadio) return;
+      if (isMac) {
+        // Force Ollama, disable + grey the vLLM option.
+        vllmRadio.checked  = false;
+        vllmRadio.disabled = true;
+        const ollama = document.getElementById('engine_ollama');
+        if (ollama) ollama.checked = true;
+        if (vllmLabel) vllmLabel.style.opacity = '0.45';
+        if (vllmHint)  vllmHint.textContent = ' (Linux/CUDA only)';
+        if (urlField)  urlField.hidden = true;
+        return;
+      }
+      vllmRadio.disabled = false;
+      if (vllmLabel) vllmLabel.style.opacity = '1';
+      if (vllmHint)  vllmHint.textContent = '';
+      if (urlField)  urlField.hidden = !vllmRadio.checked;
+    }
+    function onLocalEngineChange() {
+      const urlField = document.getElementById('vllmUrlField');
+      const vllmRadio = document.getElementById('engine_vllm');
+      if (urlField && vllmRadio) urlField.hidden = !vllmRadio.checked;
+    }
+
     async function saveSettings() {
       const btn = document.getElementById('saveSettingsBtn');
       const msg = document.getElementById('settingsMsg');
@@ -10325,6 +10401,13 @@
         intent_classifier_enabled:   document.getElementById('chk_intent_classifier_enabled').checked ? 'true' : 'false',
         gemma_base_url:            document.getElementById('inp_gemma_base_url').value.trim(),
         qwen_base_url:             document.getElementById('inp_qwen_base_url').value.trim(),
+        // Local inference engine. On macOS we always persist "ollama"
+        // regardless of the radio (it should be disabled there anyway) —
+        // the backend hard-gates Darwin too, but sending the right value
+        // keeps the stored config honest.
+        local_engine:              (_isMacPlatform() ? 'ollama'
+                                     : (document.querySelector('input[name="local_engine"]:checked')?.value || 'ollama')),
+        vllm_base_url:             document.getElementById('inp_vllm_base_url')?.value.trim() || 'http://127.0.0.1:8001',
         escalation_threshold:      document.getElementById('rng_escalation_threshold').value,
         escalation_failure_limit:  document.getElementById('rng_escalation_failure_limit').value,
         default_priority:          document.getElementById('rng_default_priority').value,

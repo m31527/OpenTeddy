@@ -181,6 +181,21 @@ SETTINGS_META: dict[str, dict[str, Any]] = {
                        "— overrides the daemon's own OLLAMA_KEEP_ALIVE env var.",
         "type":        "text",
     },
+    "local_engine": {
+        "label":       "Local Inference Engine",
+        "description": "Backend serving the local executor model: 'ollama' "
+                       "(default, cross-platform) or 'vllm' (Linux/CUDA only, "
+                       "better under concurrent fleet load). macOS is always "
+                       "treated as 'ollama' regardless of this value.",
+        "type":        "text",
+    },
+    "vllm_base_url": {
+        "label":       "vLLM Server URL",
+        "description": "Base URL of the vLLM OpenAI-compatible server. Only "
+                       "used when local_engine='vllm'. Set up via "
+                       "scripts/setup-vllm.sh.",
+        "type":        "text",
+    },
     "escalation_threshold": {
         "label":       "Escalation Confidence Threshold",
         "description": "Escalate to Claude when executor confidence is below this value",
@@ -454,6 +469,8 @@ def _defaults_from_config() -> dict[str, str]:
         "gemma_base_url":           config.gemma_base_url,
         "qwen_base_url":            config.qwen_base_url,
         "ollama_keep_alive":        getattr(config, "ollama_keep_alive", "24h"),
+        "local_engine":             getattr(config, "local_engine", "ollama"),
+        "vllm_base_url":            getattr(config, "vllm_base_url", "http://127.0.0.1:8001"),
         "escalation_threshold":     str(config.escalation_confidence_threshold),
         "escalation_failure_limit": str(config.escalation_failure_limit),
         "gemma_max_tokens":         str(config.gemma_max_tokens),
@@ -759,6 +776,10 @@ class SettingsStore:
             config.gemma_base_url = settings["gemma_base_url"]
         if "qwen_base_url" in settings:
             config.qwen_base_url = settings["qwen_base_url"]
+        if "local_engine" in settings and settings["local_engine"]:
+            config.local_engine = settings["local_engine"].strip().lower()
+        if "vllm_base_url" in settings and settings["vllm_base_url"]:
+            config.vllm_base_url = settings["vllm_base_url"].strip()
         if "ollama_keep_alive" in settings and settings["ollama_keep_alive"]:
             # Non-empty only — clearing the field via the UI keeps the
             # 24h default rather than disabling keep_alive entirely
