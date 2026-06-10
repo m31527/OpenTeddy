@@ -550,7 +550,40 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:  # type: ignore[type-arg]
         name="cyber_skills_autobuild",
     )
 
+    # ── Fleet (optional distributed layer) ────────────────────────────────
+    # Gated entirely on OPENTEDDY_FLEET_ROLE. With role=none (the default —
+    # every desktop / personal install) the fleet package is NEVER imported:
+    # no extra port, no websockets dependency required, no behaviour change.
+    # Only role=orchestrator|worker pulls in fleet/ and starts a node.
+    # See docs/fleet-architecture.md.
+    try:
+        from fleet import fleet_role
+        _role = fleet_role()
+        if _role == "orchestrator":
+            from fleet.orchestrator import start_fleet_orchestrator
+            await start_fleet_orchestrator()
+        elif _role == "worker":
+            from fleet.worker import start_fleet_worker
+            await start_fleet_worker()
+    except Exception as exc:  # noqa: BLE001
+        # Fleet startup failure must never block the core server — a
+        # misconfigured fleet node still serves its local UI / API.
+        logger.warning("Fleet startup skipped/failed (core unaffected): %s", exc)
+
     yield
+
+    # Fleet shutdown — only does anything if a node was actually started.
+    try:
+        from fleet import fleet_role
+        _role = fleet_role()
+        if _role == "orchestrator":
+            from fleet.orchestrator import stop_fleet_orchestrator
+            await stop_fleet_orchestrator()
+        elif _role == "worker":
+            from fleet.worker import stop_fleet_worker
+            await stop_fleet_worker()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Fleet shutdown saw: %s", exc)
 
     try:
         from telegram_bridge import stop as _stop_tg_bridge
@@ -2689,6 +2722,58 @@ async def get_settings() -> dict:
     except Exception as exc:  # noqa: BLE001
         logger.error("GET /settings error: %s", exc)
         return {"success": False, "data": None, "error": str(exc)}
+
+
+# ── Fleet operator endpoints ──────────────────────────────────────────────────
+# Only meaningful on a node running as the fleet orchestrator. On a
+# single-machine install (role=none) get_orchestrator() returns None and
+# these return a clear 409 instead of pretending to be a fleet.
+
+
+@app.get("/fleet/nodes")
+async def fleet_nodes() -> dict:
+    """List nodes known to this orchestrator + their online/role/load."""
+    try:
+        from fleet.orchestrator import get_orchestrator
+    except Exception:  # noqa: BLE001
+        return {"fleet_enabled": False, "nodes": []}
+    orch = get_orchestrator()
+    if orch is None:
+        return {"fleet_enabled": False, "nodes": []}
+    return {"fleet_enabled": True, "nodes": orch.registry()}
+
+
+@app.post("/fleet/dispatch")
+async def fleet_dispatch(body: dict) -> dict:
+    """Dispatch a goal to a specific worker node and await its result.
+
+    Body: {"node_id": "...", "goal": "...", "mode": "code", "timeout_s": 600}
+    """
+    try:
+        from fleet.orchestrator import get_orchestrator
+    except Exception:  # noqa: BLE001
+        from fastapi import HTTPException
+        raise HTTPException(status_code=409, detail="fleet not enabled on this node")
+    orch = get_orchestrator()
+    if orch is None:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=409,
+                            detail="this node is not a fleet orchestrator")
+    node_id = (body.get("node_id") or "").strip()
+    goal = (body.get("goal") or "").strip()
+    if not node_id or not goal:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail="node_id and goal are required")
+    try:
+        result = await orch.dispatch(
+            node_id, goal,
+            mode=body.get("mode", "code"),
+            context=body.get("context") or {},
+            timeout_s=float(body.get("timeout_s", 600)),
+        )
+        return {"success": True, "result": result, "error": None}
+    except (ValueError, TimeoutError) as exc:
+        return {"success": False, "result": None, "error": str(exc)}
 
 
 @app.post("/settings")
