@@ -22,8 +22,12 @@
       padding: .9rem 1.4rem; background: var(--panel);
       border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 5;
     }
-    header h1 { font-size: 1.05rem; font-weight: 800; margin: 0; }
+    header h1 { font-size: 1.05rem; font-weight: 800; margin: 0; display: flex; align-items: center; gap: 0.5rem; }
     header h1 .accent { color: var(--accent); }
+    /* Same brand mark as the main app's sidebar (static/index.html).
+       The logo isn't a portrait, so contain + a height cap keeps it
+       crisp without cropping. */
+    .brand-logo { height: 30px; width: auto; max-width: 48px; object-fit: contain; flex-shrink: 0; }
     .conn { margin-left: auto; display: flex; align-items: center; gap: .4rem; font-size: .8rem; color: var(--muted); }
     .conn .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--off); }
     .conn.live .dot { background: var(--ok); }
@@ -96,7 +100,7 @@
 </head>
 <body>
   <header>
-    <h1>🐻 <span class="accent">OpenTeddy</span> Fleet 中控台</h1>
+    <h1><img src="/static/OpenTeddy-logo.svg" alt="OpenTeddy" class="brand-logo"><span class="accent">OpenTeddy</span> Fleet 中控台</h1>
     <div class="conn" id="conn"><span class="dot"></span><span id="connText">連線中…</span></div>
   </header>
 
