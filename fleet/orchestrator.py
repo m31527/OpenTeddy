@@ -25,11 +25,16 @@ import asyncio
 import json
 import logging
 import uuid
+from collections import deque
 from typing import Any, Dict, List, Optional
 
 from . import protocol as P
 
 logger = logging.getLogger("openteddy.fleet.orchestrator")
+
+# How many recent proactive alerts the central keeps in memory for the
+# console + /fleet/alerts. Older alerts fall off the ring buffer.
+_ALERT_BUFFER_MAX = 200
 
 
 # ── Defaults ──────────────────────────────────────────────────────────────────
@@ -75,6 +80,12 @@ class FleetOrchestrator:
         self._server_task: Optional[asyncio.Task] = None
         # task_id → Future that resolves when the worker sends a result.
         self._pending: Dict[str, asyncio.Future] = {}
+        # Recent proactive alerts pushed by workers' watcher loops. Ring
+        # buffer in memory — the most recent _ALERT_BUFFER_MAX. Survives
+        # nothing on restart (alerts are transient operational signals,
+        # not records of truth); workers re-detect persistent issues on
+        # their next watch cycle.
+        self._alerts: deque = deque(maxlen=_ALERT_BUFFER_MAX)
 
     # ── Registry / status ────────────────────────────────────────────────────
 
@@ -134,6 +145,15 @@ class FleetOrchestrator:
         # order for ties (dict preserves insertion order).
         best = min(pool, key=_running)
         return best.node_id
+
+    # ── Alerts ───────────────────────────────────────────────────────────────
+
+    def alerts(self, limit: int = 50) -> List[Dict[str, Any]]:
+        """Most-recent-first list of proactive alerts pushed by workers'
+        watcher loops. Used by the console's Alerts view + /fleet/alerts."""
+        items = list(self._alerts)
+        items.reverse()
+        return items[:max(1, limit)]
 
     # ── Dispatch ─────────────────────────────────────────────────────────────
 
@@ -261,11 +281,28 @@ class FleetOrchestrator:
             return
 
         if mtype == P.MSG_ALERT:
-            # Milestone 2 — for now just log; later this fans out to
-            # operator notification channels (Telegram / Slack / UI toast).
+            # Proactive anomaly pushed by a worker's watcher loop. Store
+            # it in the ring buffer (for the console + /fleet/alerts) and
+            # fan out to Telegram so an operator who isn't watching the
+            # console still hears about it.
+            severity = frame.get("severity", "warning")
+            observation = frame.get("observation", "")
+            confidence = frame.get("confidence", 0)
             logger.warning("fleet ALERT from %s [%s]: %s (conf=%.2f)",
-                           node.node_id, frame.get("severity"),
-                           frame.get("observation"), frame.get("confidence", 0))
+                           node.node_id, severity, observation, confidence)
+            record = {
+                "node_id":     node.node_id,
+                "role":        node.role,
+                "severity":    severity,
+                "observation": observation,
+                "confidence":  confidence,
+                "ts":          _wall_time(),
+            }
+            self._alerts.append(record)
+            # Fire-and-forget Telegram push; never let a notification
+            # failure disturb the WS frame loop.
+            asyncio.create_task(_notify_alert(record),
+                                name=f"fleet_alert_notify:{node.node_id[:8]}")
             return
 
         logger.debug("fleet: ignoring unexpected frame type %s from %s",
@@ -299,6 +336,37 @@ class FleetOrchestrator:
 def _monotonic() -> float:
     import time
     return time.monotonic()
+
+
+def _wall_time() -> str:
+    """ISO-8601 wall-clock timestamp for an alert record (displayed to
+    the operator; monotonic is wrong for that)."""
+    import datetime
+    return datetime.datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+async def _notify_alert(record: Dict[str, Any]) -> None:
+    """Fan a proactive alert out to the operator's Telegram, reusing the
+    existing bridge. Best-effort: if Telegram isn't configured or the
+    send fails, we log + move on (the alert is still in the ring buffer
+    + console). Never raises into the WS frame loop."""
+    try:
+        from telegram_bridge import _send_reply_chunked
+        from config import config
+        chat_id = (getattr(config, "telegram_default_chat_id", "") or "").strip()
+        if not chat_id:
+            return
+        sev = str(record.get("severity", "warning")).lower()
+        icon = {"info": "ℹ️", "warning": "⚠️", "critical": "🚨"}.get(sev, "⚠️")
+        msg = (
+            f"{icon} Fleet 警報 · {record.get('node_id')} "
+            f"[{record.get('role', '?')}]\n"
+            f"嚴重度：{sev} · 信心：{record.get('confidence', 0):.2f}\n\n"
+            f"{record.get('observation', '')}"
+        )
+        await _send_reply_chunked(str(chat_id), msg)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("fleet: alert Telegram notify skipped/failed: %s", exc)
 
 
 # ── Module-level singleton + lifespan hooks ───────────────────────────────────

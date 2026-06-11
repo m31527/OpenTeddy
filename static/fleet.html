@@ -98,6 +98,22 @@
     .spinner { display: inline-block; width: 12px; height: 12px; border: 2px solid rgba(196,109,79,.3); border-top-color: var(--accent); border-radius: 50%; animation: spin .7s linear infinite; }
     @keyframes spin { to { transform: rotate(360deg); } }
     .hint { font-size: .76rem; color: var(--muted); }
+
+    /* Alert cards */
+    .alert { background: var(--panel); border: 1px solid var(--border); border-left-width: 4px; border-radius: 10px; padding: .75rem .9rem; box-shadow: var(--shadow); }
+    .alert.info     { border-left-color: var(--off); }
+    .alert.warning  { border-left-color: var(--busy); }
+    .alert.critical { border-left-color: var(--err); }
+    .alert-head { display: flex; align-items: center; gap: .5rem; font-size: .8rem; margin-bottom: .35rem; }
+    .alert-node { font-weight: 700; }
+    .alert-sev { font-size: .68rem; padding: .08rem .45rem; border-radius: 5px; font-weight: 700; }
+    .alert-sev.info { background: rgba(176,170,160,.18); color: var(--muted); }
+    .alert-sev.warning { background: rgba(217,154,43,.15); color: var(--busy); }
+    .alert-sev.critical { background: rgba(192,57,43,.13); color: var(--err); }
+    .alert-conf { color: var(--muted); font-size: .72rem; }
+    .alert-time { margin-left: auto; color: var(--muted); font-size: .72rem; }
+    .alert-body { font-size: .85rem; white-space: pre-wrap; word-break: break-word; color: var(--text); }
+    .nav-btn .count.crit { color: #ff8a7a; font-weight: 700; }
   </style>
 </head>
 <body>
@@ -113,6 +129,9 @@
       </button>
       <button class="nav-btn" id="navPlayground" onclick="showView('playground')">
         <span class="ico">🎯</span><span>Playground</span>
+      </button>
+      <button class="nav-btn" id="navAlerts" onclick="showView('alerts')">
+        <span class="ico">🔔</span><span>Alerts</span><span class="count" id="alertsCount"></span>
       </button>
     </nav>
     <div class="sidebar-foot">
@@ -160,6 +179,13 @@
       <div class="section-title">任務結果 <button class="ghost" style="font-size:.72rem;padding:.2rem .6rem" onclick="clearFeed()">清空</button></div>
       <div class="feed" id="feed"><div class="empty">尚無任務。輸入目標、按「自動派發」。</div></div>
     </section>
+
+    <!-- Alerts view -->
+    <section class="view" id="view-alerts">
+      <h2 class="view-title">Alerts</h2>
+      <p class="view-sub">節點 watcher 主動回報的異常（沒人問也會報警）。每 4 秒自動更新。</p>
+      <div class="feed" id="alerts"><div class="empty">目前沒有警報。節點 watcher 偵測到異常時會出現在這裡。</div></div>
+    </section>
   </main>
 
   <script>
@@ -168,13 +194,17 @@
     let _feed = [];   // {id, node, auto, goal, mode, status, summary, started}
     let _view = 'workers';
 
+    let _alerts = [];
+
     // ── View switching ─────────────────────────────────────────────
     function showView(v) {
       _view = v;
-      document.getElementById('view-workers').classList.toggle('active', v === 'workers');
-      document.getElementById('view-playground').classList.toggle('active', v === 'playground');
+      for (const name of ['workers', 'playground', 'alerts']) {
+        document.getElementById('view-' + name).classList.toggle('active', v === name);
+      }
       document.getElementById('navWorkers').classList.toggle('active', v === 'workers');
       document.getElementById('navPlayground').classList.toggle('active', v === 'playground');
+      document.getElementById('navAlerts').classList.toggle('active', v === 'alerts');
     }
 
     // ── Polling ────────────────────────────────────────────────────
@@ -190,6 +220,45 @@
         renderAutoHint();
       } catch (e) {
         setConn('', '無法連線');
+      }
+      // Pull alerts on the same tick.
+      try {
+        const ar = await fetch('/fleet/alerts?limit=50', { cache: 'no-store' });
+        const adata = await ar.json();
+        _alerts = adata.alerts || [];
+        renderAlerts();
+      } catch (e) { /* leave previous alerts */ }
+    }
+
+    function renderAlerts() {
+      // Nav badge: total, highlighted red if any critical.
+      const badge = document.getElementById('alertsCount');
+      const crit = _alerts.filter(a => (a.severity || '').toLowerCase() === 'critical').length;
+      badge.textContent = _alerts.length ? String(_alerts.length) : '';
+      badge.className = 'count' + (crit ? ' crit' : '');
+
+      const wrap = document.getElementById('alerts');
+      if (!_alerts.length) {
+        wrap.innerHTML = '<div class="empty">目前沒有警報。節點 watcher 偵測到異常時會出現在這裡。</div>';
+        return;
+      }
+      wrap.innerHTML = '';
+      for (const a of _alerts) {
+        const sev = (a.severity || 'warning').toLowerCase();
+        const el = document.createElement('div');
+        el.className = 'alert ' + sev;
+        const sevText = { info: 'ℹ️ info', warning: '⚠️ warning', critical: '🚨 critical' }[sev] || sev;
+        const t = (a.ts || '').replace('T', ' ').slice(0, 19);
+        el.innerHTML = `
+          <div class="alert-head">
+            <span class="alert-node">${esc(a.node_id)}</span>
+            <span class="node-role">${esc(a.role || '?')}</span>
+            <span class="alert-sev ${sev}">${sevText}</span>
+            <span class="alert-conf">信心 ${(a.confidence != null ? a.confidence : 0).toFixed ? a.confidence.toFixed(2) : a.confidence}</span>
+            <span class="alert-time">${esc(t)}</span>
+          </div>
+          <div class="alert-body">${esc(a.observation || '')}</div>`;
+        wrap.appendChild(el);
       }
     }
 

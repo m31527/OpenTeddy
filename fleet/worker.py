@@ -105,8 +105,23 @@ class FleetWorker:
             logger.info("fleet worker: registered with central as id=%s role=%s",
                         _node_id(), _node_role())
 
-            # ── Heartbeat + receive concurrently ──
+            # ── Heartbeat + watcher + receive concurrently ──
             hb_task = asyncio.create_task(self._heartbeat_loop(ws))
+            # Watcher pushes proactive alerts over THIS socket. It only
+            # actually starts if OPENTEDDY_FLEET_WATCH_ENABLED is set;
+            # otherwise start() is a no-op. We give it a send closure
+            # bound to this connection so a reconnect gets a fresh one.
+            watcher = None
+            try:
+                from .watcher import FleetWatcher
+
+                async def _send(frame: Dict[str, Any]) -> None:
+                    await ws.send(json.dumps(frame))
+
+                watcher = FleetWatcher(_node_id(), _send, _get_local_orchestrator)
+                watcher.start()
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("fleet worker: watcher not started: %s", exc)
             try:
                 async for raw in ws:
                     try:
@@ -117,6 +132,8 @@ class FleetWorker:
                     await self._on_frame(ws, frame)
             finally:
                 hb_task.cancel()
+                if watcher is not None:
+                    await watcher.stop()
 
     async def _heartbeat_loop(self, ws: Any) -> None:
         while not self._stop.is_set():

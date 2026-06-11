@@ -2755,6 +2755,20 @@ async def fleet_nodes() -> dict:
     return {"fleet_enabled": True, "nodes": orch.registry()}
 
 
+@app.get("/fleet/alerts")
+async def fleet_alerts(limit: int = 50) -> dict:
+    """Recent proactive alerts pushed by workers' watcher loops, newest
+    first. Returns fleet_enabled:false on a non-orchestrator node."""
+    try:
+        from fleet.orchestrator import get_orchestrator
+    except Exception:  # noqa: BLE001
+        return {"fleet_enabled": False, "alerts": []}
+    orch = get_orchestrator()
+    if orch is None:
+        return {"fleet_enabled": False, "alerts": []}
+    return {"fleet_enabled": True, "alerts": orch.alerts(limit=limit)}
+
+
 @app.post("/fleet/dispatch")
 async def fleet_dispatch(body: dict) -> dict:
     """Dispatch a goal to a specific worker node and await its result.
