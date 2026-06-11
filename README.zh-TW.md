@@ -278,6 +278,72 @@ curl -s http://<server>:8000/admin/telegram/status | jq
 
 回 bridge 當下的狀態 — `running`、`inbound_enabled`、`token_set`、白名單實際內容、**最近一次被沈默丟掉的 chat_id**（這個是「為什麼我發訊息沒回」的最快答案），以及哪些 chat 正在跑 task。Token 不會回傳，只回一個 bool flag 表示有沒有設。
 
+## Fleet — 分散式「AI 大腦群」（可選）
+
+把多台 OpenTeddy 串成一個叢集：**中控**節點派任務給 **worker** 節點（每台用自己的模型 + 工具 + 資料執行），worker 的 watcher 迴圈發現異常時還會**主動推 alert**。為 5–10 台 NVIDIA DGX Spark 設計，但任何能互連的安裝都能用。
+
+**預設關閉 — 對單機版零影響。** 沒設 `OPENTEDDY_FLEET_ROLE` 就不會 import `fleet/` 任何東西。桌面 / 個人用戶完全不用碰，沒有任何 fleet 的 `.env` 是必填的。
+
+### 先在單機試（不用第二台機器）
+
+```bash
+bash scripts/fleet-demo.sh   # 同一台機器內起中控+worker → 🎉 PASSED
+```
+
+### 真多機 — 每個角色一份 `.env`
+
+**步驟 1 — 產一個共用 token，每台填一樣的值：**
+
+```bash
+openssl rand -hex 32          # 複製輸出
+```
+
+**步驟 2 — 中控節點（只有一台）。** 加進它的 `.env`：
+
+```bash
+OPENTEDDY_FLEET_TOKEN=<步驟 1 的 token>
+OPENTEDDY_FLEET_ROLE=orchestrator
+OPENTEDDY_FLEET_PORT=8770
+```
+
+**步驟 3 — 每個 worker 節點。** 加進它的 `.env`：
+
+```bash
+OPENTEDDY_FLEET_TOKEN=<一樣的 token>
+OPENTEDDY_FLEET_ROLE=worker
+OPENTEDDY_FLEET_CENTRAL=ws://<中控主機名或IP>:8770
+OPENTEDDY_FLEET_NODE_ID=dgx-02            # 這台的名字
+OPENTEDDY_FLEET_NODE_ROLE=finance         # 職責：finance / secops / …
+# 可選 — 主動監控：
+OPENTEDDY_FLEET_WATCH_ENABLED=1
+OPENTEDDY_FLEET_WATCH_PROMPT=檢查 /data/finance 最近一小時是否有異常大額付款
+```
+
+有附完整註解的範本可直接用：
+`cat fleet/env.orchestrator.example >> .env`（中控）/
+`cat fleet/env.worker.example >> .env`（worker）。
+
+**步驟 4 — 各節點重啟，然後在中控測試：**
+
+```bash
+# 列出連入的節點
+curl -s http://localhost:8000/fleet/nodes | python3 -m json.tool
+
+# 派任務（自動挑一台空閒的 worker）
+curl -s -X POST http://localhost:8000/fleet/dispatch \
+  -H 'Content-Type: application/json' \
+  -d '{"node_id":"auto","goal":"整理今日 GitHub trending top 5","mode":"code"}' \
+  | python3 -m json.tool
+
+# worker watcher 主動推的警報
+curl -s http://localhost:8000/fleet/alerts | python3 -m json.tool
+```
+
+或直接開**網頁中控台** `http://<中控>:8000/fleet` —— 三個分頁：**Workers**（即時狀態）、**Playground**（輸入任務 → 自動挑空閒節點）、**Alerts**（主動異常回報）。
+
+完整指南：[`fleet/README.md`](fleet/README.md) ·
+設計文件：[`docs/fleet-architecture.md`](docs/fleet-architecture.md)。
+
 ## 平台支援
 
 | 作業系統 | 狀態 | 備註 |

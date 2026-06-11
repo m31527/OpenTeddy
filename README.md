@@ -528,6 +528,81 @@ Returns the bridge's runtime state — `running`, `inbound_enabled`,
 `chat_id` (the single fastest answer to "why isn't my bot replying?"),
 and any in-flight chats. Token is never returned, only a boolean flag.
 
+## Fleet — distributed "AI brain cluster" (optional)
+
+Turn several OpenTeddy installs into one cluster: a **central** node
+dispatches goals to **worker** nodes (each runs the goal on its own
+model + tools + data), and workers proactively push **alerts** when their
+watcher loop spots an anomaly. Built for 5–10 node NVIDIA DGX Spark
+fleets but works on any networked installs.
+
+**Off by default — zero impact on single-machine installs.** Nothing in
+`fleet/` is imported unless `OPENTEDDY_FLEET_ROLE` is set. Desktop /
+personal users never touch any of this; no `.env` fleet keys are
+required.
+
+### Try it on one machine first (no second box needed)
+
+```bash
+bash scripts/fleet-demo.sh   # in-process central+worker → 🎉 PASSED
+```
+
+### Real multi-node — `.env` per role
+
+**Step 1 — one shared token, same value on every node:**
+
+```bash
+openssl rand -hex 32          # copy the output
+```
+
+**Step 2 — the central node (exactly one).** Append to its `.env`:
+
+```bash
+OPENTEDDY_FLEET_TOKEN=<the token from step 1>
+OPENTEDDY_FLEET_ROLE=orchestrator
+OPENTEDDY_FLEET_PORT=8770
+```
+
+**Step 3 — each worker node.** Append to its `.env`:
+
+```bash
+OPENTEDDY_FLEET_TOKEN=<the SAME token>
+OPENTEDDY_FLEET_ROLE=worker
+OPENTEDDY_FLEET_CENTRAL=ws://<central-host-or-ip>:8770
+OPENTEDDY_FLEET_NODE_ID=dgx-02            # a name for this node
+OPENTEDDY_FLEET_NODE_ROLE=finance         # its job: finance / secops / …
+# optional — proactive monitoring:
+OPENTEDDY_FLEET_WATCH_ENABLED=1
+OPENTEDDY_FLEET_WATCH_PROMPT=檢查 /data/finance 最近一小時是否有異常大額付款
+```
+
+Ready-made templates with full comments:
+`cat fleet/env.orchestrator.example >> .env` (central) /
+`cat fleet/env.worker.example >> .env` (worker).
+
+**Step 4 — restart each node, then test from the central:**
+
+```bash
+# list connected nodes
+curl -s http://localhost:8000/fleet/nodes | python3 -m json.tool
+
+# dispatch a goal (auto-picks an idle worker)
+curl -s -X POST http://localhost:8000/fleet/dispatch \
+  -H 'Content-Type: application/json' \
+  -d '{"node_id":"auto","goal":"整理今日 GitHub trending top 5","mode":"code"}' \
+  | python3 -m json.tool
+
+# proactive alerts pushed by workers' watchers
+curl -s http://localhost:8000/fleet/alerts | python3 -m json.tool
+```
+
+Or just open the **web console** at `http://<central>:8000/fleet` —
+three tabs: **Workers** (live status), **Playground** (type a goal → it
+auto-picks an idle worker), **Alerts** (proactive anomaly reports).
+
+Full guide: [`fleet/README.md`](fleet/README.md) ·
+design: [`docs/fleet-architecture.md`](docs/fleet-architecture.md).
+
 ## API
 
 | Method | Endpoint | Description |
