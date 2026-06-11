@@ -2730,6 +2730,18 @@ async def get_settings() -> dict:
 # these return a clear 409 instead of pretending to be a fleet.
 
 
+@app.get("/fleet")
+async def fleet_console() -> FileResponse:
+    """Serve the fleet control console (static/fleet.html). Works on any
+    node — on a non-orchestrator it just shows 'fleet not enabled' since
+    /fleet/nodes returns fleet_enabled:false there."""
+    path = os.path.join(_static_dir, "fleet.html")
+    if not os.path.isfile(path):
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="fleet console not found")
+    return FileResponse(path, media_type="text/html")
+
+
 @app.get("/fleet/nodes")
 async def fleet_nodes() -> dict:
     """List nodes known to this orchestrator + their online/role/load."""
