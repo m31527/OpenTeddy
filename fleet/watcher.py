@@ -186,7 +186,9 @@ class FleetWatcher:
             id=str(uuid.uuid4()),
             goal=_build_prompt(),
             context={"triggered_by": "fleet_watcher"},
-            priority=0,
+            # TaskRequest enforces priority >= 1; watcher checks are
+            # low-priority but can't go below 1.
+            priority=1,
             session_id=f"watch-{self._node_id}",
             mode=SessionMode.CODE,
         )

@@ -880,9 +880,20 @@ class Orchestrator:
                     intent["confidence"],
                     intent.get("rationale", "")[:80],
                 )
-                return await self._fast_chat_response(
-                    req, session_mode, intent,
-                )
+                # Fast-path can bail (empty model response) by raising —
+                # that's a signal to fall through to the full plan→execute
+                # flow, NOT to fail the whole task. Without this try the
+                # RuntimeError propagated and the dispatch died with
+                # "fast-path empty response".
+                try:
+                    return await self._fast_chat_response(
+                        req, session_mode, intent,
+                    )
+                except RuntimeError as exc:
+                    logger.info(
+                        "Fast-path bailed (%s) — continuing to full flow", exc
+                    )
+                    # fall through to the planner below
 
         try:
             # 1. Plan (with optional memory context)
