@@ -97,6 +97,44 @@ class FleetOrchestrator:
             })
         return out
 
+    # ── Auto node selection ──────────────────────────────────────────────────
+
+    def pick_node(self, role: Optional[str] = None) -> Optional[str]:
+        """Choose a node to run a goal when the operator didn't pick one.
+
+        Policy:
+          1. Consider only ONLINE nodes (recent heartbeat). Optionally
+             filter to a `role`.
+          2. Prefer an IDLE node (status != busy AND 0 running tasks).
+             Among idle nodes, any is fine — pick the one with the
+             smallest running_tasks (ties → first registered).
+          3. If none are idle, fall back to the LEAST-LOADED online node
+             (smallest running_tasks) so the goal queues on whoever has
+             the shortest line rather than failing.
+        Returns a node_id, or None if there are no eligible online nodes.
+        """
+        now = _monotonic()
+        online = [
+            n for n in self._nodes.values()
+            if n.last_seen and (now - n.last_seen) <= _HEARTBEAT_TIMEOUT_S
+            and (role is None or n.role == role)
+        ]
+        if not online:
+            return None
+
+        def _running(n: "_Node") -> int:
+            try:
+                return int((n.last_load or {}).get("running_tasks", 0))
+            except (TypeError, ValueError):
+                return 0
+
+        idle = [n for n in online if n.status != "busy" and _running(n) == 0]
+        pool = idle if idle else online
+        # Smallest running_tasks wins; stable order preserves registration
+        # order for ties (dict preserves insertion order).
+        best = min(pool, key=_running)
+        return best.node_id
+
     # ── Dispatch ─────────────────────────────────────────────────────────────
 
     async def dispatch(

@@ -3,155 +3,193 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>OpenTeddy Fleet — 中控台</title>
+  <title>OpenTeddy Enterprise</title>
   <style>
     :root {
       --bg: #faf9f7; --panel: #ffffff; --border: #e8e4dd; --border-strong: #d8d2c8;
       --text: #1a1a1a; --muted: #6b6961; --accent: #c46d4f; --accent-dark: #b25d40;
       --ok: #2e9e6b; --busy: #d99a2b; --off: #b0aaa0; --err: #c0392b;
       --shadow: 0 1px 3px rgba(0,0,0,.06);
+      --sidebar-bg: #1f1b17; --sidebar-text: #ece7e0; --sidebar-muted: #9b948a;
+      --sidebar-hover: rgba(255,255,255,.07); --sidebar-active: rgba(196,109,79,.28);
+      --sidebar-border: rgba(255,255,255,.08);
     }
     * { box-sizing: border-box; }
     body {
       margin: 0; background: var(--bg); color: var(--text);
       font-family: -apple-system, "SF Pro Text", "PingFang TC", "Segoe UI", system-ui, sans-serif;
       font-size: 14px; line-height: 1.5;
+      display: flex; min-height: 100vh;
     }
-    header {
-      display: flex; align-items: center; gap: .8rem;
-      padding: .9rem 1.4rem; background: var(--panel);
-      border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 5;
+
+    /* ── Sidebar ──────────────────────────────────────────────────── */
+    .sidebar {
+      width: 220px; flex-shrink: 0; background: var(--sidebar-bg);
+      color: var(--sidebar-text); display: flex; flex-direction: column;
+      position: sticky; top: 0; height: 100vh;
     }
-    header h1 { font-size: 1.05rem; font-weight: 800; margin: 0; display: flex; align-items: center; gap: 0.5rem; }
-    header h1 .accent { color: var(--accent); }
-    /* Same brand mark as the main app's sidebar (static/index.html).
-       The logo isn't a portrait, so contain + a height cap keeps it
-       crisp without cropping. */
-    .brand-logo { height: 30px; width: auto; max-width: 48px; object-fit: contain; flex-shrink: 0; }
-    .conn { margin-left: auto; display: flex; align-items: center; gap: .4rem; font-size: .8rem; color: var(--muted); }
-    .conn .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--off); }
+    .sidebar-brand { display: flex; align-items: center; gap: .55rem; padding: 1rem 1.1rem .9rem; }
+    .sidebar-brand img { height: 28px; width: auto; max-width: 44px; object-fit: contain; }
+    .sidebar-brand .name { font-weight: 800; font-size: .98rem; }
+    .sidebar-brand .name .accent { color: var(--accent); }
+    .sidebar-nav { padding: .4rem .6rem; display: flex; flex-direction: column; gap: 2px; }
+    .nav-btn {
+      display: flex; align-items: center; gap: .6rem; width: 100%;
+      background: transparent; border: none; color: var(--sidebar-text);
+      padding: .55rem .7rem; border-radius: 8px; cursor: pointer; text-align: left;
+      font: inherit; transition: background .1s;
+    }
+    .nav-btn:hover { background: var(--sidebar-hover); }
+    .nav-btn.active { background: var(--sidebar-active); }
+    .nav-btn .ico { font-size: 1rem; width: 18px; text-align: center; }
+    .nav-btn .count { margin-left: auto; font-size: .72rem; color: var(--sidebar-muted); font-variant-numeric: tabular-nums; }
+    .sidebar-foot { margin-top: auto; padding: .9rem 1.1rem; border-top: 1px solid var(--sidebar-border); }
+    .conn { display: flex; align-items: center; gap: .45rem; font-size: .76rem; color: var(--sidebar-muted); }
+    .conn .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--off); flex-shrink: 0; }
     .conn.live .dot { background: var(--ok); }
     .conn.disabled .dot { background: var(--err); }
-    main { padding: 1.4rem; max-width: 1100px; margin: 0 auto; }
+
+    /* ── Content ──────────────────────────────────────────────────── */
+    .content { flex: 1; min-width: 0; padding: 1.6rem 2rem; max-width: 1000px; }
+    .view-title { font-size: 1.3rem; font-weight: 800; margin: 0 0 .3rem; }
+    .view-sub { color: var(--muted); font-size: .85rem; margin: 0 0 1.4rem; }
+    .view { display: none; }
+    .view.active { display: block; }
     .section-title { font-size: .78rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 600; margin: 1.6rem 0 .6rem; }
-    .section-title:first-child { margin-top: 0; }
 
     /* Node cards */
     .nodes { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: .9rem; }
-    .node {
-      background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
-      padding: .9rem 1rem; box-shadow: var(--shadow); cursor: pointer;
-      transition: border-color .12s, transform .08s;
-    }
-    .node:hover { border-color: var(--accent); }
-    .node.selected { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(196,109,79,.18); }
+    .node { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: .9rem 1rem; box-shadow: var(--shadow); }
     .node-head { display: flex; align-items: center; gap: .5rem; margin-bottom: .35rem; }
     .node-id { font-weight: 700; font-size: .95rem; }
     .node-status { margin-left: auto; display: flex; align-items: center; gap: .35rem; font-size: .74rem; color: var(--muted); }
     .node-status .dot { width: 9px; height: 9px; border-radius: 50%; }
-    .dot.online { background: var(--ok); } .dot.offline { background: var(--off); }
-    .dot.idle { background: var(--ok); } .dot.busy { background: var(--busy); }
+    .dot.idle { background: var(--ok); } .dot.busy { background: var(--busy); } .dot.offline { background: var(--off); }
     .node-role { display: inline-block; font-size: .7rem; color: var(--accent-dark); background: rgba(196,109,79,.1); border-radius: 6px; padding: .1rem .45rem; font-weight: 600; }
     .node-meta { font-size: .76rem; color: var(--muted); margin-top: .5rem; line-height: 1.7; }
     .node-meta code { background: var(--bg); padding: .05rem .3rem; border-radius: 4px; font-size: .72rem; }
     .empty { color: var(--muted); font-size: .85rem; padding: 1.2rem; text-align: center; border: 1px dashed var(--border-strong); border-radius: 10px; }
 
     /* Dispatch panel */
-    .dispatch {
-      background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
-      padding: 1rem 1.1rem; box-shadow: var(--shadow);
-    }
+    .dispatch { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 1rem 1.1rem; box-shadow: var(--shadow); }
     .dispatch label { display: block; font-size: .76rem; color: var(--muted); font-weight: 600; margin-bottom: .3rem; }
-    .dispatch .target { font-weight: 700; color: var(--accent-dark); }
     .row { display: flex; gap: .6rem; align-items: stretch; }
-    textarea#goal {
-      width: 100%; min-height: 64px; resize: vertical; padding: .55rem .7rem;
-      border: 1px solid var(--border-strong); border-radius: 8px; font: inherit;
-      background: var(--bg);
-    }
-    select#mode { padding: .5rem .6rem; border: 1px solid var(--border-strong); border-radius: 8px; font: inherit; background: var(--bg); }
-    button {
-      font: inherit; font-weight: 600; cursor: pointer; border: none; border-radius: 8px;
-      padding: .55rem 1.1rem; background: var(--accent); color: #fff; transition: filter .1s, transform .06s;
-    }
+    textarea#goal { width: 100%; min-height: 70px; resize: vertical; padding: .55rem .7rem; border: 1px solid var(--border-strong); border-radius: 8px; font: inherit; background: var(--bg); }
+    select#mode, select#roleFilter { padding: .5rem .6rem; border: 1px solid var(--border-strong); border-radius: 8px; font: inherit; background: var(--bg); }
+    button { font: inherit; font-weight: 600; cursor: pointer; border: none; border-radius: 8px; padding: .55rem 1.1rem; background: var(--accent); color: #fff; transition: filter .1s, transform .06s; }
     button:hover { filter: brightness(1.06); } button:active { transform: scale(.98); }
     button:disabled { background: var(--off); cursor: not-allowed; filter: none; }
     button.ghost { background: transparent; color: var(--muted); border: 1px solid var(--border-strong); }
+    .auto-hint { font-size: .76rem; color: var(--muted); margin-top: .5rem; }
 
     /* Result feed */
     .feed { display: flex; flex-direction: column; gap: .7rem; }
-    .task {
-      background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
-      padding: .75rem .9rem; box-shadow: var(--shadow);
-    }
+    .task { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: .75rem .9rem; box-shadow: var(--shadow); }
     .task-head { display: flex; align-items: center; gap: .5rem; font-size: .8rem; margin-bottom: .4rem; }
     .task-node { font-weight: 700; }
+    .task-auto { font-size: .66rem; color: var(--accent-dark); background: rgba(196,109,79,.1); border-radius: 5px; padding: .05rem .35rem; font-weight: 600; }
     .task-badge { font-size: .68rem; padding: .08rem .45rem; border-radius: 5px; font-weight: 700; }
     .task-badge.running { background: rgba(217,154,43,.15); color: var(--busy); }
     .task-badge.completed { background: rgba(46,158,107,.13); color: var(--ok); }
     .task-badge.failed { background: rgba(192,57,43,.12); color: var(--err); }
     .task-time { margin-left: auto; color: var(--muted); font-size: .72rem; }
     .task-goal { font-size: .82rem; color: var(--muted); margin-bottom: .4rem; }
-    .task-summary { font-size: .85rem; white-space: pre-wrap; word-break: break-word; max-height: 320px; overflow: auto; background: var(--bg); border-radius: 8px; padding: .6rem .75rem; }
+    .task-summary { font-size: .85rem; white-space: pre-wrap; word-break: break-word; max-height: 360px; overflow: auto; background: var(--bg); border-radius: 8px; padding: .6rem .75rem; }
     .spinner { display: inline-block; width: 12px; height: 12px; border: 2px solid rgba(196,109,79,.3); border-top-color: var(--accent); border-radius: 50%; animation: spin .7s linear infinite; }
     @keyframes spin { to { transform: rotate(360deg); } }
     .hint { font-size: .76rem; color: var(--muted); }
   </style>
 </head>
 <body>
-  <header>
-    <h1><img src="/static/OpenTeddy-logo.svg" alt="OpenTeddy" class="brand-logo"><span class="accent">OpenTeddy</span> Fleet 中控台</h1>
-    <div class="conn" id="conn"><span class="dot"></span><span id="connText">連線中…</span></div>
-  </header>
-
-  <main>
-    <div class="section-title">節點 <span id="nodeCount" class="hint"></span></div>
-    <div class="nodes" id="nodes">
-      <div class="empty">讀取節點中…</div>
+  <!-- ── Sidebar ──────────────────────────────────────────────────── -->
+  <aside class="sidebar">
+    <div class="sidebar-brand">
+      <img src="/static/OpenTeddy-logo.svg" alt="OpenTeddy" />
+      <span class="name"><span class="accent">OpenTeddy</span> Enterprise</span>
     </div>
+    <nav class="sidebar-nav">
+      <button class="nav-btn active" id="navWorkers" onclick="showView('workers')">
+        <span class="ico">🖥️</span><span>Workers</span><span class="count" id="workersCount"></span>
+      </button>
+      <button class="nav-btn" id="navPlayground" onclick="showView('playground')">
+        <span class="ico">🎯</span><span>Playground</span>
+      </button>
+    </nav>
+    <div class="sidebar-foot">
+      <div class="conn" id="conn"><span class="dot"></span><span id="connText">連線中…</span></div>
+    </div>
+  </aside>
 
-    <div class="section-title">派發任務</div>
-    <div class="dispatch">
-      <label>目標節點：<span class="target" id="targetNode">（點上方節點卡片選擇）</span></label>
-      <textarea id="goal" placeholder="輸入要這個節點執行的任務，例如：用 github_trending 抓今日熱門前 5 名"></textarea>
-      <div class="row" style="margin-top:.6rem">
-        <div>
-          <label>模式</label>
-          <select id="mode">
-            <option value="code">code（自主執行 / 用工具）</option>
-            <option value="chat">chat（純對話 / 快）</option>
-            <option value="analytic">analytic（資料分析）</option>
-          </select>
+  <!-- ── Content ──────────────────────────────────────────────────── -->
+  <main class="content">
+    <!-- Workers view -->
+    <section class="view active" id="view-workers">
+      <h2 class="view-title">Workers</h2>
+      <p class="view-sub">所有連入此中控的節點狀態（每 4 秒自動更新）。</p>
+      <div class="nodes" id="nodes"><div class="empty">讀取節點中…</div></div>
+    </section>
+
+    <!-- Playground view -->
+    <section class="view" id="view-playground">
+      <h2 class="view-title">Playground</h2>
+      <p class="view-sub">輸入任務，系統會自動挑一台空閒的節點執行；若都忙，丟給排隊最短的那台。</p>
+
+      <div class="dispatch">
+        <label>任務目標</label>
+        <textarea id="goal" placeholder="例如：用 github_trending 抓今日熱門前 5 名"></textarea>
+        <div class="row" style="margin-top:.6rem; flex-wrap:wrap">
+          <div>
+            <label>模式</label>
+            <select id="mode">
+              <option value="code">code（自主執行 / 用工具）</option>
+              <option value="chat">chat（純對話 / 快）</option>
+              <option value="analytic">analytic（資料分析）</option>
+            </select>
+          </div>
+          <div>
+            <label>限定角色（可選）</label>
+            <select id="roleFilter"><option value="">不限</option></select>
+          </div>
+          <div style="margin-left:auto; align-self:flex-end">
+            <button id="dispatchBtn" onclick="dispatch()">▶ 自動派發</button>
+          </div>
         </div>
-        <div style="margin-left:auto; align-self:flex-end">
-          <button id="dispatchBtn" onclick="dispatch()" disabled>▶ 派發</button>
-        </div>
+        <div class="auto-hint" id="autoHint">目前可派發的空閒節點：讀取中…</div>
       </div>
-    </div>
 
-    <div class="section-title">任務結果 <button class="ghost" style="font-size:.72rem;padding:.2rem .6rem" onclick="clearFeed()">清空</button></div>
-    <div class="feed" id="feed">
-      <div class="empty">尚無任務。選一個節點、輸入目標、按「派發」。</div>
-    </div>
+      <div class="section-title">任務結果 <button class="ghost" style="font-size:.72rem;padding:.2rem .6rem" onclick="clearFeed()">清空</button></div>
+      <div class="feed" id="feed"><div class="empty">尚無任務。輸入目標、按「自動派發」。</div></div>
+    </section>
   </main>
 
   <script>
     const POLL_MS = 4000;
-    let _selectedNode = null;
     let _nodes = [];
-    let _feed = [];   // {id, node, goal, mode, status, summary, started}
+    let _feed = [];   // {id, node, auto, goal, mode, status, summary, started}
+    let _view = 'workers';
 
-    // ── Node polling ──────────────────────────────────────────────────
+    // ── View switching ─────────────────────────────────────────────
+    function showView(v) {
+      _view = v;
+      document.getElementById('view-workers').classList.toggle('active', v === 'workers');
+      document.getElementById('view-playground').classList.toggle('active', v === 'playground');
+      document.getElementById('navWorkers').classList.toggle('active', v === 'workers');
+      document.getElementById('navPlayground').classList.toggle('active', v === 'playground');
+    }
+
+    // ── Polling ────────────────────────────────────────────────────
     async function pollNodes() {
       try {
         const r = await fetch('/fleet/nodes', { cache: 'no-store' });
         const data = await r.json();
         setConn(data.fleet_enabled ? 'live' : 'disabled',
-                data.fleet_enabled ? '中控運作中' : '此節點非中控（fleet 未啟用）');
+                data.fleet_enabled ? '中控運作中' : '非中控節點');
         _nodes = data.nodes || [];
         renderNodes();
+        renderRoleFilter();
+        renderAutoHint();
       } catch (e) {
-        setConn('', '無法連線到後端');
+        setConn('', '無法連線');
       }
     }
 
@@ -163,8 +201,8 @@
 
     function renderNodes() {
       const wrap = document.getElementById('nodes');
-      document.getElementById('nodeCount').textContent =
-        _nodes.length ? `(${_nodes.filter(n=>n.online).length}/${_nodes.length} 在線)` : '';
+      const online = _nodes.filter(n => n.online).length;
+      document.getElementById('workersCount').textContent = _nodes.length ? `${online}/${_nodes.length}` : '';
       if (!_nodes.length) {
         wrap.innerHTML = '<div class="empty">尚無節點連入。在 worker 節點設定 .env（見 fleet/env.worker.example）並重啟。</div>';
         return;
@@ -172,8 +210,7 @@
       wrap.innerHTML = '';
       for (const n of _nodes) {
         const card = document.createElement('div');
-        card.className = 'node' + (n.node_id === _selectedNode ? ' selected' : '');
-        card.onclick = () => selectNode(n.node_id);
+        card.className = 'node';
         const statusDot = n.online ? (n.status === 'busy' ? 'busy' : 'idle') : 'offline';
         const statusText = !n.online ? '離線' : (n.status === 'busy' ? '執行中' : '閒置');
         const toolCount = (n.tools || []).length;
@@ -192,43 +229,62 @@
       }
     }
 
-    function selectNode(id) {
-      _selectedNode = id;
-      document.getElementById('targetNode').textContent = id;
-      document.getElementById('dispatchBtn').disabled = false;
-      renderNodes();
+    function renderRoleFilter() {
+      const sel = document.getElementById('roleFilter');
+      const cur = sel.value;
+      const roles = [...new Set(_nodes.map(n => n.role).filter(Boolean))];
+      sel.innerHTML = '<option value="">不限</option>' +
+        roles.map(r => `<option value="${esc(r)}">${esc(r)}</option>`).join('');
+      if (roles.includes(cur)) sel.value = cur;
     }
 
-    // ── Dispatch ──────────────────────────────────────────────────────
+    function renderAutoHint() {
+      const role = document.getElementById('roleFilter').value;
+      const online = _nodes.filter(n => n.online && (!role || n.role === role));
+      const idle = online.filter(n => n.status !== 'busy' && !((n.load && n.load.running_tasks) || 0));
+      const el = document.getElementById('autoHint');
+      if (!online.length) {
+        el.textContent = role ? `角色「${role}」沒有在線節點` : '目前沒有在線節點可派發';
+      } else if (idle.length) {
+        el.textContent = `可派發：${idle.length} 台空閒（共 ${online.length} 台在線）→ 會挑一台空閒的`;
+      } else {
+        el.textContent = `${online.length} 台都在忙 → 會丟給排隊最短的那台`;
+      }
+    }
+
+    // ── Dispatch (auto node selection) ─────────────────────────────
     async function dispatch() {
       const goal = document.getElementById('goal').value.trim();
       const mode = document.getElementById('mode').value;
-      if (!_selectedNode || !goal) return;
+      const role = document.getElementById('roleFilter').value || undefined;
+      if (!goal) return;
       const btn = document.getElementById('dispatchBtn');
       btn.disabled = true;
 
-      const localId = 't' + Date.now();
-      const card = { id: localId, node: _selectedNode, goal, mode,
-                     status: 'running', summary: '', started: Date.now() };
+      const card = { id: 't'+Date.now(), node: '（自動挑選中…）', auto: true,
+                     goal, mode, status: 'running', summary: '', started: Date.now() };
       _feed.unshift(card);
       renderFeed();
 
       try {
         const r = await fetch('/fleet/dispatch', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ node_id: _selectedNode, goal, mode, timeout_s: 600 }),
+          body: JSON.stringify({ node_id: 'auto', role, goal, mode, timeout_s: 600 }),
         });
         const data = await r.json();
+        if (data.dispatched_to) card.node = data.dispatched_to;
         if (data.success && data.result) {
           card.status = data.result.status || 'completed';
           card.summary = data.result.summary || '(無摘要)';
         } else {
           card.status = 'failed';
           card.summary = data.error || '派發失敗';
+          if (!data.dispatched_to) card.node = '—';
         }
       } catch (e) {
         card.status = 'failed';
         card.summary = '網路錯誤：' + e.message;
+        card.node = '—';
       }
       renderFeed();
       btn.disabled = false;
@@ -237,7 +293,7 @@
     function renderFeed() {
       const wrap = document.getElementById('feed');
       if (!_feed.length) {
-        wrap.innerHTML = '<div class="empty">尚無任務。選一個節點、輸入目標、按「派發」。</div>';
+        wrap.innerHTML = '<div class="empty">尚無任務。輸入目標、按「自動派發」。</div>';
         return;
       }
       wrap.innerHTML = '';
@@ -251,6 +307,7 @@
         el.innerHTML = `
           <div class="task-head">
             <span class="task-node">${esc(t.node)}</span>
+            ${t.auto ? '<span class="task-auto">自動</span>' : ''}
             ${badge}
             <span class="task-time">${t.mode} · ${elapsed}s</span>
           </div>
@@ -263,7 +320,10 @@
     function clearFeed() { _feed = []; renderFeed(); }
     function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
 
-    // ── Boot ──────────────────────────────────────────────────────────
+    // refresh the auto-hint when the role filter changes
+    document.addEventListener('change', e => { if (e.target.id === 'roleFilter') renderAutoHint(); });
+
+    // ── Boot ───────────────────────────────────────────────────────
     pollNodes();
     setInterval(pollNodes, POLL_MS);
   </script>

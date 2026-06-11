@@ -2773,9 +2773,20 @@ async def fleet_dispatch(body: dict) -> dict:
                             detail="this node is not a fleet orchestrator")
     node_id = (body.get("node_id") or "").strip()
     goal = (body.get("goal") or "").strip()
-    if not node_id or not goal:
+    if not goal:
         from fastapi import HTTPException
-        raise HTTPException(status_code=400, detail="node_id and goal are required")
+        raise HTTPException(status_code=400, detail="goal is required")
+
+    # Auto-select a node when the operator didn't pick one (node_id empty
+    # or the literal "auto"). Prefers an idle worker; falls back to the
+    # least-loaded online worker so the goal queues rather than failing.
+    auto_selected = False
+    if not node_id or node_id.lower() == "auto":
+        node_id = orch.pick_node(role=(body.get("role") or None)) or ""
+        auto_selected = True
+        if not node_id:
+            return {"success": False, "result": None,
+                    "error": "no online worker available to take the task"}
     try:
         result = await orch.dispatch(
             node_id, goal,
@@ -2783,9 +2794,15 @@ async def fleet_dispatch(body: dict) -> dict:
             context=body.get("context") or {},
             timeout_s=float(body.get("timeout_s", 600)),
         )
-        return {"success": True, "result": result, "error": None}
+        # Echo which node actually ran it (matters for the auto path so
+        # the UI can show "→ dgx-02 picked it up").
+        return {"success": True, "result": result,
+                "dispatched_to": node_id, "auto_selected": auto_selected,
+                "error": None}
     except (ValueError, TimeoutError) as exc:
-        return {"success": False, "result": None, "error": str(exc)}
+        return {"success": False, "result": None,
+                "dispatched_to": node_id, "auto_selected": auto_selected,
+                "error": str(exc)}
 
 
 @app.post("/settings")
