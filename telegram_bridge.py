@@ -470,6 +470,66 @@ async def _send_reply(chat_id: str, text: str) -> None:
         logger.warning("Telegram sendMessage to %s failed: %s", chat_id, exc)
 
 
+# Telegram's hard per-message cap is 4096 chars. We chunk at 3800 to
+# leave room for the "(2/3)" page marker we prepend, plus a safety
+# margin (emoji + CJK can count as >1 unit in Telegram's length check).
+_TELEGRAM_CHUNK_CHARS = 3800
+
+
+def _split_for_telegram(text: str, limit: int = _TELEGRAM_CHUNK_CHARS) -> List[str]:
+    """Split a long message into <=limit-char chunks, preferring natural
+    boundaries so we don't cut mid-sentence / mid-word.
+
+    Strategy, in priority order per chunk:
+      1. Take up to `limit` chars.
+      2. Back off to the last paragraph break (\n\n) within that window.
+      3. Else the last line break (\n).
+      4. Else the last space.
+      5. Else a hard cut at `limit` (very long unbroken token — rare).
+    Returns at least one chunk (the whole text when it already fits)."""
+    text = text or ""
+    if len(text) <= limit:
+        return [text] if text else []
+    chunks: List[str] = []
+    rest = text
+    while len(rest) > limit:
+        window = rest[:limit]
+        # Prefer paragraph break, then line break, then space.
+        cut = window.rfind("\n\n")
+        if cut < limit * 0.5:           # too early — try a single newline
+            nl = window.rfind("\n")
+            if nl >= limit * 0.5:
+                cut = nl
+        if cut < limit * 0.5:           # still too early — try a space
+            sp = window.rfind(" ")
+            if sp >= limit * 0.5:
+                cut = sp
+        if cut <= 0:                    # no good boundary — hard cut
+            cut = limit
+        chunks.append(rest[:cut].rstrip())
+        rest = rest[cut:].lstrip("\n").lstrip()
+    if rest:
+        chunks.append(rest)
+    return chunks
+
+
+async def _send_reply_chunked(chat_id: str, text: str) -> None:
+    """Send `text` across as many Telegram messages as it takes, instead
+    of truncating. Each chunk gets a "(2/3)" page marker when there's
+    more than one, so the reader knows it's a continuation. Sends
+    sequentially so the chunks arrive in order."""
+    if not text:
+        return
+    chunks = _split_for_telegram(text)
+    total = len(chunks)
+    if total <= 1:
+        await _send_reply(chat_id, text)
+        return
+    for i, chunk in enumerate(chunks, 1):
+        marker = f"({i}/{total})\n"
+        await _send_reply(chat_id, marker + chunk)
+
+
 # ── Native "thinking" indicator ───────────────────────────────────────────────
 # Telegram clients show "Bot is typing…" for ~5 s after the bot calls
 # sendChatAction. The indicator is much lighter-weight UX than a static
@@ -1024,7 +1084,9 @@ async def _run_goal_for_chat(chat_id: str, goal_text: str) -> None:
     if artifacts:
         reply = reply + _format_artifacts_block(artifacts)
 
-    await _send_reply(chat_id, reply)
+    # Chunked send — a long summary now spans multiple Telegram messages
+    # ("(1/3)" … "(3/3)") instead of being truncated at 3500 chars.
+    await _send_reply_chunked(chat_id, reply)
 
     # For small text artifacts, push the file CONTENT as follow-up
     # messages so the user doesn't have to open the web UI to see
@@ -1222,11 +1284,10 @@ def _format_result_for_telegram(result: Any, session_id: str, elapsed_s: float) 
         "running":   "⏳",
     }.get(status_val.lower(), "ℹ️")
 
+    # Full summary — NOT truncated here. _send_reply_chunked splits a
+    # long message across multiple Telegram messages ("(1/3)"…) so the
+    # user gets the complete output instead of a "…(truncated)" stub.
     summary = (getattr(result, "summary", "") or "").strip() or "(no summary)"
-    truncated = False
-    if len(summary) > _TELEGRAM_MAX_BODY_CHARS:
-        summary = summary[:_TELEGRAM_MAX_BODY_CHARS]
-        truncated = True
 
     subtask_count = len(getattr(result, "subtasks", []) or [])
 
@@ -1235,14 +1296,9 @@ def _format_result_for_telegram(result: Any, session_id: str, elapsed_s: float) 
         + ("s" if subtask_count != 1 else ""),
         "",
         summary,
+        "",
+        f"session: {session_id}",
     ]
-    if truncated:
-        parts.append(
-            "\n…(truncated — open the session in the web UI or use the "
-            "kebab menu's Export button for the full output)"
-        )
-    parts.append("")
-    parts.append(f"session: {session_id}")
     return "\n".join(parts)
 
 
