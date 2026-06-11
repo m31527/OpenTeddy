@@ -109,6 +109,59 @@ curl -s -X POST http://localhost:8000/fleet/dispatch \
 On a non-orchestrator node these endpoints return `fleet_enabled:false`
 (for `/fleet/nodes`) or HTTP 409 (for `/fleet/dispatch`).
 
+There's also a web console at `http://<central>:8000/fleet` with three
+tabs: **Workers** (live node status), **Playground** (type a goal → it
+auto-picks an idle worker, no manual selection), and **Alerts** (the
+proactive reports below).
+
+## Proactive alerts (the watcher)
+
+Dispatch is reactive — you ask, a node answers. The watcher is the
+proactive half: each worker periodically self-checks its area of
+responsibility and pushes an **alert** to the central *without being
+asked*. Alerts land in the console's Alerts tab and (if Telegram is
+configured) get pushed to your phone.
+
+Enable per worker via its `.env`:
+
+```bash
+OPENTEDDY_FLEET_WATCH_ENABLED=1
+OPENTEDDY_FLEET_WATCH_INTERVAL=900          # seconds; 120 while testing
+OPENTEDDY_FLEET_WATCH_PROMPT=<what THIS node should check>
+```
+
+The prompt is the node-specific part — describe what "abnormal" means
+for this node's data + tools. The watcher appends a machine-readable
+`ANOMALY / SEVERITY / CONFIDENCE` block automatically, so you only write
+the "what to look at" half. Role examples:
+
+| Role | Example `OPENTEDDY_FLEET_WATCH_PROMPT` |
+|---|---|
+| finance | 檢查 /data/finance 最近一小時是否有異常大額付款、首次出現的收款方、批次資料竄改 |
+| secops | 檢查 auth.log 最近一小時是否有暴力登入、異常地理位置登入、權限提升 |
+| sys-health | 檢查磁碟 / 記憶體 / docker / ollama 是否接近滿載或已停止 |
+| external-intel | 查最近一小時與本公司/產業相關的重大新聞、資安通報、輿情變化 |
+
+How a cycle works:
+
+```
+每隔 INTERVAL 秒（±15% jitter）
+  → worker 用自己的 orchestrator.run() 跑 WATCH_PROMPT
+    → 模型回答，結尾帶 ANOMALY: yes/no · SEVERITY · CONFIDENCE
+      → ANOMALY: yes  → push alert 給中控 → Alerts tab + Telegram
+      → ANOMALY: no   → 靜默，不打擾
+```
+
+Leaving `OPENTEDDY_FLEET_WATCH_PROMPT` unset uses a generic placeholder
+that mostly reports "no anomaly" — useful to prove the pipeline, useless
+for real monitoring. Write the real prompt before relying on it.
+
+See alerts via the console Alerts tab or:
+
+```bash
+curl -s http://localhost:8000/fleet/alerts | python3 -m json.tool
+```
+
 ## Network + security notes
 
 - The central's WS port (`OPENTEDDY_FLEET_PORT`) binds `0.0.0.0` so
