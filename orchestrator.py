@@ -1948,8 +1948,15 @@ class Orchestrator:
             except Exception:  # noqa: BLE001
                 pass
 
+        # Current-time header FIRST so a "today / 今天 / 現在 / what year"
+        # question answered on this fast path doesn't fall back to the
+        # model's training-cutoff year. This path skips the planner +
+        # synthesizer (which already carry the header), so without this
+        # it's the one place a date question gets the wrong year — the
+        # exact "今天農曆幾月幾號 → 2024" bug.
         system = (
-            "You are OpenTeddy, a helpful and concise AI assistant. "
+            _current_time_header()
+            + "You are OpenTeddy, a helpful and concise AI assistant. "
             "The user asked a question that doesn't require running "
             "tools — answer directly. Keep the response tight and "
             "useful; use markdown for structure where it helps."
