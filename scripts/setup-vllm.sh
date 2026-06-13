@@ -69,9 +69,15 @@ TARGET_USER="${OPENTEDDY_USER:-${SUDO_USER:-${USER:-openteddy}}}"
 if ! id -u "${TARGET_USER}" >/dev/null 2>&1; then
   echo "✗ Target user '${TARGET_USER}' does not exist."; exit 1
 fi
-# Resolve OpenTeddy home + venv from the invoking user's checkout.
+# Resolve OpenTeddy home (only used for the verify-vllm.py hint).
 OT_HOME="$(eval echo "~${TARGET_USER}")/OpenTeddy"
-VENV_PY="${OT_HOME}/.venv/bin/python"
+# vLLM gets its OWN dedicated venv — NOT OpenTeddy's. vLLM pins
+# aggressive dependency versions (it downgraded httpx and broke
+# chromadb when installed into OpenTeddy's .venv). Isolating it means
+# OpenTeddy's deps are never touched; the two processes talk over HTTP
+# only, which is the correct architecture anyway.
+VLLM_VENV="/var/lib/openteddy/vllm-venv"
+VENV_PY="${VLLM_VENV}/bin/python"
 SERVICE_FILE="/etc/systemd/system/openteddy-vllm.service"
 LOG_PATH="/var/lib/openteddy/vllm.log"
 
@@ -85,7 +91,10 @@ if [ "${UNINSTALL}" = "true" ]; then
   systemctl disable --now openteddy-vllm.service 2>/dev/null || true
   rm -f "${SERVICE_FILE}"
   systemctl daemon-reload
-  echo "  ✓ Removed. (vLLM pip package + HF model cache left in place.)"
+  echo "  ✓ Service removed. The dedicated vLLM venv (${VLLM_VENV}) + HF"
+  echo "    model cache are left in place. To fully reclaim the disk:"
+  echo "      sudo rm -rf ${VLLM_VENV}"
+  echo "      rm -rf ~/.cache/huggingface   # the downloaded model weights"
   exit 0
 fi
 
@@ -100,11 +109,6 @@ if ! command -v nvidia-smi >/dev/null 2>&1; then
   echo "  anyway in case this is an unusual setup, but expect failure if"
   echo "  there's no CUDA device."
 fi
-if [ ! -x "${VENV_PY}" ]; then
-  echo "✗ OpenTeddy venv not found at ${VENV_PY}."
-  echo "  Run the OpenTeddy install first, then re-run this script."
-  exit 1
-fi
 
 echo "▶ OpenTeddy vLLM setup"
 echo "    user         : ${TARGET_USER}"
@@ -115,13 +119,25 @@ echo "    gpu-mem-util : ${GPU_MEM}"
 echo "    quantization : ${QUANTIZATION:-none (bf16)}"
 echo "    tool-parser  : ${TOOL_PARSER}"
 echo "    enforce-eager: ${ENFORCE_EAGER}"
+echo "    vllm venv    : ${VLLM_VENV}  (isolated from OpenTeddy's .venv)"
 echo ""
 
-# ── 1. Install vLLM into the venv ────────────────────────────────────────────
-echo "▶ Installing vLLM into ${VENV_PY} (this can take several minutes)…"
+# ── 1. Create the DEDICATED vLLM venv + install vLLM into it ─────────────────
+# Critical: vLLM goes in its OWN venv, never OpenTeddy's. vLLM pins
+# conflicting versions (e.g. it downgrades httpx, which breaks chromadb
+# → OpenTeddy won't even boot). Isolation = OpenTeddy's deps are
+# untouched. The two only ever talk over HTTP on :PORT.
+mkdir -p "$(dirname "${VLLM_VENV}")"
+if [ ! -x "${VENV_PY}" ]; then
+  echo "▶ Creating dedicated vLLM venv at ${VLLM_VENV}…"
+  sudo -u "${TARGET_USER}" python3 -m venv "${VLLM_VENV}"
+  chown -R "${TARGET_USER}:${TARGET_USER}" "$(dirname "${VLLM_VENV}")" 2>/dev/null || true
+fi
+echo "▶ Installing vLLM into the dedicated venv (this can take several minutes)…"
+sudo -u "${TARGET_USER}" "${VENV_PY}" -m pip install --quiet --upgrade pip
 sudo -u "${TARGET_USER}" "${VENV_PY}" -m pip install --quiet --upgrade vllm
 VLLM_VER="$(sudo -u "${TARGET_USER}" "${VENV_PY}" -c 'import vllm; print(vllm.__version__)' 2>/dev/null || echo '?')"
-echo "  ✓ vLLM ${VLLM_VER}"
+echo "  ✓ vLLM ${VLLM_VER} (in ${VLLM_VENV}, OpenTeddy's .venv untouched)"
 
 # ── 2. Log dir ───────────────────────────────────────────────────────────────
 mkdir -p "$(dirname "${LOG_PATH}")"
@@ -207,7 +223,8 @@ echo "    OPENTEDDY_LOCAL_ENGINE=vllm"
 echo "    VLLM_BASE_URL=http://127.0.0.1:${PORT}"
 echo "    QWEN_MODEL=${MODEL}"
 echo ""
-echo "Verify the round-trip:"
+echo "Verify the round-trip (uses OpenTeddy's .venv — verify-vllm.py only"
+echo "HTTP-calls the vLLM server, so it needs OpenTeddy's deps, not vLLM's):"
 echo "    cd ${OT_HOME} && OPENTEDDY_LOCAL_ENGINE=vllm \\"
 echo "      VLLM_BASE_URL=http://127.0.0.1:${PORT} QWEN_MODEL=${MODEL} \\"
 echo "      .venv/bin/python scripts/verify-vllm.py"
