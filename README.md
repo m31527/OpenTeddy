@@ -603,6 +603,46 @@ auto-picks an idle worker), **Alerts** (proactive anomaly reports).
 Full guide: [`fleet/README.md`](fleet/README.md) ·
 design: [`docs/fleet-architecture.md`](docs/fleet-architecture.md).
 
+## vLLM local engine (optional, Linux + NVIDIA only)
+
+By default OpenTeddy's local executor runs on **Ollama** (cross-platform,
+zero setup). On a Linux+CUDA fleet node serving **concurrent** load
+(multiple operators + watcher loops hitting one node), **vLLM** can serve
+those requests together via continuous batching. On single-stream use it
+does *not* beat Ollama — both are memory-bandwidth-bound on DGX-class
+hardware — so vLLM only earns its keep under concurrency.
+
+> macOS / non-CUDA: skip this. vLLM is Linux + NVIDIA only; OpenTeddy
+> hard-gates Darwin to Ollama, and the Settings toggle is disabled there.
+
+One script sets it up in a **dedicated venv** (never touches OpenTeddy's
+own — vLLM pins conflicting deps that would otherwise break chromadb) and
+installs the JIT build toolchain (ninja / python3-dev) that vLLM needs:
+
+```bash
+df -h /                            # need ~25 GB free for a 7B model + venv
+sudo systemctl stop ollama        # free GPU memory for the test
+sudo bash scripts/setup-vllm.sh --model Qwen/Qwen2.5-7B-Instruct --gpu-mem 0.5 --enforce-eager
+
+# verify OpenTeddy ↔ vLLM (uses OpenTeddy's .venv; it only HTTP-calls vLLM)
+OPENTEDDY_LOCAL_ENGINE=vllm VLLM_BASE_URL=http://127.0.0.1:8001 \
+  QWEN_MODEL=Qwen/Qwen2.5-7B-Instruct .venv/bin/python scripts/verify-vllm.py
+# → "ALL PASS" means it works
+```
+
+Then switch to it via **Settings → Model Settings → Local Inference
+Engine → vLLM**, or set `OPENTEDDY_LOCAL_ENGINE=vllm` +
+`VLLM_BASE_URL=http://127.0.0.1:8001` in `.env`.
+
+**For coexistence with Ollama** (the real fleet config — planner on
+Ollama, executor on vLLM) run vLLM at `--gpu-mem 0.35` so both fit in
+unified memory, and don't stop Ollama.
+
+Hit a wall during setup? Every gotcha we tripped over (dedicated-venv
+isolation, missing ninja / Python.h, OOM vs Ollama, systemd restart loops
+hiding the real error, `--enforce-eager` for fast startup) is documented
+with fixes in [`docs/vllm-deployment.md`](docs/vllm-deployment.md).
+
 ## API
 
 | Method | Endpoint | Description |
