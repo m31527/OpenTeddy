@@ -123,21 +123,25 @@ echo "    vllm venv    : ${VLLM_VENV}  (isolated from OpenTeddy's .venv)"
 echo ""
 
 # ── 0. System build deps for vLLM's runtime JIT ──────────────────────────────
-# vLLM's FlashInfer sampler JIT-compiles CUDA kernels at first startup,
-# which needs `ninja` on PATH. Without it the engine loads the model fine
-# then dies with "FileNotFoundError: ... 'ninja'" during the profile run.
-# Best-effort apt install — non-fatal if apt isn't present (the operator
-# can install ninja-build by hand on a non-Debian distro).
-if ! command -v ninja >/dev/null 2>&1; then
-  echo "▶ Installing build dep: ninja (needed by vLLM's FlashInfer JIT)…"
-  if command -v apt-get >/dev/null 2>&1; then
-    apt-get install -y -qq ninja-build >/dev/null 2>&1 \
-      && echo "  ✓ ninja-build installed" \
-      || echo "  ⚠ apt install ninja-build failed — install it manually if vLLM dies with 'ninja' not found"
-  else
-    echo "  ⚠ ninja not found + no apt. Install 'ninja' / 'ninja-build' for your distro,"
-    echo "    or vLLM will fail at startup with FileNotFoundError: 'ninja'."
-  fi
+# vLLM JIT-compiles CUDA kernels at first startup via TWO compilers:
+#   - FlashInfer sampler → needs `ninja`. Missing → "FileNotFoundError:
+#     ... 'ninja'" during the profile run.
+#   - Triton sampler     → needs a C compiler + the Python dev headers
+#     (Python.h). Missing → "fatal error: Python.h: No such file or
+#     directory" → CalledProcessError from gcc.
+# Both surface AFTER a full ~90s model load (the JIT only fires during
+# the post-load profile run), so they look like late mysterious crashes.
+# Install the whole build toolchain up front. Best-effort on apt; clear
+# manual hint on non-Debian distros.
+echo "▶ Ensuring vLLM JIT build deps (ninja, python3-dev, gcc)…"
+if command -v apt-get >/dev/null 2>&1; then
+  apt-get install -y -qq ninja-build python3-dev build-essential >/dev/null 2>&1 \
+    && echo "  ✓ build deps installed (ninja-build, python3-dev, build-essential)" \
+    || echo "  ⚠ apt install of build deps failed — install ninja-build + python3-dev + gcc by hand if vLLM crashes during startup"
+else
+  echo "  ⚠ No apt. Install these for your distro or vLLM will crash at"
+  echo "    startup: ninja (ninja-build), Python dev headers (python3-dev /"
+  echo "    python3-devel), and a C compiler (gcc / build-essential)."
 fi
 
 # ── 1. Create the DEDICATED vLLM venv + install vLLM into it ─────────────────
