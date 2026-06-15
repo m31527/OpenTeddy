@@ -1088,7 +1088,12 @@ class Orchestrator:
         # classify the task, we hand Gemma a prompt already specialised for
         # the user's declared intent.
         mode_value = req.mode.value if hasattr(req.mode, "value") else str(req.mode)
-        base_prompt = _plan_prompt_for_mode(mode_value, config.gemma_model)
+        # Pick the plan-prompt tier off the model actually planning: the
+        # Gemma planner under the 2-model split, or the single unified /
+        # vLLM-served model when that's in effect (so a bigger unified
+        # model gets its appropriate, less-hand-holdy plan prompt).
+        import local_engine
+        base_prompt = _plan_prompt_for_mode(mode_value, local_engine.local_model("planner"))
 
         # For Code / Analytic modes, tell Gemma what the agent workspace is
         # so the shell plan uses a known directory (git clones land there
@@ -1539,26 +1544,26 @@ class Orchestrator:
             f"------\n{content}\n------"
         )
         try:
+            # Route through local_engine so the verifier runs on whichever
+            # engine the executor uses (Ollama or vLLM) and on the unified
+            # model when set. json_mode=True forces a machine-parseable
+            # verdict — `format: "json"` on Ollama, `response_format` on
+            # vLLM — so small thinking models can't bury PASS/FAIL in prose.
+            import local_engine
             resp = await self._http.post(
-                f"{config.qwen_base_url}/api/chat",
-                json={
-                    "model":    config.qwen_model,
-                    "messages": [{"role": "user", "content": user_msg}],
-                    "system":   self._DELIVERABLE_JUDGE_PROMPT,
-                    "stream":   False,
-                    # Ollama's structured-output mode — forces the
-                    # response.message.content to be valid JSON. Without
-                    # this small thinking models love to wrap the
-                    # verdict in essay-style commentary that's too
-                    # ambiguous to parse reliably.
-                    "format":   "json",
-                    "options":  {
-                        "temperature": 0.1,
-                        "num_predict": 200,
-                        "num_ctx":     int(getattr(config, "qwen_num_ctx", 16384)),
-                    },
-                    "keep_alive": getattr(config, "ollama_keep_alive", "24h"),
-                },
+                local_engine.chat_endpoint(),
+                json=local_engine.build_payload(
+                    model=local_engine.local_model("executor"),
+                    messages=[{"role": "user", "content": user_msg}],
+                    system=self._DELIVERABLE_JUDGE_PROMPT,
+                    tools=None,
+                    stream=False,
+                    temperature=0.1,
+                    num_predict=200,
+                    num_ctx=int(getattr(config, "qwen_num_ctx", 16384)),
+                    keep_alive=getattr(config, "ollama_keep_alive", "24h"),
+                    json_mode=True,
+                ),
                 # 30s cap. The judge call only needs ~50 tokens of output
                 # ("PASS" / "FAIL" + 30-word reason). On a healthy big
                 # model that's <10s; if it blows past 30s something is
@@ -1568,7 +1573,7 @@ class Orchestrator:
                 timeout=30,
             )
             resp.raise_for_status()
-            msg = resp.json().get("message") or {}
+            msg = local_engine.normalize_response(resp.json()).get("message") or {}
             verdict_raw = (msg.get("content") or msg.get("thinking") or "").strip()
         except Exception as exc:  # noqa: BLE001
             logger.warning("Deliverable verifier crashed: %s — skipping.", exc)
@@ -2351,6 +2356,20 @@ class Orchestrator:
         self, prompt: str, system: Optional[str] = None,
         task_id: str = "", task_description: str = "[orchestrator]",
     ) -> str:
+        # vLLM single-instance lane. vLLM speaks only OpenAI chat —
+        # there is no /api/generate completion endpoint — so when the
+        # planner runs on vLLM we route through local_engine, converting
+        # this completion-style (prompt + system) call into a chat call.
+        # That lets the planner share the ONE vLLM instance + ONE model
+        # the executor uses (the single-model design). Ollama (the
+        # default) keeps the byte-identical /api/generate path below, so
+        # existing installs see no change.
+        import local_engine
+        if local_engine.is_vllm():
+            return await self._gemma_complete_vllm(
+                prompt, system, task_id=task_id, task_description=task_description,
+            )
+
         # Stream if globally enabled — this is #3 (Streaming for
         # orchestrator). Without it the user stares at a blank "Working
         # on it… 0:14" for 5–15 s while Gemma plans the task. With it
@@ -2465,6 +2484,91 @@ class Orchestrator:
         except Exception as exc:  # noqa: BLE001
             logger.error("Gemma call failed: %s", exc)
             return "[]"
+
+    async def _gemma_complete_vllm(
+        self, prompt: str, system: Optional[str] = None,
+        task_id: str = "", task_description: str = "[orchestrator]",
+    ) -> str:
+        """Planner completion via vLLM (OpenAI chat).
+
+        vLLM has no /api/generate completion endpoint, so convert this
+        completion-style call (prompt + system) into a single-user-message
+        chat call and route through local_engine — the planner then shares
+        the one vLLM instance + one model the executor uses. Non-streamed
+        for the first cut (local_engine.supports_streaming() is False for
+        vLLM); we still emit one plan.stream.delta with the full plan text
+        plus plan.stream.end so the UI's planning preview matches the
+        streamed Ollama path.
+        """
+        import time as _time
+        import local_engine
+
+        model = local_engine.local_model("planner")
+        payload = local_engine.build_payload(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            system=system or _PLAN_SYSTEM_BASE,
+            tools=None,
+            stream=False,
+            temperature=float(getattr(config, "gemma_temperature", 0.1)),
+            num_predict=int(config.gemma_max_tokens),
+        )
+        ws_emit = (
+            getattr(self.executor, "ws_callback", None)
+            if bool(getattr(config, "streaming_enabled", True)) else None
+        )
+        start = _time.monotonic()
+        try:
+            resp = await self._http.post(local_engine.chat_endpoint(), json=payload)
+            resp.raise_for_status()
+            data = local_engine.normalize_response(resp.json())
+        except Exception as exc:  # noqa: BLE001
+            logger.error("vLLM planner call failed: %s", exc)
+            return "[]"
+        duration_ms = int((_time.monotonic() - start) * 1000)
+
+        msg = data.get("message") or {}
+        response_text = msg.get("content") or ""
+        tokens_in  = data.get("prompt_eval_count", 0) or 0
+        tokens_out = data.get("eval_count", 0) or 0
+
+        # Parity with the streamed Ollama path: surface the plan text in
+        # the UI's planning preview, then mark the stream ended so the UI
+        # swaps the "planning…" placeholder for the "Working on it…" timer.
+        if ws_emit:
+            try:
+                if response_text:
+                    await ws_emit({
+                        "type":    "plan.stream.delta",
+                        "task_id": task_id,
+                        "text":    response_text,
+                    })
+                await ws_emit({"type": "plan.stream.end", "task_id": task_id})
+            except Exception:  # noqa: BLE001
+                pass
+
+        # Record usage (best-effort). vLLM's OpenAI endpoint exposes no
+        # per-token timing, so t/s is computed from wall-clock here.
+        if tokens_in or tokens_out:
+            tps = (
+                tokens_out * 1000.0 / duration_ms
+                if duration_ms > 0 and tokens_out > 0 else 0.0
+            )
+            try:
+                await self.tracker.record_usage(
+                    task_id=task_id,
+                    model=model,
+                    model_provider=local_engine.usage_provider_label(),
+                    tokens_in=tokens_in,
+                    tokens_out=tokens_out,
+                    task_description=task_description,
+                    duration_ms=duration_ms,
+                    tokens_per_sec=tps,
+                )
+            except Exception:  # noqa: BLE001
+                pass
+
+        return response_text
 
     @staticmethod
     def _parse_plan(raw: str, task_id: str, goal: str = "") -> List[SubTask]:

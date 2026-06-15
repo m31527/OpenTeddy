@@ -133,13 +133,49 @@ Light single-tool tasks drop from ~5 to **~2** via the ReAct lane.
 
 ## Milestones
 
-| # | Part | Risk |
-|---|---|---|
-| 1 | A — planner through local_engine (unblocks single-instance vLLM) | med |
-| 2 | B — `OPENTEDDY_UNIFIED_MODEL` one-model-both-roles | low |
-| 3 | C1+C2 — verify-off-for-big + skip-summary-for-deliverable | low |
-| 4 | C3 — fold intent into plan | med |
-| 5 | C4 — single-pass ReAct lane | high |
+| # | Part | Risk | Status |
+|---|---|---|---|
+| 1 | A — planner through local_engine (unblocks single-instance vLLM) | med | ✅ done |
+| 2 | B — `OPENTEDDY_UNIFIED_MODEL` one-model-both-roles | low | ✅ done |
+| 3 | C1+C2 — verify-off-for-big + skip-summary-for-deliverable | low | next |
+| 4 | C3 — fold intent into plan | med | |
+| 5 | C4 — single-pass ReAct lane | high | |
+
+### Implementation note — 1 + 2 shipped together
+
+Milestones 1 and 2 turned out to be inseparable and landed in one change:
+**a vLLM server hosts exactly one model.** So the moment the planner is
+routed onto vLLM (Part A), it is *forced* onto the same single model the
+executor uses (Part B) — you cannot have a separate Gemma planner on a
+one-model vLLM instance. Doing A without B would point the planner at a
+model id vLLM isn't serving.
+
+What landed:
+- `config.unified_model` + `OPENTEDDY_UNIFIED_MODEL` env (default `""`).
+- `local_engine.local_model(role)` — the single resolver for "which
+  model id does this role use", with three cases: unified set → that id
+  for every role; vLLM without unified → the one served model
+  (`qwen_model`) for both roles; Ollama default → the historical
+  Gemma/Qwen split. Planner and executor both call it, so the unified id
+  reaches every local LLM call.
+- `_gemma_complete` gains a vLLM lane (`_gemma_complete_vllm`): converts
+  the completion-style (`/api/generate` prompt+system) planner call into
+  a chat-style call routed through `local_engine`, preserving the
+  `plan.stream.delta` / `plan.stream.end` WS events and usage recording.
+  The Ollama path is byte-identical to before (zero change for existing
+  installs).
+- `_verify_deliverable` was the last hard-wired Ollama POST on the
+  planner side; it now routes through `local_engine` too, with a new
+  `build_payload(json_mode=True)` that emits `format:"json"` on Ollama
+  and `response_format:{type:"json_object"}` on vLLM.
+- Settings: `unified_model` registered in `settings_store` (schema +
+  read + apply — applied even when blank so clearing the field returns to
+  the 2-model split) and surfaced as a text field in the Settings UI
+  (3 locales).
+
+Default behaviour is unchanged: Ollama + empty `unified_model` → today's
+Gemma-planner / Qwen-executor 2-model split, same endpoints, same usage
+labels.
 
 Measure tok/s + wall-clock + task success rate after each milestone
 (same task set, unified 27B vs current 7B-2-model) so we keep only the

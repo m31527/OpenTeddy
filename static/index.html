@@ -4462,6 +4462,18 @@
                   Run scripts/setup-vllm.sh on the server first. Best for nodes serving concurrent load (multiple operators + watcher loops). Single-stream installs gain little over Ollama.
                 </div>
               </div>
+              <!-- Unified single-model mode. Empty = default 2-model split
+                   (Gemma planner + Qwen executor). Set one model id to run
+                   BOTH roles on one model — fewer round-trips, one resident
+                   model, and on vLLM one served instance. Applies to either
+                   engine; required to match the model vLLM was launched with. -->
+              <div class="field" id="unifiedModelField" style="margin-bottom:1.25rem">
+                <label data-i18n="unified_model_label">Unified Model (single-model mode)</label>
+                <input type="text" id="inp_unified_model" placeholder="(blank = Gemma planner + Qwen executor)" />
+                <div style="font-size:0.7rem;color:var(--text-muted);margin-top:0.25rem" data-i18n="unified_model_hint">
+                  Leave blank for the default two-model split. Set one model id (e.g. Qwen/Qwen3.6-27B) to run planning and execution on a single model — fewer round-trips and only one model resident. On vLLM it must match the served model.
+                </div>
+              </div>
               <!-- #6 Auto-benchmark — passive perf stats from every
                    real task, plus a "your machine runs this slow"
                    suggestion banner when the configured model is below
@@ -9710,6 +9722,7 @@
           _engOllama.checked = (_engine !== 'vllm');
         }
         _setInput('inp_vllm_base_url', s.vllm_base_url?.value ?? 'http://127.0.0.1:8001');
+        _setInput('inp_unified_model', s.unified_model?.value ?? '');
         renderLocalEngineUI();   // apply Mac gating + show/hide the vLLM URL field
         _setInput('inp_agent_workspace_dir', s.agent_workspace_dir?.value ?? './agent-workspace');
         _setInput('inp_telegram_bot_token',       s.telegram_bot_token?.value       ?? '');
@@ -10408,6 +10421,9 @@
         local_engine:              (_isMacPlatform() ? 'ollama'
                                      : (document.querySelector('input[name="local_engine"]:checked')?.value || 'ollama')),
         vllm_base_url:             document.getElementById('inp_vllm_base_url')?.value.trim() || 'http://127.0.0.1:8001',
+        // Empty is meaningful here: blank = default 2-model split, so do
+        // NOT coalesce to a fallback the way vllm_base_url does.
+        unified_model:             (document.getElementById('inp_unified_model')?.value || '').trim(),
         escalation_threshold:      document.getElementById('rng_escalation_threshold').value,
         escalation_failure_limit:  document.getElementById('rng_escalation_failure_limit').value,
         default_priority:          document.getElementById('rng_default_priority').value,

@@ -196,6 +196,16 @@ SETTINGS_META: dict[str, dict[str, Any]] = {
                        "scripts/setup-vllm.sh.",
         "type":        "text",
     },
+    "unified_model": {
+        "label":       "Unified Model (single-model mode)",
+        "description": "Leave blank for the default 2-model split (Gemma "
+                       "planner + Qwen executor). Set a single model id (e.g. "
+                       "'Qwen/Qwen3.6-27B') to run BOTH planning and execution "
+                       "on one model — fewer round-trips, one resident model, "
+                       "and on vLLM one served instance. Must match the model "
+                       "vLLM was launched serving.",
+        "type":        "text",
+    },
     "escalation_threshold": {
         "label":       "Escalation Confidence Threshold",
         "description": "Escalate to Claude when executor confidence is below this value",
@@ -471,6 +481,7 @@ def _defaults_from_config() -> dict[str, str]:
         "ollama_keep_alive":        getattr(config, "ollama_keep_alive", "24h"),
         "local_engine":             getattr(config, "local_engine", "ollama"),
         "vllm_base_url":            getattr(config, "vllm_base_url", "http://127.0.0.1:8001"),
+        "unified_model":            getattr(config, "unified_model", ""),
         "escalation_threshold":     str(config.escalation_confidence_threshold),
         "escalation_failure_limit": str(config.escalation_failure_limit),
         "gemma_max_tokens":         str(config.gemma_max_tokens),
@@ -780,6 +791,11 @@ class SettingsStore:
             config.local_engine = settings["local_engine"].strip().lower()
         if "vllm_base_url" in settings and settings["vllm_base_url"]:
             config.vllm_base_url = settings["vllm_base_url"].strip()
+        if "unified_model" in settings:
+            # Applied even when blank: clearing the field is how a user
+            # returns to the default 2-model split, so we must NOT skip
+            # empties the way the other text settings do.
+            config.unified_model = (settings["unified_model"] or "").strip()
         if "ollama_keep_alive" in settings and settings["ollama_keep_alive"]:
             # Non-empty only — clearing the field via the UI keeps the
             # 24h default rather than disabling keep_alive entirely

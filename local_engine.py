@@ -68,6 +68,41 @@ def is_vllm() -> bool:
     return active_engine() == "vllm"
 
 
+def unified_model() -> str:
+    """The configured single-model id, or "" if the 2-model split is in
+    effect. Stripped so a stray-whitespace setting reads as unset."""
+    from config import config
+    return (getattr(config, "unified_model", "") or "").strip()
+
+
+def local_model(role: str = "executor") -> str:
+    """Resolve the model id for a role on the active engine.
+
+    Three cases, in priority order:
+
+    1. `unified_model` set → that one id for EVERY role. This is the
+       single-model design: planner and executor share one model (and,
+       on vLLM, one resident instance) with no switch on the
+       plan→execute boundary.
+    2. vLLM with no unified id → still one id, because a vLLM server
+       hosts exactly one model. Both roles use the executor's model
+       (qwen_model) — whatever vLLM was launched serving. A vLLM user
+       can't have a separate Gemma planner; there's only one served
+       model.
+    3. Ollama, 2-model split (the historical default) → planner uses
+       gemma_model, executor uses qwen_model.
+
+    `role` is "planner" or "executor" (anything non-"planner" is
+    treated as executor)."""
+    from config import config
+    u = unified_model()
+    if u:
+        return u
+    if is_vllm():
+        return config.qwen_model
+    return config.gemma_model if role == "planner" else config.qwen_model
+
+
 def supports_streaming() -> bool:
     """Whether to use token-streaming for the active engine.
 
@@ -113,11 +148,18 @@ def build_payload(
     num_predict: int,
     num_ctx: Optional[int] = None,
     keep_alive: str = "24h",
+    json_mode: bool = False,
 ) -> Dict[str, Any]:
     """Build the engine-appropriate request body.
 
     Inputs are in OpenTeddy's canonical (Ollama-ish) terms; this fn
     translates to whichever dialect the active engine speaks.
+
+    json_mode forces a strict-JSON response. The two engines spell this
+    differently — Ollama's `format: "json"` vs OpenAI/vLLM's
+    `response_format: {type: "json_object"}` — so callers that need a
+    machine-parseable verdict (e.g. the deliverable verifier) pass
+    json_mode=True and stay engine-agnostic.
     """
     if is_vllm():
         # OpenAI format: system folds into the messages array, params
@@ -135,6 +177,8 @@ def build_payload(
         }
         if tools:
             payload["tools"] = tools
+        if json_mode:
+            payload["response_format"] = {"type": "json_object"}
         if stream:
             # Ask vLLM to include a final usage chunk so we can record
             # token counts even on the streaming path.
@@ -158,6 +202,8 @@ def build_payload(
     }
     if tools:
         payload["tools"] = tools
+    if json_mode:
+        payload["format"] = "json"
     return payload
 
 

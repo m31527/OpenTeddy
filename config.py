@@ -169,6 +169,17 @@ class Config:
     vllm_base_url: str = field(
         default_factory=lambda: os.getenv("VLLM_BASE_URL", "http://127.0.0.1:8001")
     )
+    # Unified single-model id. Empty (default) = today's 2-model split
+    # (Gemma planner + Qwen executor). When set, BOTH the planner and the
+    # executor use this one model id — the single-model design that lets a
+    # single vLLM instance serve every role with no model switch on the
+    # plan→execute boundary, and frees the memory the second resident model
+    # used (so a bigger model fits). See docs/unified-model-rfc.md. A vLLM
+    # server hosts exactly one model, so this should match whatever model
+    # `vllm serve` was launched with.
+    unified_model: str = field(
+        default_factory=lambda: os.getenv("OPENTEDDY_UNIFIED_MODEL", "").strip()
+    )
 
     # Claude upgrade / escalation
     anthropic_api_key: str = field(

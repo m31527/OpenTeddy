@@ -707,12 +707,19 @@ class Executor:
         at all — in chat mode we send no `tools` field so the model is
         forced into a pure single-turn answer (no accidental shell calls).
         """
-        system_prompt = _system_prompt_for_mode(mode, config.qwen_model)
+        # Resolve the executor's model id through local_engine: the
+        # historical qwen_model under the 2-model split, or the single
+        # unified id when OPENTEDDY_UNIFIED_MODEL is set / vLLM is active.
+        # Used for the request, usage records, AND the prompt-tier pick
+        # below so a bigger unified model gets its less-restrictive prompt.
+        import local_engine
+        _exec_model = local_engine.local_model("executor")
+        system_prompt = _system_prompt_for_mode(mode, _exec_model)
         # One-line trace so it's obvious in the log which prompt tier the
         # current model is running under (strict / balanced / open).
         logger.info(
             "Executor prompt tier=%s mode=%s model=%s",
-            model_tier(config.qwen_model), mode, config.qwen_model,
+            model_tier(_exec_model), mode, _exec_model,
         )
 
         # Pin the active session workspace at the top of EVERY round's
@@ -913,7 +920,7 @@ class Executor:
             # active engine. num_ctx is the real budget the watchdog
             # keeps us under (Ollama only; vLLM sets it at serve time).
             payload: Dict[str, Any] = local_engine.build_payload(
-                model=config.qwen_model,
+                model=_exec_model,
                 messages=messages,
                 system=effective_system,
                 tools=tools or None,
@@ -1022,7 +1029,7 @@ class Executor:
             try:
                 await self.tracker.record_usage(
                     task_id=task_id,
-                    model=config.qwen_model,
+                    model=_exec_model,
                     model_provider=local_engine.usage_provider_label(),
                     tokens_in=_tokens_in,
                     tokens_out=_tokens_out,
@@ -1572,7 +1579,7 @@ class Executor:
             resp = await self._http.post(
                 local_engine.chat_endpoint(),
                 json=local_engine.build_payload(
-                    model=config.qwen_model,
+                    model=_exec_model,
                     messages=messages,
                     system=_SYSTEM_PROMPT,
                     tools=None,
@@ -1589,8 +1596,8 @@ class Executor:
             try:
                 await self.tracker.record_usage(
                     task_id=task_id,
-                    model=config.qwen_model,
-                    model_provider="ollama",
+                    model=_exec_model,
+                    model_provider=local_engine.usage_provider_label(),
                     tokens_in=_tokens_in,
                     tokens_out=_tokens_out,
                     task_description=description,
@@ -1756,7 +1763,7 @@ class Executor:
             resp = await self._http.post(
                 local_engine.chat_endpoint(),
                 json=local_engine.build_payload(
-                    model=config.qwen_model,
+                    model=local_engine.local_model("executor"),
                     messages=[{"role": "user", "content": prompt}],
                     system=None,
                     tools=None,
