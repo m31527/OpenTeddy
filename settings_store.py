@@ -272,6 +272,21 @@ SETTINGS_META: dict[str, dict[str, Any]] = {
                        "path for predictable timing.",
         "type":        "bool",
     },
+    "react_lane_enabled": {
+        "label":       "ReAct lane (single-loop, Hermes-style speed)",
+        "description": "Run tool-using goals as ONE executor loop "
+                       "(model → tool → result → repeat → answer) instead "
+                       "of the separate plan → execute → summary pipeline. "
+                       "Drops ~2 scaffolding round-trips (~24s on a 26B "
+                       "planner) and streams continuously, so it feels much "
+                       "faster — the lean loop that makes harnesses like "
+                       "Hermes feel snappy. Needs a capable executor "
+                       "(20B+ / MoE); a tiny model still wants the planner. "
+                       "Safe: if the single loop comes back empty it falls "
+                       "back to the full pipeline. Pure-chat questions still "
+                       "take the even-cheaper fast-chat path.",
+        "type":        "bool",
+    },
     "skill_auto_detect_min_repeats": {
         "label":       "Skill auto-detect — min repeats",
         "description": "After a successful task, scan past task memories "
@@ -478,6 +493,7 @@ def _defaults_from_config() -> dict[str, str]:
         "skill_match_threshold":    str(getattr(config, "skill_match_threshold", "0.4")),
         "skill_promotion_threshold": str(config.skill_promotion_threshold),
         "intent_classifier_enabled":   "true" if getattr(config, "intent_classifier_enabled", True) else "false",
+        "react_lane_enabled":          "true" if getattr(config, "react_lane_enabled", False) else "false",
         "skill_auto_detect_min_repeats": str(getattr(config, "skill_auto_detect_min_repeats", 3)),
         "skill_auto_detect_similarity":  str(getattr(config, "skill_auto_detect_similarity", 0.85)),
         "default_priority":          str(getattr(config, "default_priority", 1)),
@@ -816,6 +832,12 @@ class SettingsStore:
         if "intent_classifier_enabled" in settings:
             config.intent_classifier_enabled = (
                 str(settings["intent_classifier_enabled"]).strip().lower()
+                not in {"0", "false", "no", "off", ""}
+            )
+
+        if "react_lane_enabled" in settings:
+            config.react_lane_enabled = (
+                str(settings["react_lane_enabled"]).strip().lower()
                 not in {"0", "false", "no", "off", ""}
             )
 

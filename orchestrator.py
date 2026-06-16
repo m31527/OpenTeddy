@@ -896,6 +896,22 @@ class Orchestrator:
                     # fall through to the planner below
 
         try:
+            # ── ReAct lane (Hermes-shape single loop) ────────────────────
+            # When enabled, skip the separate planner AND summary: run the
+            # whole goal through ONE executor tool-loop and return its final
+            # answer. Removes ~2 scaffolding round-trips and streams
+            # continuously. Returns None to fall through to the full
+            # plan→execute→summary flow, so a weak/empty result degrades to
+            # the robust path instead of failing.
+            if getattr(config, "react_lane_enabled", False):
+                react_result = await self._run_react_lane(req, session_mode)
+                if react_result is not None:
+                    return react_result
+                logger.info(
+                    "ReAct lane degraded to full plan→execute flow for task %s",
+                    req.id,
+                )
+
             # 1. Plan (with optional memory context)
             subtasks = await self._plan(req)
             # Defensive pass: merge bare `cd X` subtasks into the next
@@ -2042,6 +2058,111 @@ class Orchestrator:
             skills_used=[],
             new_skills_created=[],
         )
+
+    async def _run_react_lane(
+        self, req: TaskRequest, session_mode: str,
+    ) -> Optional[TaskResult]:
+        """Hermes-shape single-loop lane (opt-in via react_lane_enabled).
+
+        Run the WHOLE goal through ONE executor tool-loop — no separate
+        Gemma planner, no separate Gemma summary. The loop's final answer
+        IS the result. Reuses _run_subtask, so retry / timeout /
+        escalation / per-step verification all still apply.
+
+        Returns a TaskResult on success, or None to fall through to the
+        full plan→execute→summary flow. Degrade-to-robust: an empty or
+        failed single loop must never fail the task outright — it just
+        falls back to the scaffolded path.
+        """
+        try:
+            # Memory context, same as _plan / _fast_chat, so a goal that
+            # leans on session history isn't worse off without the planner.
+            memory_ctx = ""
+            if self.memory is not None and self.memory.is_available:
+                try:
+                    memory_ctx = await self.memory.get_context_for_task(
+                        req.goal, session_id=req.session_id,
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
+
+            description = req.goal
+            if memory_ctx:
+                description = (
+                    f"{req.goal}\n\n--- Relevant memory (context only) ---\n"
+                    f"{memory_ctx}"
+                )
+
+            # One subtask = the whole goal. The executor exposes the full
+            # mode-appropriate toolset (it gates tools on mode, not on the
+            # subtask), so this single loop can do every step end-to-end.
+            st = SubTask(
+                parent_task_id=req.id,
+                description=description,
+                agent=AgentRole.EXECUTOR,
+                order=0,
+                status=TaskStatus.PENDING,
+            )
+            await self.tracker.create_subtask(st)
+
+            mode_value = req.mode.value if hasattr(req.mode, "value") else str(req.mode)
+            st = await self._run_subtask(st, req.context, mode=mode_value)
+
+            answer = (st.result or "").strip()
+            if not answer or st.status == TaskStatus.FAILED:
+                logger.info(
+                    "ReAct lane produced no usable answer (status=%s) — degrading.",
+                    getattr(st.status, "value", st.status),
+                )
+                return None
+
+            # Deploy-confirmation output (code-mode deploys only; a no-op
+            # otherwise) — same as the full flow's confirmation step.
+            confirmation_output = await self._run_confirmation_checks(
+                req.goal, subtasks=[st], session_mode=session_mode,
+            )
+            if confirmation_output:
+                answer += confirmation_output
+
+            overall_status = self._derive_status([st])
+            await self.tracker.update_task_status(req.id, overall_status, answer)
+
+            # Long-term memory, same as the full flow's persist step.
+            if self.memory is not None:
+                try:
+                    await self.memory.summarize_and_store(
+                        task_id=req.id,
+                        goal=req.goal,
+                        final_output=answer,
+                        session_id=req.session_id,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("Memory store (ReAct lane) failed: %s", exc)
+
+            # Skill auto-detection, same gate as the full flow.
+            if (overall_status == TaskStatus.COMPLETED
+                    and self.memory is not None
+                    and self.memory.is_available
+                    and not _is_local_only()):
+                asyncio.create_task(self._maybe_promote_pattern_to_skill(req))
+
+            return TaskResult(
+                task_id=req.id,
+                status=overall_status,
+                summary=answer,
+                subtasks=[st],
+                skills_used=[st.skill_hint] if getattr(st, "skill_hint", None) else [],
+                new_skills_created=[],
+            )
+        except Exception as exc:  # noqa: BLE001
+            # Any failure → degrade to the full flow rather than break the
+            # task. The ReAct lane is a speed optimisation, never a
+            # correctness dependency.
+            logger.warning(
+                "ReAct lane crashed (%s) — degrading to full plan→execute flow",
+                exc,
+            )
+            return None
 
     # ── Skill auto-detection (embedding-based) ────────────────────────────────
     # Why this exists: the original mechanism required Qwen to emit

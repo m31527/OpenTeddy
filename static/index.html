@@ -4162,6 +4162,19 @@
                   <span class="escalation-toggle-hint" data-i18n="intent_classifier_enabled_hint">Classify each goal first; pure info questions ("what is X", "explain Y") get answered in one LLM turn — typically 25 seconds faster than going through the full tool loop. Falls back to the full flow on any uncertainty.</span>
                 </span>
               </label>
+              <!-- ReAct lane (Hermes-shape single loop). Tool-using goals
+                   skip the separate planner + summary and run as ONE
+                   executor tool-loop. ~24s faster on a 26B planner +
+                   streams continuously. Needs a capable executor (20B+ /
+                   MoE); falls back to the full pipeline if the single loop
+                   comes back empty. Opt-in (default off). -->
+              <label class="escalation-toggle">
+                <input type="checkbox" id="chk_react_lane_enabled" />
+                <span class="escalation-toggle-text">
+                  <span class="escalation-toggle-title" data-i18n="react_lane_enabled_label">ReAct lane (single-loop, Hermes-style speed)</span>
+                  <span class="escalation-toggle-hint" data-i18n="react_lane_enabled_hint">Run tool-using goals as ONE executor loop (model → tool → result → repeat → answer) instead of the separate plan → execute → summary pipeline. Drops ~2 scaffolding round-trips (~24s on a 26B planner) and streams continuously. Needs a capable executor (20B+ / MoE) — a tiny model still wants the planner. Falls back to the full pipeline if the single loop returns empty.</span>
+                </span>
+              </label>
               <!-- ── Cloud LLM Provider switcher ────────────────────
                    The provider selector comes FIRST, then the matching
                    vendor's key+model row shows below. Picking a vendor
@@ -9699,6 +9712,12 @@
           const v = String(s.intent_classifier_enabled?.value ?? 'true').toLowerCase();
           intEl.checked = !['0', 'false', 'no', 'off'].includes(v);
         }
+        const reactEl = document.getElementById('chk_react_lane_enabled');
+        if (reactEl) {
+          // Defaults OFF (opt-in) — only checked when explicitly enabled.
+          const v = String(s.react_lane_enabled?.value ?? 'false').toLowerCase();
+          reactEl.checked = !['0', 'false', 'no', 'off', ''].includes(v);
+        }
         _setInput('inp_gemma_base_url', s.gemma_base_url?.value ?? '');
         _setInput('inp_qwen_base_url',  s.qwen_base_url?.value  ?? '');
         // Local inference engine radio + vLLM URL.
@@ -10399,6 +10418,7 @@
         streaming_enabled:         document.getElementById('chk_streaming_enabled').checked ? 'true' : 'false',
         session_workspace_isolation: document.getElementById('chk_session_workspace_isolation').checked ? 'true' : 'false',
         intent_classifier_enabled:   document.getElementById('chk_intent_classifier_enabled').checked ? 'true' : 'false',
+        react_lane_enabled:          document.getElementById('chk_react_lane_enabled')?.checked ? 'true' : 'false',
         gemma_base_url:            document.getElementById('inp_gemma_base_url').value.trim(),
         qwen_base_url:             document.getElementById('inp_qwen_base_url').value.trim(),
         // Local inference engine. On macOS we always persist "ollama"

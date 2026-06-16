@@ -556,6 +556,25 @@ class Config:
         ).strip().lower() not in {"0", "false", "no", "off"}
     )
 
+    # ── ReAct lane (single-loop, "Hermes shape") ────────────────────────────
+    # When ON, a tool-using goal skips the separate Gemma planner AND the
+    # separate Gemma summary: the whole goal runs through ONE executor
+    # tool-loop (model → tool → result → repeat → final answer), exactly
+    # the lean loop that makes harnesses like Hermes feel fast. Removes
+    # ~2 scaffolding round-trips (plan + summary ≈ 24s on a 26B planner)
+    # and streams continuously so it feels alive. Safe: if the single
+    # loop returns empty / fails, the orchestrator degrades to the full
+    # plan→execute→summary flow rather than failing the task. Needs a
+    # capable executor (20B+ / MoE) — a tiny model still wants the
+    # planner's scaffolding, which is why this is opt-in (default OFF).
+    # Pure-chat goals still take the cheaper fast-chat path; this lane
+    # only replaces the plan→execute→summary pipeline for tool work.
+    react_lane_enabled: bool = field(
+        default_factory=lambda: os.getenv(
+            "OPENTEDDY_REACT_LANE", "false"
+        ).strip().lower() not in {"0", "false", "no", "off", ""}
+    )
+
     # ── Skill auto-detection (embedding-based pattern promotion) ─────────────
     # Pre-2026-05-18 skill creation depended entirely on Qwen self-flagging
     # `skill_needed` in its JSON output, which 2-3B models almost never do
@@ -740,6 +759,11 @@ class Config:
         if "intent_classifier_enabled" in settings:
             self.intent_classifier_enabled = (
                 str(settings["intent_classifier_enabled"]).strip().lower() not in _OFF
+            )
+
+        if "react_lane_enabled" in settings:
+            self.react_lane_enabled = (
+                str(settings["react_lane_enabled"]).strip().lower() not in _OFF
             )
 
         vsd = _i("skill_auto_detect_min_repeats")
