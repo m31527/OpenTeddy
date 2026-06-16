@@ -638,6 +638,13 @@ class Config:
             self.local_engine = settings["local_engine"].lower()
         if _s("vllm_base_url"):
             self.vllm_base_url = settings["vllm_base_url"]
+        # Unified single-model id. Applied even when BLANK — clearing the
+        # field is how a user returns to the 2-model split, so unlike the
+        # truthy-guarded settings above we must honour an empty value
+        # rather than skip it. ("unified_model" is always present in the
+        # DB once the schema seeded it.)
+        if "unified_model" in settings:
+            self.unified_model = (settings.get("unified_model") or "").strip()
 
         # Claude API key — only overwrite when the user actually saved one
         # in the UI. Empty string keeps the env-var fallback.

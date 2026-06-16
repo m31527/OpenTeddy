@@ -9663,6 +9663,12 @@
         const data = await res.json();
         if (!data.success) { toast('Settings load error: ' + data.error, true); return; }
         const s = data.data;
+        // Whether THIS SERVER can run vLLM (Linux/CUDA). Reported by the
+        // backend — gate the vLLM engine option on this, not on the
+        // browser's user-agent, so a Linux DGX opened from a Mac browser
+        // (the fleet topology) still offers vLLM. Defaults false if an
+        // older sidecar didn't send the flag.
+        window._serverVllmCapable = (data.vllm_capable === true);
         // Refresh model-benchmark stats alongside Settings (cheap,
         // read-only). This populates the "Model Benchmarks" card in
         // Settings — separate from the Usage-tab perf card, which is
@@ -10348,23 +10354,25 @@
     }
 
     // ── Local inference engine (Ollama vs vLLM) ──────────────────────────
-    // vLLM is Linux/CUDA only — no Metal build — so on macOS the radio is
-    // disabled and forced to Ollama. We detect Mac from the UA; the
-    // backend also hard-gates Darwin in local_engine.py, so a wrong UA
-    // sniff can't actually point a Mac at a non-existent vLLM server.
-    function _isMacPlatform() {
-      const p = (navigator.userAgentData?.platform || navigator.platform || '').toLowerCase();
-      return p.includes('mac');
+    // vLLM is Linux/CUDA only — no Metal build. Availability depends on
+    // where the BACKEND runs, not on the browser: a Linux DGX accessed
+    // from a Mac browser (the fleet topology) can absolutely run vLLM.
+    // So we gate on window._serverVllmCapable (reported by GET /settings),
+    // NOT on the client user-agent. The backend also hard-gates Darwin in
+    // local_engine.py, so this stays correct even if the flag is missing.
+    function _serverCanVllm() {
+      return window._serverVllmCapable === true;
     }
     function renderLocalEngineUI() {
-      const isMac    = _isMacPlatform();
+      const canVllm   = _serverCanVllm();
       const vllmRadio = document.getElementById('engine_vllm');
       const vllmLabel = document.getElementById('engineVllmLabel');
       const vllmHint  = document.getElementById('engineVllmHint');
       const urlField  = document.getElementById('vllmUrlField');
       if (!vllmRadio) return;
-      if (isMac) {
-        // Force Ollama, disable + grey the vLLM option.
+      if (!canVllm) {
+        // Server can't run vLLM (macOS/Windows backend) — force Ollama,
+        // disable + grey the vLLM option.
         vllmRadio.checked  = false;
         vllmRadio.disabled = true;
         const ollama = document.getElementById('engine_ollama');
@@ -10414,12 +10422,14 @@
         intent_classifier_enabled:   document.getElementById('chk_intent_classifier_enabled').checked ? 'true' : 'false',
         gemma_base_url:            document.getElementById('inp_gemma_base_url').value.trim(),
         qwen_base_url:             document.getElementById('inp_qwen_base_url').value.trim(),
-        // Local inference engine. On macOS we always persist "ollama"
-        // regardless of the radio (it should be disabled there anyway) —
-        // the backend hard-gates Darwin too, but sending the right value
-        // keeps the stored config honest.
-        local_engine:              (_isMacPlatform() ? 'ollama'
-                                     : (document.querySelector('input[name="local_engine"]:checked')?.value || 'ollama')),
+        // Local inference engine. When the SERVER can't run vLLM
+        // (macOS/Windows backend) we always persist "ollama" regardless of
+        // the radio (it's disabled there anyway). On a vLLM-capable server
+        // we honour the radio — even when the browser is a Mac, since vLLM
+        // runs on the server, not the client (the fleet topology).
+        local_engine:              (_serverCanVllm()
+                                     ? (document.querySelector('input[name="local_engine"]:checked')?.value || 'ollama')
+                                     : 'ollama'),
         vllm_base_url:             document.getElementById('inp_vllm_base_url')?.value.trim() || 'http://127.0.0.1:8001',
         // Empty is meaningful here: blank = default 2-model split, so do
         // NOT coalesce to a fallback the way vllm_base_url does.

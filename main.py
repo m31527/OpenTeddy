@@ -2711,6 +2711,7 @@ async def get_perf_stats(days: int = 30, slowest_n: int = 10) -> dict:
 async def get_settings() -> dict:
     """Return all settings values, metadata, and current config snapshot."""
     try:
+        import platform as _platform
         values = await settings_store.get_all()
         result = {}
         for key, meta in SETTINGS_META.items():
@@ -2718,7 +2719,22 @@ async def get_settings() -> dict:
                 **meta,
                 "value": values.get(key, ""),
             }
-        return {"success": True, "data": result, "error": None}
+        # vLLM availability is a property of the SERVER, not the browser.
+        # The UI must gate the vLLM engine option on where this backend
+        # runs (Linux/CUDA) — NOT on the client's user-agent. A Linux DGX
+        # accessed from a Mac browser is the exact fleet topology, and a
+        # client-side UA sniff would wrongly disable vLLM there. vLLM has
+        # no macOS/Windows build, so it's offered only on Linux. (The
+        # backend also hard-gates Darwin in local_engine.active_engine,
+        # so this is belt-and-braces.)
+        server_os = _platform.system()
+        return {
+            "success": True,
+            "data": result,
+            "error": None,
+            "server_platform": server_os,
+            "vllm_capable": server_os == "Linux",
+        }
     except Exception as exc:  # noqa: BLE001
         logger.error("GET /settings error: %s", exc)
         return {"success": False, "data": None, "error": str(exc)}
