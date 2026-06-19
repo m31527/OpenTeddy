@@ -206,7 +206,7 @@ async def _amain(args) -> int:
     excludes = _DEFAULT_EXCLUDES | set(
         e.strip() for e in (args.exclude or "").split(",") if e.strip()
     )
-    stamp = datetime.now().strftime("%Y-%m-%d")
+    stamp = args.stamp or datetime.now().strftime("%Y-%m-%d")
 
     print(f"… 掃描 {args.dir} （hash={'on' if args.hash else 'off'}）")
     manifest = build_manifest(args.dir, do_hash=args.hash, excludes=excludes)
@@ -251,6 +251,9 @@ def main() -> int:
                     help="comma-separated extra names to skip (dirs/files)")
     ap.add_argument("--hash", action="store_true",
                     help="content-hash files (catches same-size+mtime edits; slower)")
+    ap.add_argument("--stamp", default=None,
+                    help="override the snapshot date label YYYY-MM-DD "
+                         "(for testing the diff today, or backfilling a missed day)")
     summ = ap.add_mutually_exclusive_group()
     summ.add_argument("--summary", dest="summary", action="store_true", default=True,
                       help="use the selected provider to write the summary (default)")
