@@ -40,6 +40,18 @@ RiskLevel = Literal["low", "high"]
 # doubt, leave the pattern off the list — the user can always run
 # the action from the web UI where approval is interactive.
 
+# Task origins that run HEADLESS — no human watching the web-UI approval
+# prompt — so high-risk tools must auto-approve (after the destructive
+# denylist) instead of hanging forever on the approval store:
+#   - "telegram"      → the whitelisted chat_id is the consent signal.
+#   - "fleet_watcher" → autonomous monitor on an interval; if it blocked
+#                       on approval it could never run, and the prompts
+#                       pile up in the web UI of every operator.
+# The destructive-action denylist is ALWAYS enforced first for these —
+# auto-approve never bypasses it. Web-UI / scheduled / unknown origins
+# keep the interactive approval gate.
+_AUTO_APPROVE_ORIGINS: frozenset = frozenset({"telegram", "fleet_watcher"})
+
 # Tool-name matchers (exact-equal OR substring match against the
 # tool's registered name). Apply to the *name*, not args.
 _DENY_TOOL_NAMES: frozenset = frozenset({
@@ -290,13 +302,13 @@ class ToolRegistry:
         except Exception:  # noqa: BLE001
             origin = ""
 
-        if origin == "telegram":
+        if origin in _AUTO_APPROVE_ORIGINS:
             deny_reason = check_destructive_denylist(tool_name, args)
             if deny_reason:
                 logger.warning(
-                    "Telegram-driven task=%s blocked at tool=%s: %s "
+                    "%s-driven task=%s blocked at tool=%s: %s "
                     "(args=%r)",
-                    task_id, tool_name, deny_reason, args,
+                    origin, task_id, tool_name, deny_reason, args,
                 )
                 # Structured "blocked" result — the orchestrator surfaces
                 # this through its normal failure handling, and the
@@ -307,11 +319,11 @@ class ToolRegistry:
                 return make_result(
                     False,
                     error=(
-                        f"🚫 Blocked by Telegram safety policy: {deny_reason}. "
-                        f"Destructive actions are not allowed when a task is "
-                        f"driven from Telegram. If you really meant this, "
-                        f"open the session in the web UI and run it there "
-                        f"with interactive approval."
+                        f"🚫 Blocked by {origin} safety policy: {deny_reason}. "
+                        f"Destructive actions are not allowed for headless "
+                        f"({origin}) tasks. If you really meant this, open the "
+                        f"session in the web UI and run it there with "
+                        f"interactive approval."
                     ),
                     duration_ms=0,
                 )
@@ -320,9 +332,9 @@ class ToolRegistry:
             # normally just like web-UI tasks.
             if risk == "high":
                 logger.info(
-                    "Telegram-driven task=%s auto-approving high-risk tool=%s "
+                    "%s-driven task=%s auto-approving high-risk tool=%s "
                     "(denylist passed)",
-                    task_id, tool_name,
+                    origin, task_id, tool_name,
                 )
                 # Skip the approval-store branch entirely; jump to execute.
                 pass  # explicit no-op for readability

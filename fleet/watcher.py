@@ -192,7 +192,20 @@ class FleetWatcher:
             session_id=f"watch-{self._node_id}",
             mode=SessionMode.CODE,
         )
-        result = await orch.run(req)
+        # Bind the origin ContextVar the tool registry actually reads when
+        # deciding the approval policy. WITHOUT this, the watcher's
+        # health-check shell commands (uptime / df / docker ps …) hit the
+        # web-UI approval gate and pile up forever — nobody is watching the
+        # UI for an autonomous monitor. "fleet_watcher" auto-approves
+        # non-destructive tools (destructive ones stay hard-blocked by the
+        # denylist), exactly like the Telegram channel. The dict field in
+        # `context` above is NOT read by the registry — this is.
+        from tools._context import set_triggered_by, reset_triggered_by
+        _origin_tok = set_triggered_by("fleet_watcher")
+        try:
+            result = await orch.run(req)
+        finally:
+            reset_triggered_by(_origin_tok)
         summary = getattr(result, "summary", "") or ""
         parsed = parse_watch_result(summary)
         if parsed is None:
