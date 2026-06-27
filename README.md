@@ -250,6 +250,8 @@ If you'd rather install by hand:
   ollama pull gemma4:e2b
   ollama pull qwen3.5:2b
   ```
+  > On a DGX Spark / 35B-class box, use the stronger recommended executor
+  > instead of `qwen3.5:2b` — see [Recommended models (capable hardware)](#recommended-models-capable-hardware).
 - (Optional) An Anthropic / OpenAI / Gemini / Deepseek / OpenRouter API key — configure later via Settings → Cloud LLM Provider
 
 ### 2. Install
@@ -278,6 +280,39 @@ uvicorn main:app --reload
 ```
 
 ## Linux Server Setup (DGX / Jetson / headless fleet) *(v1.1.5)*
+
+### Recommended models (capable hardware)
+
+On a DGX Spark / 35B-class box, **don't run the tiny desktop defaults** — you
+have the memory for a far stronger brain. Recommended pairing:
+
+| Role | Desktop / laptop (default) | DGX Spark / 35B-class (**recommended**) |
+|---|---|---|
+| Orchestrator (`GEMMA_MODEL`) | `gemma4:e2b` | `gemma4:26b` |
+| Executor (`QWEN_MODEL`) | `qwen3.5:2b` | **`yanjia/Qwen3.6-35B-A3B-Opus4.7-Reasoning-Distilled:q4km`** |
+
+**Why this executor:** it's a 35B **A3B MoE** — 35B of knowledge but only ~3B
+active parameters per token, so it stays fast on Ollama despite the size —
+distilled from **Opus-4.7 reasoning**, `q4_K_M` (~22 GB). In practice it's the
+sweet spot on a single DGX Spark: big-model quality at small-model speed, and
+it's the configuration this project is now tuned and tested against.
+
+```bash
+ollama pull yanjia/Qwen3.6-35B-A3B-Opus4.7-Reasoning-Distilled:q4km
+```
+Then set it in **Settings → Executor Model** (or `QWEN_MODEL` in `.env`).
+
+> ⚠️ **Reminders for this setup**
+> - **~22 GB** — needs a capable box (DGX Spark, or ≥24 GB GPU/unified memory).
+>   Laptops can't fit it, which is why the global default stays small — this is
+>   a **recommendation for capable hardware**, not the universal default.
+> - **Set `VERIFICATION_ENABLED=false`.** A model this capable doesn't need the
+>   per-step LLM-as-judge, and each judge call adds 5–60 s. Big speedup.
+> - It's a **reasoning model** (emits chain-of-thought). Excellent on hard,
+>   multi-step work; for trivial Q&A keep the **intent-classifier fast-path on**
+>   so a simple question doesn't pay for a full reasoning + tool loop. Consider
+>   the **ReAct lane** (`react_lane_enabled`) too — a capable executor like this
+>   is exactly what it's designed for.
 
 If you're deploying OpenTeddy on a Linux server (NVIDIA DGX Spark, Jetson, Raspberry Pi 5, a rack box, anywhere without a permanent monitor), there are extra moving parts beyond `uvicorn main:app`:
 
@@ -771,7 +806,7 @@ without a server restart.
 | `GEMMA_BASE_URL` | `http://localhost:11434` | Ollama base URL for the orchestrator. |
 | `GEMMA_MODEL` | `gemma4:e2b` | Orchestrator model tag. |
 | `QWEN_BASE_URL` | `http://localhost:11434` | Ollama base URL for the executor. |
-| `QWEN_MODEL` | `qwen3.5:2b` | Executor model tag. |
+| `QWEN_MODEL` | `qwen3.5:2b` | Executor model tag. On capable hardware, the recommended value is `yanjia/Qwen3.6-35B-A3B-Opus4.7-Reasoning-Distilled:q4km` — see [Recommended models](#recommended-models-capable-hardware). |
 | `BRAVE_SEARCH_API_KEY` | — | Optional. Powers the Chat-mode `web_search` tool. Free tier covers 2,000 queries/month at [api-dashboard.search.brave.com](https://api-dashboard.search.brave.com/). Without it, the local model answers from training data and warns the user about staleness. |
 | `DB_PATH` | `openteddy.db` | SQLite database path. |
 | `MEMORY_DB_PATH` | `./memory_db` | ChromaDB directory. |
@@ -806,7 +841,7 @@ Most of these matter most on big models — turn them off to trade safety nets f
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `STREAMING_ENABLED` | `true` | Stream LLM tokens to the chat as they generate. Major perceived-latency win on small thinking models. |
-| `VERIFICATION_ENABLED` | `true` | Run the per-step LLM-as-judge verifier after each successful subtask. Set to `false` on big-model setups (DGX Spark, qwen3.5:35b) where each judge call is 5–60s. |
+| `VERIFICATION_ENABLED` | `true` | Run the per-step LLM-as-judge verifier after each successful subtask. Set to `false` on big-model setups (DGX Spark, the recommended `Qwen3.6-35B-A3B` executor) where each judge call is 5–60s. |
 | `QWEN_NUM_CTX` | `16384` | Ollama `num_ctx` for the executor. Larger = more tool-round history before the watchdog has to compress, but more VRAM. |
 | `GEMMA_NUM_CTX` | `16384` | Same, for the orchestrator. |
 | `CONTEXT_COMPRESS_AT` | `0.7` | Trigger context compression when prompt-token usage crosses this fraction of `num_ctx`. |
