@@ -87,6 +87,24 @@ _MACHINE_TAIL = (
 )
 
 
+def _has_custom_watch_prompt() -> bool:
+    """True only when the operator has defined what this node should
+    actually check. The generic placeholder doesn't count — a reasoning
+    model handed a vague 'is anything unusual?' with no real data source
+    invents anomalies and spams warning/critical alerts every cycle."""
+    return bool((os.getenv("OPENTEDDY_FLEET_WATCH_PROMPT", "") or "").strip())
+
+
+def _alert_cooldown_s() -> float:
+    """Minimum seconds before the SAME observation may alert again. Stops
+    a genuine-but-persistent condition (e.g. disk 85%) from re-firing
+    every cycle. Default 1h."""
+    try:
+        return max(0.0, float(os.getenv("OPENTEDDY_FLEET_ALERT_COOLDOWN", "3600")))
+    except (TypeError, ValueError):
+        return 3600.0
+
+
 def _build_prompt() -> str:
     base = (os.getenv("OPENTEDDY_FLEET_WATCH_PROMPT", "") or "").strip() \
         or _DEFAULT_WATCH_PROMPT
@@ -144,12 +162,25 @@ class FleetWatcher:
         self._get_orch = get_orchestrator  # () -> Orchestrator
         self._task: Optional[asyncio.Task] = None
         self._stop = asyncio.Event()
+        # {alert_signature: last_sent_monotonic} — drives the cooldown so
+        # the same observation doesn't re-alert every cycle.
+        self._alert_history: Dict[str, float] = {}
 
     def start(self) -> None:
         if self._task is None and watch_enabled():
             self._task = asyncio.create_task(self._loop(), name="fleet_watcher")
             logger.info("fleet watcher: enabled, interval=%.0fs",
                         _watch_interval_s())
+            if not _has_custom_watch_prompt():
+                # Loud, actionable warning: enabled but no real job → it
+                # will run no-ops and never alert (by design, to avoid the
+                # placeholder-prompt false-positive storm).
+                logger.warning(
+                    "fleet watcher: ENABLED but OPENTEDDY_FLEET_WATCH_PROMPT "
+                    "is not set — it will NOT raise alerts. Define what this "
+                    "node should check (e.g. disk/log/service health) in "
+                    "OPENTEDDY_FLEET_WATCH_PROMPT to activate alerting."
+                )
 
     async def stop(self) -> None:
         self._stop.set()
@@ -182,6 +213,17 @@ class FleetWatcher:
         orch = self._get_orch()
         if orch is None:
             return
+        # No real job configured → skip the check entirely. The generic
+        # placeholder prompt + a reasoning model invents anomalies and
+        # spams warning/critical every cycle; skipping also saves the
+        # wasted LLM call. Operators activate alerting by defining
+        # OPENTEDDY_FLEET_WATCH_PROMPT (what THIS node should check).
+        if not _has_custom_watch_prompt():
+            logger.debug(
+                "fleet watcher: no OPENTEDDY_FLEET_WATCH_PROMPT set — "
+                "skipping check (no alerts until a real check is defined)."
+            )
+            return
         req = TaskRequest(
             id=str(uuid.uuid4()),
             goal=_build_prompt(),
@@ -211,6 +253,32 @@ class FleetWatcher:
         if parsed is None:
             logger.debug("fleet watcher: no anomaly this cycle")
             return
+
+        # ── De-dup / cooldown ────────────────────────────────────────────
+        # A genuine but persistent condition (disk 85%, a service down)
+        # would otherwise re-alert EVERY cycle. Suppress the same
+        # observation until the cooldown elapses, so the operator gets one
+        # ping, not a stream. Signature = severity + a hash of the
+        # normalised observation (case/whitespace-folded, capped) so near-
+        # identical wordings collapse to one.
+        import hashlib
+        norm = " ".join((parsed["observation"] or "").lower().split())[:200]
+        sig = f'{parsed["severity"]}:{hashlib.sha1(norm.encode()).hexdigest()[:12]}'
+        now = asyncio.get_event_loop().time()
+        cooldown = _alert_cooldown_s()
+        last = self._alert_history.get(sig)
+        if last is not None and (now - last) < cooldown:
+            logger.info(
+                "fleet watcher: duplicate %s alert within cooldown (%.0fs) — "
+                "suppressed", parsed["severity"], cooldown,
+            )
+            return
+        self._alert_history[sig] = now
+        # Bound memory — drop entries well past their cooldown.
+        self._alert_history = {
+            k: v for k, v in self._alert_history.items() if now - v < cooldown * 2
+        }
+
         alert = P.make_alert(
             self._node_id,
             severity=parsed["severity"],
