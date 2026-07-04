@@ -289,16 +289,16 @@ have the memory for a far stronger brain. Recommended pairing:
 | Role | Desktop / laptop (default) | DGX Spark / 35B-class (**recommended**) |
 |---|---|---|
 | Orchestrator (`GEMMA_MODEL`) | `gemma4:e2b` | `gemma4:26b` |
-| Executor (`QWEN_MODEL`) | `qwen3.5:2b` | **`yanjia/Qwen3.6-35B-A3B-Opus4.7-Reasoning-Distilled:q4km`** |
+| Executor (`QWEN_MODEL`) | `qwen3.5:2b` | **`qwen3.6:35b`** |
 
 **Why this executor:** it's a 35B **A3B MoE** — 35B of knowledge but only ~3B
-active parameters per token, so it stays fast on Ollama despite the size —
-distilled from **Opus-4.7 reasoning**, `q4_K_M` (~22 GB). In practice it's the
-sweet spot on a single DGX Spark: big-model quality at small-model speed, and
-it's the configuration this project is now tuned and tested against.
+active parameters per token, so it stays fast on Ollama despite the size
+(`q4_K_M`, ~22 GB) — and, critically for an agent, the **stock model's
+tool-calling is reliable**: when a goal says "produce an HTML report", it
+actually calls `write_file` and the download chip appears.
 
 ```bash
-ollama pull yanjia/Qwen3.6-35B-A3B-Opus4.7-Reasoning-Distilled:q4km
+ollama pull qwen3.6:35b
 ```
 Then set it in **Settings → Executor Model** (or `QWEN_MODEL` in `.env`).
 
@@ -313,6 +313,13 @@ Then set it in **Settings → Executor Model** (or `QWEN_MODEL` in `.env`).
 >   so a simple question doesn't pay for a full reasoning + tool loop. Consider
 >   the **ReAct lane** (`react_lane_enabled`) too — a capable executor like this
 >   is exactly what it's designed for.
+> - **Avoid community distills in the executor seat.** Variants like
+>   `*-Opus4.7-Reasoning-Distilled` chat noticeably faster, but in real use
+>   they showed a **tool-calling regression**: the model *narrates* "done ✅"
+>   without ever calling `write_file`, so deliverables (HTML reports etc.)
+>   never materialise. Distilling reasoning style tends to dull tool-use
+>   discipline — fine for pure chat sessions, disqualifying for the executor,
+>   whose #1 job is reliably emitting tool calls.
 
 If you're deploying OpenTeddy on a Linux server (NVIDIA DGX Spark, Jetson, Raspberry Pi 5, a rack box, anywhere without a permanent monitor), there are extra moving parts beyond `uvicorn main:app`:
 
@@ -806,7 +813,7 @@ without a server restart.
 | `GEMMA_BASE_URL` | `http://localhost:11434` | Ollama base URL for the orchestrator. |
 | `GEMMA_MODEL` | `gemma4:e2b` | Orchestrator model tag. |
 | `QWEN_BASE_URL` | `http://localhost:11434` | Ollama base URL for the executor. |
-| `QWEN_MODEL` | `qwen3.5:2b` | Executor model tag. On capable hardware, the recommended value is `yanjia/Qwen3.6-35B-A3B-Opus4.7-Reasoning-Distilled:q4km` — see [Recommended models](#recommended-models-capable-hardware). |
+| `QWEN_MODEL` | `qwen3.5:2b` | Executor model tag. On capable hardware, the recommended value is `qwen3.6:35b` — see [Recommended models](#recommended-models-capable-hardware). |
 | `BRAVE_SEARCH_API_KEY` | — | Optional. Powers the Chat-mode `web_search` tool. Free tier covers 2,000 queries/month at [api-dashboard.search.brave.com](https://api-dashboard.search.brave.com/). Without it, the local model answers from training data and warns the user about staleness. |
 | `DB_PATH` | `openteddy.db` | SQLite database path. |
 | `MEMORY_DB_PATH` | `./memory_db` | ChromaDB directory. |
