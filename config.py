@@ -556,6 +556,28 @@ class Config:
         ).strip().lower() not in {"0", "false", "no", "off"}
     )
 
+    # ── Skill test-before-register + regenerate-on-failure (Loop A) ──────────
+    # Before a generated skill is registered, run it once against an
+    # LLM-suggested test input; only behaviour-tested skills are stored (and
+    # they register ACTIVE — the passed test IS the success evidence, which
+    # also breaks the old deadlock where TESTING skills could never be
+    # matched and therefore never promoted). Generation failures repair
+    # themselves: the error is fed back to the LLM for up to 2 fix attempts.
+    # OPENTEDDY_SKILL_TEST=0 restores the old syntax-check-only behaviour.
+    skill_test_before_register: bool = field(
+        default_factory=lambda: os.getenv(
+            "OPENTEDDY_SKILL_TEST", "1"
+        ).strip().lower() not in {"0", "false", "no", "off", ""}
+    )
+    # When a stored skill raises at invocation time, it self-repairs in the
+    # background (error + real failing input → LLM fix → re-test → new
+    # version). This caps how many versions a skill may reach through
+    # self-repair; at the cap the next failure RETIRES it instead (stops it
+    # being matched) so a hopeless skill can't churn regenerations forever.
+    skill_regen_max_versions: int = field(
+        default_factory=lambda: int(os.getenv("OPENTEDDY_SKILL_REGEN_MAX", "3"))
+    )
+
     # ── Failure post-mortem lessons (self-improvement Loop B) ────────────────
     # After a task ends FAILED (or any subtask failed / was escalated), run
     # ONE post-mortem LLM call that distills a reusable lesson — root cause +
