@@ -556,6 +556,21 @@ class Config:
         ).strip().lower() not in {"0", "false", "no", "off"}
     )
 
+    # ── Failure post-mortem lessons (self-improvement Loop B) ────────────────
+    # After a task ends FAILED (or any subtask failed / was escalated), run
+    # ONE post-mortem LLM call that distills a reusable lesson — root cause +
+    # what to do differently — into long-term memory. Future plans on similar
+    # goals get the lesson injected as a ⚠️ warning block, so the agent steps
+    # in each pit only once instead of repeating the mistake every session.
+    # Fire-and-forget after the user already has their result: costs one extra
+    # LLM call per FAILED task, zero on success. OPENTEDDY_FAILURE_LESSONS=0
+    # to disable.
+    failure_lessons_enabled: bool = field(
+        default_factory=lambda: os.getenv(
+            "OPENTEDDY_FAILURE_LESSONS", "1"
+        ).strip().lower() not in {"0", "false", "no", "off", ""}
+    )
+
     # ── ReAct lane (single-loop, "Hermes shape") ────────────────────────────
     # When ON, a tool-using goal skips the separate Gemma planner AND the
     # separate Gemma summary: the whole goal runs through ONE executor

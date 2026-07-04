@@ -1047,6 +1047,22 @@ class Orchestrator:
                 except Exception as exc:  # noqa: BLE001
                     logger.warning("Memory store failed (non-fatal): %s", exc)
 
+            # 5b. Failure post-mortem → lesson memory (Loop B).
+            # Fire-and-forget: the user already has their result; the
+            # lesson extraction (one LLM call) must not delay the return.
+            if (self.memory is not None
+                    and self.memory.is_available
+                    and getattr(config, "failure_lessons_enabled", True)):
+                _had_failure = (
+                    overall_status == TaskStatus.FAILED
+                    or any(st.status in (TaskStatus.FAILED, TaskStatus.ESCALATED)
+                           for st in subtasks)
+                )
+                if _had_failure:
+                    asyncio.create_task(
+                        self._extract_failure_lesson(req, subtasks, summary)
+                    )
+
             # 6. Auto-detect recurring goal patterns → promote to skill
             #    (only fires on a successfully completed task to avoid
             #    learning broken patterns). Async fire-and-forget — the
@@ -2163,6 +2179,96 @@ class Orchestrator:
                 exc,
             )
             return None
+
+    async def _extract_failure_lesson(
+        self, req: TaskRequest, subtasks: List[SubTask], summary: str,
+    ) -> None:
+        """Self-improvement Loop B: post-mortem a failed / escalated task
+        into ONE reusable lesson stored in long-term memory.
+
+        get_context_for_task surfaces lessons (globally, lessons-first) on
+        similar future goals, so the planner sees "⚠️ last time this failed
+        because X — do Y instead" BEFORE it repeats the mistake. This is the
+        automated version of what a human operator does when they write
+        "avoid Z, it claims success but doesn't deliver" into a README.
+
+        Fire-and-forget: runs after the user already has their result. Any
+        failure here is logged and swallowed — a post-mortem must never
+        break or slow the task path.
+        """
+        try:
+            failed = [
+                st for st in subtasks
+                if st.status in (TaskStatus.FAILED, TaskStatus.ESCALATED)
+            ]
+            log_lines: List[str] = []
+            for st in (failed or subtasks)[:5]:
+                log_lines.append(f"- subtask: {(st.description or '')[:200]}")
+                log_lines.append(
+                    f"  status: {getattr(st.status, 'value', st.status)}"
+                )
+                if st.error:
+                    log_lines.append(f"  error: {st.error[:300]}")
+                if st.result:
+                    log_lines.append(f"  result: {(st.result or '')[:200]}")
+
+            system = (
+                "You are a post-mortem analyst for an AI agent. From a failed "
+                "task's log, extract ONE short, reusable lesson that would "
+                "prevent the same failure next time. Focus on what is "
+                "REUSABLE — wrong tool choice, bad assumption, missing "
+                "precondition — not one-off details (dates, ids, file names). "
+                "Write in the same language as the task goal. Max 80 words. "
+                "Output ONLY the lesson, exactly in this format:\n"
+                "LESSON: <root cause in one sentence>\n"
+                "NEXT TIME: <one concrete instruction the agent should follow>"
+            )
+            prompt = (
+                f"TASK GOAL: {(req.goal or '')[:400]}\n\n"
+                f"FINAL SUMMARY: {(summary or '')[:400]}\n\n"
+                f"FAILURE LOG:\n" + "\n".join(log_lines)
+            )
+            lesson = await self._orchestrator_complete(
+                prompt, system,
+                task_id=req.id, task_description="[post-mortem lesson]",
+            )
+            lesson = (lesson or "").strip()
+            # "[]" is _gemma_complete's on-error fallback; too-short output
+            # means the model produced nothing distillable.
+            if not lesson or lesson == "[]" or len(lesson) < 20:
+                logger.debug("post-mortem: no usable lesson extracted")
+                return
+            lesson = lesson[:800]
+
+            # De-dup: the same recurring failure would otherwise pile up a
+            # near-identical lesson every time it happens.
+            try:
+                similar = await self.memory.search_lessons(lesson, n_results=1)
+                if similar and similar[0]["relevance_score"] >= 0.9:
+                    logger.info(
+                        "post-mortem: near-duplicate lesson already stored "
+                        "(score=%.2f) — skipping", similar[0]["relevance_score"],
+                    )
+                    return
+            except Exception:  # noqa: BLE001
+                pass
+
+            # session_id="" = GLOBAL. A root cause discovered here applies
+            # everywhere — and users typically retry a failed goal in a NEW
+            # session, which session-scoped storage would never reach.
+            await self.memory.add_memory(
+                content=lesson,
+                memory_type="lesson",
+                task_id=req.id,
+                importance=0.9,
+                session_id="",
+            )
+            logger.info("post-mortem lesson stored for task %s: %s",
+                        req.id, lesson[:120].replace("\n", " / "))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "post-mortem lesson extraction failed (non-fatal): %s", exc,
+            )
 
     # ── Skill auto-detection (embedding-based) ────────────────────────────────
     # Why this exists: the original mechanism required Qwen to emit

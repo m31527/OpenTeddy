@@ -221,6 +221,61 @@ class MemoryManager:
             logger.error("search_memory failed: %s", exc)
             return []
 
+    async def search_lessons(self, query: str, n_results: int = 2) -> list[dict]:
+        """Retrieve failure lessons relevant to *query*.
+
+        Lessons (memory type "lesson", written by the orchestrator's
+        post-mortem after a failed task) are deliberately GLOBAL: a root
+        cause discovered in one session applies everywhere, and users
+        typically retry a failed goal in a NEW session — exactly when the
+        lesson matters most. So unlike search_memory this ignores session
+        scoping entirely and filters on type=lesson only. A relevance
+        floor keeps unrelated lessons from polluting every plan (cosine
+        space, so 1-distance is a real similarity signal).
+        """
+        if not self.is_available or not query:
+            return []
+        try:
+            total = self._collection.count()  # type: ignore[union-attr]
+            if total == 0:
+                return []
+            results = self._collection.query(  # type: ignore[union-attr]
+                query_texts=[query],
+                n_results=min(max(n_results * 3, 6), total),
+                where={"type": "lesson"},
+            )
+            docs      = results.get("documents", [[]])[0]
+            metas     = results.get("metadatas",  [[]])[0]
+            ids       = results.get("ids",        [[]])[0]
+            distances = results.get("distances",  [[]])[0]
+            lessons = []
+            for doc, meta, mem_id, dist in zip(docs, metas, ids, distances):
+                score = round(max(0.0, 1.0 - float(dist)), 4)
+                # No absolute relevance floor — measured with ChromaDB's
+                # default MiniLM embedder, related-vs-unrelated Chinese
+                # queries OVERLAP (related 0.25-0.42, unrelated 0.23-0.33)
+                # and cross-language matches score ~0.00, so any floor
+                # either leaks noise or kills real matches. Rank-based
+                # top-k matches search_memory's existing behaviour; the
+                # cost of an off-topic lesson is one ⚠️ line of context,
+                # the cost of a missed lesson is repeating the failure.
+                # (Real fix = a multilingual embedder for the whole
+                # collection — separate change.)
+                lessons.append({
+                    "id":              mem_id,
+                    "content":         doc,
+                    "type":            "lesson",
+                    "task_id":         meta.get("task_id", ""),
+                    "session_id":      meta.get("session_id", ""),
+                    "timestamp":       meta.get("timestamp", ""),
+                    "importance":      float(meta.get("importance", 0.9)),
+                    "relevance_score": score,
+                })
+            return lessons[:n_results]
+        except Exception as exc:  # noqa: BLE001
+            logger.error("search_lessons failed: %s", exc)
+            return []
+
     async def get_context_for_task(
         self, task_description: str, session_id: Optional[str] = None,
     ) -> str:
@@ -228,12 +283,20 @@ class MemoryManager:
         Retrieve the top-5 most relevant memories and format them as a
         context block ready for injection into an LLM system prompt.
 
+        Failure lessons are fetched separately (globally — see
+        search_lessons) and listed FIRST: a "don't repeat this mistake"
+        warning must outrank ordinary context.
+
         Returns empty string if no memories exist or ChromaDB is unavailable.
         """
         memories = await self.search_memory(
             task_description, n_results=5, session_id=session_id,
         )
-        if not memories:
+        lessons = await self.search_lessons(task_description, n_results=2)
+        if lessons:
+            lesson_ids = {m["id"] for m in lessons}
+            memories = [m for m in memories if m["id"] not in lesson_ids]
+        if not memories and not lessons:
             return ""
 
         _LABELS = {
@@ -241,10 +304,11 @@ class MemoryManager:
             "user_preference": "User preference",
             "system_context": "System context",
             "conversation":   "Conversation",
+            "lesson":         "⚠️ LESSON from a past FAILED task — avoid repeating this",
         }
 
         lines = ["=== Relevant Memory ==="]
-        for mem in memories:
+        for mem in lessons + memories:
             label   = _LABELS.get(mem["type"], mem["type"].replace("_", " ").title())
             snippet = mem["content"][:400]
             lines.append(f"[{label}]: {snippet}")
