@@ -140,6 +140,19 @@ class Tracker:
             # strings for public channels. Empty default = "not bound
             # to any chat", which is every pre-existing session.
             "ALTER TABLE sessions ADD COLUMN telegram_chat_id TEXT NOT NULL DEFAULT ''",
+            # ── Self-learning skill architecture ─────────────────────────
+            # Structured skill metadata (capabilities/permissions/tests/
+            # provenance). All defaulted so pre-existing skill rows keep
+            # working; skill_versions itself is CREATE IF NOT EXISTS in
+            # SCHEMA_SQL so fresh + migrated DBs converge.
+            "ALTER TABLE skills ADD COLUMN capabilities TEXT NOT NULL DEFAULT '[]'",
+            "ALTER TABLE skills ADD COLUMN input_keys   TEXT NOT NULL DEFAULT '[]'",
+            "ALTER TABLE skills ADD COLUMN permissions  TEXT NOT NULL DEFAULT '{}'",
+            "ALTER TABLE skills ADD COLUMN source_type  TEXT NOT NULL DEFAULT 'generated'",
+            "ALTER TABLE skills ADD COLUMN model_used   TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE skills ADD COLUMN test_status  TEXT NOT NULL DEFAULT 'untested'",
+            "ALTER TABLE skills ADD COLUMN last_used_at TEXT",
+            "ALTER TABLE skills ADD COLUMN enabled      INTEGER NOT NULL DEFAULT 1",
             # ── Scheduled tasks (cron-driven recurring runs) ──────────────
             # Each row is "this session runs this goal on this cron". The
             # session binding gives the schedule continuity of memory /
@@ -773,39 +786,22 @@ class Tracker:
 
     # ── Skill CRUD ────────────────────────────────────────────────────────────
 
-    async def upsert_skill(self, skill: SkillMetadata) -> None:
-        now = datetime.utcnow().isoformat()
-        await self.db.execute(
-            "INSERT INTO skills(name, description, code, version, status, "
-            "success_count, failure_count, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
-            "ON CONFLICT(name) DO UPDATE SET "
-            "description=excluded.description, code=excluded.code, "
-            "version=excluded.version, status=excluded.status, "
-            "success_count=excluded.success_count, "
-            "failure_count=excluded.failure_count, "
-            "updated_at=excluded.updated_at",
-            (
-                skill.name,
-                skill.description,
-                skill.code,
-                skill.version,
-                skill.status.value,
-                skill.success_count,
-                skill.failure_count,
-                skill.created_at.isoformat(),
-                now,
-            ),
-        )
-        await self.db.commit()
+    @staticmethod
+    def _skill_from_row(row) -> SkillMetadata:
+        """Build a SkillMetadata from a skills row, tolerating rows
+        written by any schema generation (missing keys → model defaults)."""
+        from models import SkillPermissions
+        keys = row.keys()
 
-    async def get_skill(self, name: str) -> Optional[SkillMetadata]:
-        async with self.db.execute(
-            "SELECT * FROM skills WHERE name=?", (name,)
-        ) as cur:
-            row = await cur.fetchone()
-        if not row:
-            return None
+        def _j(col, fallback):
+            if col not in keys or row[col] in (None, ""):
+                return fallback
+            try:
+                return json.loads(row[col])
+            except Exception:  # noqa: BLE001
+                return fallback
+
+        perms = _j("permissions", {})
         return SkillMetadata(
             name=row["name"],
             description=row["description"],
@@ -816,7 +812,63 @@ class Tracker:
             failure_count=row["failure_count"],
             created_at=datetime.fromisoformat(row["created_at"]),
             updated_at=datetime.fromisoformat(row["updated_at"]),
+            capabilities=_j("capabilities", []),
+            input_keys=_j("input_keys", []),
+            permissions=SkillPermissions(**perms) if isinstance(perms, dict) else SkillPermissions(),
+            source_type=(row["source_type"] if "source_type" in keys and row["source_type"] else "generated"),
+            model_used=(row["model_used"] if "model_used" in keys and row["model_used"] else ""),
+            test_status=(row["test_status"] if "test_status" in keys and row["test_status"] else "untested"),
+            last_used_at=(datetime.fromisoformat(row["last_used_at"])
+                          if "last_used_at" in keys and row["last_used_at"] else None),
+            enabled=bool(row["enabled"]) if "enabled" in keys and row["enabled"] is not None else True,
         )
+
+    async def upsert_skill(self, skill: SkillMetadata) -> None:
+        now = datetime.utcnow().isoformat()
+        await self.db.execute(
+            "INSERT INTO skills(name, description, code, version, status, "
+            "success_count, failure_count, created_at, updated_at, "
+            "capabilities, input_keys, permissions, source_type, model_used, "
+            "test_status, last_used_at, enabled) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(name) DO UPDATE SET "
+            "description=excluded.description, code=excluded.code, "
+            "version=excluded.version, status=excluded.status, "
+            "success_count=excluded.success_count, "
+            "failure_count=excluded.failure_count, "
+            "updated_at=excluded.updated_at, "
+            "capabilities=excluded.capabilities, input_keys=excluded.input_keys, "
+            "permissions=excluded.permissions, source_type=excluded.source_type, "
+            "model_used=excluded.model_used, test_status=excluded.test_status, "
+            "last_used_at=excluded.last_used_at, enabled=excluded.enabled",
+            (
+                skill.name,
+                skill.description,
+                skill.code,
+                skill.version,
+                skill.status.value,
+                skill.success_count,
+                skill.failure_count,
+                skill.created_at.isoformat(),
+                now,
+                json.dumps(skill.capabilities),
+                json.dumps(skill.input_keys),
+                skill.permissions.model_dump_json(),
+                skill.source_type,
+                skill.model_used,
+                skill.test_status,
+                skill.last_used_at.isoformat() if skill.last_used_at else None,
+                int(skill.enabled),
+            ),
+        )
+        await self.db.commit()
+
+    async def get_skill(self, name: str) -> Optional[SkillMetadata]:
+        async with self.db.execute(
+            "SELECT * FROM skills WHERE name=?", (name,)
+        ) as cur:
+            row = await cur.fetchone()
+        return self._skill_from_row(row) if row else None
 
     async def list_skills(self, status: Optional[SkillStatus] = None) -> List[SkillMetadata]:
         if status:
@@ -830,20 +882,62 @@ class Tracker:
                 "SELECT * FROM skills ORDER BY success_count DESC"
             ) as cur:
                 rows = await cur.fetchall()
-        return [
-            SkillMetadata(
-                name=r["name"],
-                description=r["description"],
-                code=r["code"],
-                version=r["version"],
-                status=SkillStatus(r["status"]),
-                success_count=r["success_count"],
-                failure_count=r["failure_count"],
-                created_at=datetime.fromisoformat(r["created_at"]),
-                updated_at=datetime.fromisoformat(r["updated_at"]),
-            )
-            for r in rows
-        ]
+        return [self._skill_from_row(r) for r in rows]
+
+    # ── Skill version history (rollback-able self-repair) ────────────────────
+
+    async def save_skill_version(
+        self, skill_name: str, version: int, code: str, note: str = "",
+    ) -> None:
+        """Append one code version to the history. Called BEFORE any
+        overwrite so the previous (possibly last-known-working) code is
+        always recoverable."""
+        await self.db.execute(
+            "INSERT INTO skill_versions(id, skill_name, version, code, note, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (str(uuid.uuid4()), skill_name, version, code, note,
+             datetime.utcnow().isoformat()),
+        )
+        await self.db.commit()
+
+    async def list_skill_versions(self, skill_name: str) -> List[Dict]:
+        async with self.db.execute(
+            "SELECT version, note, created_at, code FROM skill_versions "
+            "WHERE skill_name=? ORDER BY version DESC, created_at DESC",
+            (skill_name,),
+        ) as cur:
+            rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+
+    async def rollback_skill(self, skill_name: str, version: int) -> bool:
+        """Restore a skill's code to a historical version. The restored
+        code is written as a NEW head version (history stays append-only)."""
+        skill = await self.get_skill(skill_name)
+        if not skill:
+            return False
+        async with self.db.execute(
+            "SELECT code FROM skill_versions WHERE skill_name=? AND version=? "
+            "ORDER BY created_at DESC LIMIT 1",
+            (skill_name, version),
+        ) as cur:
+            row = await cur.fetchone()
+        if not row:
+            return False
+        await self.save_skill_version(
+            skill_name, skill.version, skill.code,
+            note=f"pre-rollback snapshot (rolling back to v{version})",
+        )
+        restored = skill.model_copy(update={
+            "code":       row["code"],
+            "version":    skill.version + 1,
+            "updated_at": datetime.utcnow(),
+        })
+        await self.upsert_skill(restored)
+        logger.info(
+            "Skill '%s' rolled back to v%d content (new head v%d).",
+            skill_name, version, restored.version,
+        )
+        return True
 
     async def record_skill_invocation(self, inv: SkillInvocation) -> None:
         await self.db.execute(
@@ -861,16 +955,19 @@ class Tracker:
                 inv.invoked_at.isoformat(),
             ),
         )
-        # Bump counters on the skill record
+        # Bump counters + last-used stamp on the skill record
+        _now = datetime.utcnow().isoformat()
         if inv.success:
             await self.db.execute(
-                "UPDATE skills SET success_count = success_count + 1 WHERE name=?",
-                (inv.skill_name,),
+                "UPDATE skills SET success_count = success_count + 1, "
+                "last_used_at=? WHERE name=?",
+                (_now, inv.skill_name),
             )
         else:
             await self.db.execute(
-                "UPDATE skills SET failure_count = failure_count + 1 WHERE name=?",
-                (inv.skill_name,),
+                "UPDATE skills SET failure_count = failure_count + 1, "
+                "last_used_at=? WHERE name=?",
+                (_now, inv.skill_name),
             )
         await self.db.commit()
 

@@ -2580,12 +2580,9 @@ async def delete_skill(name: str) -> dict:
             os.remove(skill_path)
     except Exception as exc:  # noqa: BLE001
         logger.warning("delete_skill: failed to unlink %s.py: %s", name, exc)
-    # Evict from in-memory factory cache so the next match attempt
-    # doesn't pick up the now-deleted skill.
-    try:
-        skill_factory._loaded.pop(name, None)  # type: ignore[attr-defined]
-    except Exception:  # noqa: BLE001
-        pass
+    # No in-memory eviction needed: skills now execute straight from the
+    # DB row via skill_runtime (the old per-process callable cache — and
+    # its stale-entry bug class — was removed with it).
     if not ok:
         # Neither DB nor file existed — caller probably already deleted
         # it via the UI in another tab. Don't 404; return a friendly OK.

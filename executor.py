@@ -1800,22 +1800,41 @@ class Executor:
     async def _try_skill(
         self, subtask: SubTask, context: Dict
     ) -> Optional[Tuple[bool, str]]:
-        """Return (success, output) if a matching active skill exists, else None."""
+        """Return (success, output) if a matching active skill exists, else None.
+
+        Matching goes through skill_matcher (scored name/capability/
+        description overlap, threshold = config.skill_match_threshold)
+        instead of the old first-keyword-wins substring check, which
+        both missed real matches and false-matched on generic words.
+
+        When skill_learning_enabled is ON and nothing matches, the full
+        learn-loop (SkillFactory.ensure_skill: spec → build → test →
+        repair → register) may mint a NEW skill for the task and run it.
+        Default OFF — most one-off tasks shouldn't cost a strong-model
+        build; the tool loop handles them.
+        """
+        import skill_matcher
         skills = await self.skill_factory.list_active_skills()
-        best: Optional[str] = None
+        threshold = float(getattr(config, "skill_match_threshold", 0.4) or 0.4)
+        m = skill_matcher.match(
+            subtask.description, skills, threshold,
+            skill_hint=subtask.skill_hint,
+        )
+        best = m.skill_name if m.matched else None
 
-        if subtask.skill_hint:
-            for s in skills:
-                if s.name == subtask.skill_hint:
-                    best = s.name
-                    break
-
-        if not best:
-            desc_lower = subtask.description.lower()
-            for s in skills:
-                if any(kw in desc_lower for kw in s.name.replace("_", " ").split()):
-                    best = s.name
-                    break
+        if not best and bool(getattr(config, "skill_learning_enabled", False)):
+            try:
+                best, was_built = await self.skill_factory.ensure_skill(
+                    subtask.description, skill_hint=subtask.skill_hint,
+                )
+                if was_built:
+                    logger.info(
+                        "Executor learned new skill '%s' for subtask %s",
+                        best, subtask.id,
+                    )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("skill learning failed (non-fatal): %s", exc)
+                best = None
 
         if not best:
             return None

@@ -105,6 +105,40 @@ class TaskResult(BaseModel):
 
 # ── Skill models ──────────────────────────────────────────────────────────────
 
+class FilesystemPermissions(BaseModel):
+    """Paths a skill declares it needs to touch. Empty = no filesystem
+    access declared."""
+    read: List[str] = Field(default_factory=list)
+    write: List[str] = Field(default_factory=list)
+
+
+class NetworkPermissions(BaseModel):
+    domains: List[str] = Field(default_factory=list)
+
+
+class SkillPermissions(BaseModel):
+    """Least-privilege declaration a skill carries with it.
+
+    Generated skills must declare the minimum they need; the declaration
+    is stored with the skill, surfaced to the user, and handed to the
+    SkillRuntime at execution time (see skill_runtime.RuntimeContext).
+    v1 scope is schema + propagation + check interface — actual OS-level
+    sandboxing is a future runtime concern (DockerRuntime / OpenShell).
+    """
+    filesystem: FilesystemPermissions = Field(default_factory=FilesystemPermissions)
+    network: NetworkPermissions = Field(default_factory=NetworkPermissions)
+    commands: List[str] = Field(default_factory=list)
+    credentials: List[str] = Field(default_factory=list)
+    services: List[str] = Field(default_factory=list)
+
+    def is_empty(self) -> bool:
+        return not (
+            self.filesystem.read or self.filesystem.write
+            or self.network.domains or self.commands
+            or self.credentials or self.services
+        )
+
+
 class SkillMetadata(BaseModel):
     """Metadata record stored in the DB for each skill."""
     name: str
@@ -116,6 +150,16 @@ class SkillMetadata(BaseModel):
     failure_count: int = 0
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
+    # ── Self-learning skill architecture (feature/self-learning-skills) ──
+    # All defaulted so rows written by older versions load unchanged.
+    capabilities: List[str] = Field(default_factory=list)   # searchable tags
+    input_keys: List[str] = Field(default_factory=list)     # expected input_data keys
+    permissions: SkillPermissions = Field(default_factory=SkillPermissions)
+    source_type: str = "generated"        # builtin | generated | installed
+    model_used: str = ""                  # which LLM wrote/last repaired it
+    test_status: str = "untested"         # untested | passed | failed
+    last_used_at: Optional[datetime] = None
+    enabled: bool = True                  # soft kill-switch, independent of status
 
     @property
     def success_rate(self) -> float:
@@ -278,7 +322,28 @@ CREATE TABLE IF NOT EXISTS skills (
     success_count INTEGER DEFAULT 0,
     failure_count INTEGER DEFAULT 0,
     created_at    TEXT NOT NULL,
-    updated_at    TEXT NOT NULL
+    updated_at    TEXT NOT NULL,
+    capabilities  TEXT NOT NULL DEFAULT '[]',
+    input_keys    TEXT NOT NULL DEFAULT '[]',
+    permissions   TEXT NOT NULL DEFAULT '{}',
+    source_type   TEXT NOT NULL DEFAULT 'generated',
+    model_used    TEXT NOT NULL DEFAULT '',
+    test_status   TEXT NOT NULL DEFAULT 'untested',
+    last_used_at  TEXT,
+    enabled       INTEGER NOT NULL DEFAULT 1
+);
+
+-- Append-only history of every code version a skill has had. Written
+-- BEFORE any overwrite (register replacing an old row, runtime
+-- self-repair), so the last known-working version is always recoverable
+-- and rollback is a row copy, never a guess.
+CREATE TABLE IF NOT EXISTS skill_versions (
+    id          TEXT PRIMARY KEY,
+    skill_name  TEXT NOT NULL,
+    version     INTEGER NOT NULL,
+    code        TEXT NOT NULL,
+    note        TEXT NOT NULL DEFAULT '',
+    created_at  TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS skill_invocations (

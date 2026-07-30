@@ -577,6 +577,23 @@ class Config:
     skill_regen_max_versions: int = field(
         default_factory=lambda: int(os.getenv("OPENTEDDY_SKILL_REGEN_MAX", "3"))
     )
+    # Max LLM repair attempts inside ONE generate-skill call before giving
+    # up (skill-plus spec §7: MAX_SKILL_REPAIR_ATTEMPTS, avoid infinite
+    # loops). Distinct from skill_regen_max_versions, which caps RUNTIME
+    # self-repair cycles across a skill's lifetime.
+    skill_repair_max_attempts: int = field(
+        default_factory=lambda: int(os.getenv("OPENTEDDY_SKILL_REPAIR_MAX", "3"))
+    )
+    # Opt-in: when a task has no matching skill, let the agent BUILD one
+    # on the fly (the full learn→verify→reuse loop) instead of only using
+    # pre-existing skills. Default off — building costs a strong-model
+    # call and most one-off tasks shouldn't mint a skill. The loop itself
+    # (SkillFactory.ensure_skill) is always available programmatically.
+    skill_learning_enabled: bool = field(
+        default_factory=lambda: os.getenv(
+            "OPENTEDDY_SKILL_LEARNING", "0"
+        ).strip().lower() not in {"0", "false", "no", "off", ""}
+    )
 
     # ── Failure post-mortem lessons (self-improvement Loop B) ────────────────
     # After a task ends FAILED (or any subtask failed / was escalated), run
