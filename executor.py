@@ -899,9 +899,20 @@ class Executor:
             # (not `messages`) keeps them safe from #4 compression
             # which only ever rewrites the messages[] history.
             effective_system = system_prompt
+            # User-defined agent persona — standing instructions from the
+            # agent template this session was created from. Prepended so
+            # role framing comes before task mechanics; kept in `system`
+            # (like the memos below) so history compression can't drop it.
+            _persona = (context or {}).get("agent_persona") or ""
+            if _persona:
+                effective_system = (
+                    "[Agent persona — you are acting as this configured "
+                    "role for the whole session:]\n" + _persona
+                    + "\n\n" + effective_system
+                )
             if discovery_memos:
                 effective_system = (
-                    system_prompt
+                    effective_system
                     + "\n\n[Discovery memo — what you ALREADY learned in this subtask. "
                     "Do NOT call these tools again on the same file/path; "
                     "use the info below directly:]\n"

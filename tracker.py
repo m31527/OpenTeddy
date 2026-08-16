@@ -140,6 +140,11 @@ class Tracker:
             # strings for public channels. Empty default = "not bound
             # to any chat", which is every pre-existing session.
             "ALTER TABLE sessions ADD COLUMN telegram_chat_id TEXT NOT NULL DEFAULT ''",
+            # ── User-defined Agents ──────────────────────────────────────
+            # Which agent template this session was created from (empty =
+            # plain session). The agent's persona is looked up LIVE at
+            # task time, so editing an agent updates all its sessions.
+            "ALTER TABLE sessions ADD COLUMN agent_id TEXT NOT NULL DEFAULT ''",
             # ── Scheduled tasks (cron-driven recurring runs) ──────────────
             # Each row is "this session runs this goal on this cron". The
             # session binding gives the schedule continuity of memory /
@@ -382,6 +387,88 @@ class Tracker:
                     "Failed to mkdir session workspace %s: %s",
                     isolated_ws, exc,
                 )
+
+    # ── User-defined Agents (reusable role templates) ─────────────────────────
+
+    async def upsert_agent(self, agent) -> None:
+        """Insert or update an AgentDefinition row."""
+        now = datetime.utcnow().isoformat()
+        await self.db.execute(
+            "INSERT INTO agents(id, name, description, system_prompt, mode, "
+            "workspace_dir, local_only, db_kind, db_url, db_label, "
+            "created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(id) DO UPDATE SET "
+            "name=excluded.name, description=excluded.description, "
+            "system_prompt=excluded.system_prompt, mode=excluded.mode, "
+            "workspace_dir=excluded.workspace_dir, local_only=excluded.local_only, "
+            "db_kind=excluded.db_kind, db_url=excluded.db_url, "
+            "db_label=excluded.db_label, updated_at=excluded.updated_at",
+            (
+                agent.id, agent.name, agent.description, agent.system_prompt,
+                agent.mode.value if hasattr(agent.mode, "value") else str(agent.mode),
+                agent.workspace_dir, int(agent.local_only),
+                agent.db_kind, agent.db_url, agent.db_label,
+                agent.created_at.isoformat(), now,
+            ),
+        )
+        await self.db.commit()
+
+    async def get_agent(self, agent_id: str) -> Optional[dict]:
+        async with self.db.execute(
+            "SELECT * FROM agents WHERE id=?", (agent_id,)
+        ) as cur:
+            row = await cur.fetchone()
+        return dict(row) if row else None
+
+    async def list_agents(self) -> List[dict]:
+        async with self.db.execute(
+            "SELECT * FROM agents ORDER BY updated_at DESC"
+        ) as cur:
+            rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+
+    async def delete_agent(self, agent_id: str) -> bool:
+        cur = await self.db.execute("DELETE FROM agents WHERE id=?", (agent_id,))
+        # Detach (don't delete) this agent's sessions — the conversations
+        # keep their copied mode/db/workspace and just lose the live
+        # persona lookup.
+        await self.db.execute(
+            "UPDATE sessions SET agent_id='' WHERE agent_id=?", (agent_id,),
+        )
+        await self.db.commit()
+        return bool(cur.rowcount)
+
+    async def create_session_from_agent(
+        self, session_id: str, agent: dict, title: str = "",
+    ) -> None:
+        """Create a session pre-configured from an agent template.
+
+        Copies the agent's mode / workspace / privacy / DB binding onto
+        the fresh session row — every downstream consumer (plan prompt
+        selection, db_tool engine builder, workspace pinning, privacy
+        guardrail) already reads these session columns, so an agent
+        session behaves correctly with zero changes elsewhere.
+        """
+        await self.create_session(
+            session_id,
+            title or f"{agent['name']}",
+            mode=agent.get("mode") or "analytic",
+        )
+        await self.db.execute(
+            "UPDATE sessions SET agent_id=?, local_only=?, "
+            "db_kind=?, db_url=?, db_label=?, "
+            "workspace_dir=COALESCE(?, workspace_dir) "
+            "WHERE id=?",
+            (
+                agent["id"], int(agent.get("local_only") or 0),
+                agent.get("db_kind") or "", agent.get("db_url") or "",
+                agent.get("db_label") or "",
+                agent.get("workspace_dir"),   # NULL keeps the isolated default
+                session_id,
+            ),
+        )
+        await self.db.commit()
 
     async def list_sessions(self, limit: int = 50) -> List[dict]:
         async with self.db.execute(

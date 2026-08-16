@@ -192,6 +192,62 @@ class SessionListResponse(BaseModel):
     sessions: List[Session]
 
 
+# ── User-defined Agents (reusable role templates) ────────────────────────────
+#
+# An Agent is NOT a fourth session mode. It's a reusable template — persona
+# instructions + bound resources (database, workspace, privacy flag) — that
+# REFERENCES one of the existing modes. "Create session from agent" copies
+# the agent's configuration onto a fresh session row (all existing plumbing:
+# mode / db_url / workspace_dir / local_only already live on sessions), and
+# the orchestrator injects the persona into planning + execution prompts.
+# One agent → unlimited sessions; deleting a conversation never loses the
+# configured role.
+
+class AgentDefinition(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    name: str
+    description: str = ""
+    # Persona / standing instructions injected into the planner + executor
+    # system prompts for every session created from this agent.
+    system_prompt: str = ""
+    # Base behavior profile — which existing mode this agent runs on.
+    mode: SessionMode = SessionMode.ANALYTIC
+    # Bound resources (copied onto sessions created from this agent).
+    workspace_dir: Optional[str] = None
+    local_only: bool = False
+    db_kind: str = ""
+    db_url: str = ""      # secret — never returned raw by list/get APIs
+    db_label: str = ""
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class CreateAgentRequest(BaseModel):
+    name: str
+    description: str = ""
+    system_prompt: str = ""
+    mode: SessionMode = SessionMode.ANALYTIC
+    workspace_dir: Optional[str] = None
+    local_only: bool = False
+    db_kind: str = ""
+    db_url: str = ""
+    db_label: str = ""
+
+
+class UpdateAgentRequest(BaseModel):
+    """Partial update — only provided fields change. db_url omitted/None
+    keeps the stored secret; empty string explicitly clears it."""
+    name: Optional[str] = None
+    description: Optional[str] = None
+    system_prompt: Optional[str] = None
+    mode: Optional[SessionMode] = None
+    workspace_dir: Optional[str] = None
+    local_only: Optional[bool] = None
+    db_kind: Optional[str] = None
+    db_url: Optional[str] = None
+    db_label: Optional[str] = None
+
+
 class CreateSessionRequest(BaseModel):
     title: Optional[str] = None
     mode: Optional[SessionMode] = None
@@ -267,6 +323,21 @@ CREATE TABLE IF NOT EXISTS subtasks (
     error          TEXT,
     created_at     TEXT NOT NULL,
     completed_at   TEXT
+);
+
+CREATE TABLE IF NOT EXISTS agents (
+    id            TEXT PRIMARY KEY,
+    name          TEXT NOT NULL,
+    description   TEXT NOT NULL DEFAULT '',
+    system_prompt TEXT NOT NULL DEFAULT '',
+    mode          TEXT NOT NULL DEFAULT 'analytic',
+    workspace_dir TEXT,
+    local_only    INTEGER NOT NULL DEFAULT 0,
+    db_kind       TEXT NOT NULL DEFAULT '',
+    db_url        TEXT NOT NULL DEFAULT '',
+    db_label      TEXT NOT NULL DEFAULT '',
+    created_at    TEXT NOT NULL,
+    updated_at    TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS skills (

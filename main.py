@@ -30,6 +30,8 @@ from escalation import EscalationAgent
 from executor import Executor
 from memory import MemoryManager
 from models import (
+    AgentDefinition,
+    CreateAgentRequest,
     CreateSessionRequest,
     RunRequest,
     RunResponse,
@@ -40,6 +42,7 @@ from models import (
     StatusResponse,
     TaskRequest,
     TaskStatus,
+    UpdateAgentRequest,
 )
 from orchestrator import Orchestrator
 from settings_store import SETTINGS_META, settings_store
@@ -2076,6 +2079,76 @@ async def list_tasks(
 
 
 # ── Session endpoints ─────────────────────────────────────────────────────────
+
+# ── User-defined Agents (reusable role templates) ─────────────────────────────
+# An agent = persona + bound resources (DB / workspace / privacy) on top of
+# an existing mode. Sessions created from an agent copy its configuration;
+# the persona is looked up live at task time. db_url is a SECRET: the API
+# returns has_db + db_label only, never the raw URL.
+
+
+def _agent_public(row: dict) -> dict:
+    out = {k: v for k, v in row.items() if k != "db_url"}
+    out["local_only"] = bool(out.get("local_only"))
+    out["has_db"] = bool((row.get("db_url") or "").strip())
+    return out
+
+
+@app.get("/agents")
+async def list_agents() -> dict:
+    return {"agents": [_agent_public(a) for a in await tracker.list_agents()]}
+
+
+@app.post("/agents")
+async def create_agent(body: CreateAgentRequest) -> dict:
+    agent = AgentDefinition(**body.model_dump())
+    await tracker.upsert_agent(agent)
+    row = await tracker.get_agent(agent.id)
+    return {"agent": _agent_public(row)}
+
+
+@app.patch("/agents/{agent_id}")
+async def update_agent(agent_id: str, body: UpdateAgentRequest) -> dict:
+    row = await tracker.get_agent(agent_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    data = body.model_dump(exclude_none=True)   # None = keep stored value
+    merged = {**row, **data}
+    merged["local_only"] = bool(merged.get("local_only"))
+    agent = AgentDefinition(
+        **{k: merged[k] for k in (
+            "id", "name", "description", "system_prompt", "mode",
+            "workspace_dir", "local_only", "db_kind", "db_url", "db_label",
+        )},
+        created_at=datetime.fromisoformat(row["created_at"]),
+    )
+    await tracker.upsert_agent(agent)
+    return {"agent": _agent_public(await tracker.get_agent(agent_id))}
+
+
+@app.delete("/agents/{agent_id}")
+async def delete_agent(agent_id: str) -> dict:
+    ok = await tracker.delete_agent(agent_id)
+    return {"deleted": ok}
+
+
+@app.post("/agents/{agent_id}/sessions", response_model=Session)
+async def create_session_from_agent(agent_id: str, body: dict = None) -> Session:
+    """Spawn a new session pre-configured from an agent template."""
+    row = await tracker.get_agent(agent_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    session_id = str(uuid.uuid4())
+    title = ((body or {}).get("title") or "").strip() or row["name"]
+    await tracker.create_session_from_agent(session_id, row, title=title)
+    sess = await tracker.get_session(session_id)
+    return Session(
+        id=session_id, title=title,
+        mode=SessionMode(sess.get("mode") or "analytic"),
+        workspace_dir=sess.get("workspace_dir"),
+        local_only=bool(sess.get("local_only")),
+    )
+
 
 @app.get("/sessions", response_model=SessionListResponse)
 async def list_sessions(limit: int = 50) -> SessionListResponse:

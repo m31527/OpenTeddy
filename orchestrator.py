@@ -772,6 +772,23 @@ class Orchestrator:
                     session_ws = sess.get("workspace_dir") or None
                     session_local_only = bool(sess.get("local_only"))
                     session_mode = (sess.get("mode") or "code").lower()
+                    # ── User-defined agent persona ────────────────────────
+                    # Sessions created from an agent template carry its id;
+                    # the persona is looked up LIVE (not copied) so editing
+                    # the agent updates every session built from it. The
+                    # persona travels via req.context, which already flows
+                    # into planning AND every executor subtask.
+                    agent_id = (sess.get("agent_id") or "").strip()
+                    if agent_id:
+                        try:
+                            agent = await self.tracker.get_agent(agent_id)
+                            if agent and (agent.get("system_prompt") or "").strip():
+                                req.context["agent_persona"] = (
+                                    f"[Agent: {agent.get('name', '')}]\n"
+                                    + agent["system_prompt"].strip()
+                                )
+                        except Exception:  # noqa: BLE001
+                            pass
             except Exception:  # noqa: BLE001
                 pass
         set_session_workspace(session_ws)
@@ -1121,6 +1138,17 @@ class Orchestrator:
         # the user's declared intent.
         mode_value = req.mode.value if hasattr(req.mode, "value") else str(req.mode)
         base_prompt = _plan_prompt_for_mode(mode_value, config.gemma_model)
+
+        # User-defined agent persona (session created from an agent
+        # template) — standing instructions shape HOW this agent plans:
+        # a "財務 DB 分析師" should plan DB queries + reports, not
+        # generic shell exploration.
+        _persona = (req.context or {}).get("agent_persona") or ""
+        if _persona:
+            base_prompt += (
+                "\n\n--- Agent persona (standing instructions for this "
+                "session's role — plan accordingly) ---\n" + _persona
+            )
 
         # For Code / Analytic modes, tell Gemma what the agent workspace is
         # so the shell plan uses a known directory (git clones land there
