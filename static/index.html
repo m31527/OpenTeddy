@@ -3445,6 +3445,9 @@
                deep-links / history entries still resolve cleanly. -->
           <button class="sidebar-nav-btn" data-tab="tools"    onclick="switchTab('tools')"    data-i18n-title="nav_tools"    title="Tools"><span class="nav-icon">🔧</span><span class="nav-label" data-i18n="nav_tools">Tools</span></button>
           <button class="sidebar-nav-btn" data-tab="memory"   onclick="switchTab('memory')"   data-i18n-title="nav_memory"   title="Memory"><span class="nav-icon">🧠</span><span class="nav-label" data-i18n="nav_memory">Memory</span></button>
+          <!-- User-defined Agents: reusable role templates (persona +
+               bound DB / workspace / privacy) you can spawn sessions from. -->
+          <button class="sidebar-nav-btn" data-tab="agents"   onclick="switchTab('agents')"   data-i18n-title="nav_agents"   title="Agents"><span class="nav-icon">🤖</span><span class="nav-label" data-i18n="nav_agents">Agents</span></button>
           <!-- Usage nav button hidden — the savings pill at the bottom
                of the sidebar already shows the live "saved vs. GPT-4"
                number, and clicking the pill routes here. Two entry
@@ -3878,6 +3881,93 @@
       </div>
 
       <!-- ── MEMORY TAB ──────────────────────────────────────────────────── -->
+      <!-- ── Agents: user-defined reusable role templates ────────────────
+           An agent = persona instructions + base mode + bound resources
+           (database / workspace / privacy). "Start session" spawns a new
+           conversation pre-configured from it; the persona is injected
+           into planning + execution live, so editing an agent updates
+           every session built from it. -->
+      <div id="tab-agents" class="tab-panel">
+        <div class="panel-header"><h1 data-i18n="panel_agents">Agents</h1></div>
+        <div class="container">
+          <div class="card">
+            <div style="display:flex;gap:0.75rem;margin-bottom:1rem;align-items:center;flex-wrap:wrap">
+              <h2 style="margin:0" data-i18n="agents_heading">Your Agents</h2>
+              <span style="color:var(--text-muted);font-size:0.8rem" data-i18n="agents_hint">Reusable roles: persona + bound database / workspace. Start a session from one and it arrives already configured.</span>
+              <button class="btn-primary btn-sm" style="margin-left:auto" onclick="openAgentForm()" data-i18n="btn_new_agent">+ New Agent</button>
+              <button class="btn-ghost btn-sm" onclick="loadAgents()" data-i18n="btn_refresh">Refresh</button>
+            </div>
+            <div id="agentList" style="display:flex;flex-direction:column;gap:0.6rem">
+              <div style="color:var(--text-muted);font-size:0.875rem;padding:1rem 0" data-i18n="no_agents">No agents yet — create one to define a reusable role.</div>
+            </div>
+          </div>
+
+          <div class="card" id="agentFormCard" hidden>
+            <h2 id="agentFormTitle" data-i18n="agent_form_new">New Agent</h2>
+            <input type="hidden" id="agentFormId" />
+            <div class="row">
+              <div class="field" style="flex:1">
+                <label data-i18n="agent_name_label">Name</label>
+                <input type="text" id="agentName" placeholder="財務 DB 分析師" />
+              </div>
+              <div class="field" style="flex:0 0 160px">
+                <label data-i18n="agent_mode_label">Base mode</label>
+                <select id="agentMode">
+                  <option value="analytic">Analytic</option>
+                  <option value="code">Code</option>
+                  <option value="chat">Chat</option>
+                </select>
+              </div>
+            </div>
+            <div class="field">
+              <label data-i18n="agent_desc_label">Description</label>
+              <input type="text" id="agentDesc" placeholder="分析財務資料庫並產出月報" />
+            </div>
+            <div class="field">
+              <label data-i18n="agent_persona_label">Persona / standing instructions</label>
+              <textarea id="agentPersona" rows="5" placeholder="你是財務資料分析師。回答一律附上查詢依據；金額用千分位；發現異常主動標記。"></textarea>
+              <div style="font-size:0.7rem;color:var(--text-muted);margin-top:0.25rem" data-i18n="agent_persona_hint">Injected into every plan + execution step for sessions created from this agent.</div>
+            </div>
+            <div class="row">
+              <div class="field" style="flex:0 0 140px">
+                <label data-i18n="agent_db_kind_label">Database</label>
+                <select id="agentDbKind">
+                  <option value="">(none)</option>
+                  <option value="postgres">Postgres</option>
+                  <option value="mysql">MySQL</option>
+                  <option value="sqlite">SQLite</option>
+                  <option value="mssql">MSSQL</option>
+                  <option value="duckdb">DuckDB</option>
+                </select>
+              </div>
+              <div class="field" style="flex:1">
+                <label data-i18n="agent_db_url_label">Connection URL</label>
+                <input type="password" id="agentDbUrl" placeholder="postgresql://user:pass@host:5432/db" autocomplete="off" />
+                <div style="font-size:0.7rem;color:var(--text-muted);margin-top:0.25rem" id="agentDbUrlHint" data-i18n="agent_db_url_hint">Stored as a secret; never shown again. Leave blank when editing to keep the saved one.</div>
+              </div>
+              <div class="field" style="flex:0 0 180px">
+                <label data-i18n="agent_db_label_label">DB label</label>
+                <input type="text" id="agentDbLabel" placeholder="finance@10.0.0.5" />
+              </div>
+            </div>
+            <div class="row">
+              <div class="field" style="flex:1">
+                <label data-i18n="agent_workspace_label">Workspace dir (optional)</label>
+                <input type="text" id="agentWorkspace" placeholder="(blank = isolated per session)" />
+              </div>
+              <label class="radio-inline" style="align-self:flex-end;padding-bottom:0.6rem">
+                <input type="checkbox" id="agentLocalOnly" />
+                <span data-i18n="agent_local_only_label">Local only (never call cloud LLM)</span>
+              </label>
+            </div>
+            <div style="display:flex;gap:0.5rem;justify-content:flex-end">
+              <button class="btn-ghost" onclick="closeAgentForm()" data-i18n="btn_cancel">Cancel</button>
+              <button class="btn-primary" onclick="saveAgent()" data-i18n="btn_save">Save</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <div id="tab-memory" class="tab-panel">
         <div class="panel-header"><h1 data-i18n="panel_memory">Memory</h1></div>
         <div class="container">
@@ -7296,9 +7386,139 @@
 
       if (name === 'tools')    loadTools();   // also covers ex-'skills'
       if (name === 'memory')   loadMemory();
+      if (name === 'agents')   loadAgents();
       if (name === 'usage')    { loadUsageSummary(); loadUsageRecords(1); loadPerfStats(); }
       if (name === 'settings') loadSettings();
       closeSidebar();
+    }
+
+    // ── User-defined Agents (reusable role templates) ──────────────────────
+    // CRUD against /agents + "start session from agent". The API never
+    // returns db_url (secret) — the form treats a blank URL on edit as
+    // "keep the saved one" (PATCH omits the field).
+    let _agentsCache = [];
+    const MODE_ICON = { chat: '💬', code: '💻', analytic: '📊' };
+
+    async function loadAgents() {
+      const list = document.getElementById('agentList');
+      if (!list) return;
+      try {
+        const r = await fetch(`${API}/agents`);
+        const d = await r.json();
+        _agentsCache = d.agents || [];
+      } catch (e) {
+        list.innerHTML = `<div style="color:var(--danger);font-size:0.85rem">${escHtml(String(e.message || e))}</div>`;
+        return;
+      }
+      if (!_agentsCache.length) {
+        list.innerHTML = `<div style="color:var(--text-muted);font-size:0.875rem;padding:1rem 0">${escHtml(t('no_agents') || 'No agents yet — create one to define a reusable role.')}</div>`;
+        return;
+      }
+      list.innerHTML = _agentsCache.map(a => `
+        <div class="card" style="margin:0;padding:0.9rem 1rem;display:flex;gap:0.9rem;align-items:flex-start">
+          <div style="font-size:1.4rem;line-height:1">${MODE_ICON[a.mode] || '🤖'}</div>
+          <div style="flex:1;min-width:0">
+            <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap">
+              <strong>${escHtml(a.name)}</strong>
+              <span style="font-size:0.7rem;color:var(--text-muted);border:1px solid var(--border);border-radius:6px;padding:0 0.4rem">${escHtml(a.mode)}</span>
+              ${a.has_db ? `<span style="font-size:0.7rem;color:var(--text-muted)">🗄 ${escHtml(a.db_label || a.db_kind || 'db')}</span>` : ''}
+              ${a.local_only ? `<span style="font-size:0.7rem;color:var(--text-muted)">🔒 local only</span>` : ''}
+            </div>
+            ${a.description ? `<div style="font-size:0.82rem;color:var(--text-muted);margin-top:0.2rem">${escHtml(a.description)}</div>` : ''}
+            ${a.system_prompt ? `<div style="font-size:0.75rem;color:var(--text-muted);margin-top:0.35rem;white-space:pre-wrap;max-height:3.6em;overflow:hidden">${escHtml(a.system_prompt)}</div>` : ''}
+          </div>
+          <div style="display:flex;gap:0.4rem;flex-shrink:0">
+            <button class="btn-primary btn-sm" onclick="startAgentSession('${a.id}')" title="${escHtml(t('btn_start_session') || 'Start session')}">▶ ${escHtml(t('btn_start_session') || 'Start session')}</button>
+            <button class="btn-ghost btn-sm" onclick="openAgentForm('${a.id}')" title="Edit">✏️</button>
+            <button class="btn-ghost btn-sm" onclick="deleteAgent('${a.id}')" title="Delete">🗑</button>
+          </div>
+        </div>`).join('');
+    }
+
+    function openAgentForm(id) {
+      const a = id ? _agentsCache.find(x => x.id === id) : null;
+      document.getElementById('agentFormId').value  = a ? a.id : '';
+      document.getElementById('agentFormTitle').textContent =
+        a ? (t('agent_form_edit') || 'Edit Agent') : (t('agent_form_new') || 'New Agent');
+      document.getElementById('agentName').value      = a ? a.name : '';
+      document.getElementById('agentMode').value      = a ? a.mode : 'analytic';
+      document.getElementById('agentDesc').value      = a ? (a.description || '') : '';
+      document.getElementById('agentPersona').value   = a ? (a.system_prompt || '') : '';
+      document.getElementById('agentDbKind').value    = a ? (a.db_kind || '') : '';
+      document.getElementById('agentDbUrl').value     = '';   // secret: never pre-filled
+      document.getElementById('agentDbUrl').placeholder =
+        (a && a.has_db) ? '(saved — leave blank to keep)' : 'postgresql://user:pass@host:5432/db';
+      document.getElementById('agentDbLabel').value   = a ? (a.db_label || '') : '';
+      document.getElementById('agentWorkspace').value = a ? (a.workspace_dir || '') : '';
+      document.getElementById('agentLocalOnly').checked = !!(a && a.local_only);
+      const card = document.getElementById('agentFormCard');
+      card.hidden = false;
+      card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+
+    function closeAgentForm() {
+      document.getElementById('agentFormCard').hidden = true;
+    }
+
+    async function saveAgent() {
+      const id = document.getElementById('agentFormId').value;
+      const name = document.getElementById('agentName').value.trim();
+      if (!name) { toast(t('agent_name_required') || 'Name is required', true); return; }
+      const dbUrl = document.getElementById('agentDbUrl').value.trim();
+      const payload = {
+        name,
+        mode:          document.getElementById('agentMode').value,
+        description:   document.getElementById('agentDesc').value.trim(),
+        system_prompt: document.getElementById('agentPersona').value.trim(),
+        db_kind:       document.getElementById('agentDbKind').value,
+        db_label:      document.getElementById('agentDbLabel').value.trim(),
+        workspace_dir: document.getElementById('agentWorkspace').value.trim() || null,
+        local_only:    document.getElementById('agentLocalOnly').checked,
+      };
+      // Create: send whatever URL was typed (may be ''). Edit: only send
+      // db_url when the user typed one — omitting keeps the stored secret.
+      if (!id || dbUrl) payload.db_url = dbUrl;
+      try {
+        const r = await fetch(`${API}/agents${id ? '/' + id : ''}`, {
+          method: id ? 'PATCH' : 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || `HTTP ${r.status}`);
+        toast(t('agent_saved') || 'Agent saved');
+        closeAgentForm();
+        await loadAgents();
+      } catch (e) {
+        toast((t('agent_save_failed') || 'Save failed') + ': ' + e.message, true);
+      }
+    }
+
+    async function deleteAgent(id) {
+      const a = _agentsCache.find(x => x.id === id);
+      if (!confirm((t('agent_delete_confirm') || 'Delete agent') + ` "${a ? a.name : id}"?`)) return;
+      try {
+        await fetch(`${API}/agents/${id}`, { method: 'DELETE' });
+        await loadAgents();
+      } catch (e) {
+        toast('Delete failed: ' + e.message, true);
+      }
+    }
+
+    async function startAgentSession(id) {
+      try {
+        const r = await fetch(`${API}/agents/${id}/sessions`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({}),
+        });
+        if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || `HTTP ${r.status}`);
+        const s = await r.json();
+        await loadSessions();
+        await switchSession(s.id);
+        toast((t('agent_session_started') || 'Session started from agent'));
+      } catch (e) {
+        toast('Could not start session: ' + e.message, true);
+      }
     }
 
     // ── Input keyboard handling ────────────────────────────────────────────
