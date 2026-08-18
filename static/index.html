@@ -1154,7 +1154,7 @@
     }
 
     /* ── Form Inputs ─────────────────────────────────────────────────────── */
-    textarea, input[type=text], input[type=number], input[type=date], select {
+    textarea, input[type=text], input[type=password], input[type=number], input[type=date], select {
       width: 100%;
       background: var(--bg-primary);
       border: 1px solid var(--border);
@@ -3928,28 +3928,58 @@
               <textarea id="agentPersona" rows="5" placeholder="你是財務資料分析師。回答一律附上查詢依據；金額用千分位；發現異常主動標記。"></textarea>
               <div style="font-size:0.7rem;color:var(--text-muted);margin-top:0.25rem" data-i18n="agent_persona_hint">Injected into every plan + execution step for sessions created from this agent.</div>
             </div>
+            <!-- Database binding. Pick a type → the matching fields appear;
+                 the SQLAlchemy URL is assembled from them (shared
+                 buildDbUrlFromFields), so users never hand-write a URL. -->
             <div class="row">
-              <div class="field" style="flex:0 0 140px">
+              <div class="field" style="flex:0 0 160px">
                 <label data-i18n="agent_db_kind_label">Database</label>
-                <select id="agentDbKind">
+                <select id="agentDbKind" onchange="onAgentDbKindChange()">
                   <option value="">(none)</option>
-                  <option value="postgres">Postgres</option>
-                  <option value="mysql">MySQL</option>
-                  <option value="sqlite">SQLite</option>
-                  <option value="mssql">MSSQL</option>
-                  <option value="duckdb">DuckDB</option>
+                  <option value="postgres">PostgreSQL</option>
+                  <option value="mysql">MySQL / MariaDB</option>
+                  <option value="mssql">SQL Server</option>
+                  <option value="oracle">Oracle</option>
+                  <option value="sqlite">SQLite (file)</option>
+                  <option value="duckdb">DuckDB (file)</option>
                 </select>
               </div>
-              <div class="field" style="flex:1">
-                <label data-i18n="agent_db_url_label">Connection URL</label>
-                <input type="password" id="agentDbUrl" placeholder="postgresql://user:pass@host:5432/db" autocomplete="off" />
-                <div style="font-size:0.7rem;color:var(--text-muted);margin-top:0.25rem" id="agentDbUrlHint" data-i18n="agent_db_url_hint">Stored as a secret; never shown again. Leave blank when editing to keep the saved one.</div>
-              </div>
-              <div class="field" style="flex:0 0 180px">
-                <label data-i18n="agent_db_label_label">DB label</label>
-                <input type="text" id="agentDbLabel" placeholder="finance@10.0.0.5" />
+              <div class="field" style="flex:1" id="agentDbSavedNote" hidden>
+                <label>&nbsp;</label>
+                <div style="font-size:0.78rem;color:var(--text-muted);padding-top:0.5rem" data-i18n="agent_db_saved_note">🗄 A connection is saved. Fill the fields below only to replace it.</div>
               </div>
             </div>
+            <div id="agentDbServerFields" hidden>
+              <div class="row">
+                <div class="field" style="flex:2">
+                  <label data-i18n="db_connect_host_label">Host</label>
+                  <input type="text" id="agentDbHost" placeholder="10.0.0.5" autocomplete="off" />
+                </div>
+                <div class="field" style="flex:0 0 110px">
+                  <label data-i18n="db_connect_port_label">Port</label>
+                  <input type="text" id="agentDbPort" placeholder="5432" autocomplete="off" />
+                </div>
+                <div class="field" style="flex:2">
+                  <label data-i18n="db_connect_db_label">Database name</label>
+                  <input type="text" id="agentDbName" placeholder="finance" autocomplete="off" />
+                </div>
+              </div>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.85rem">
+                <div class="field" style="min-width:0">
+                  <label data-i18n="db_connect_user_label">Username</label>
+                  <input type="text" id="agentDbUser" placeholder="readonly_user" autocomplete="off" style="width:100%;box-sizing:border-box" />
+                </div>
+                <div class="field" style="min-width:0">
+                  <label data-i18n="db_connect_pass_label">Password</label>
+                  <input type="password" id="agentDbPass" placeholder="••••••••" autocomplete="new-password" style="width:100%;box-sizing:border-box" />
+                </div>
+              </div>
+            </div>
+            <div class="field" id="agentDbFileField" hidden>
+              <label data-i18n="db_connect_file_label">Database file path</label>
+              <input type="text" id="agentDbFile" placeholder="/data/finance.db" autocomplete="off" />
+            </div>
+            <div style="font-size:0.7rem;color:var(--text-muted);margin:-0.25rem 0 0.75rem" id="agentDbHint" hidden data-i18n="agent_db_hint">Credentials are stored as a secret and never shown again. The connection URL is built for you.</div>
             <div class="row">
               <div class="field" style="flex:1">
                 <label data-i18n="agent_workspace_label">Workspace dir (optional)</label>
@@ -7435,6 +7465,31 @@
         </div>`).join('');
     }
 
+    // Show the field set matching the chosen DB type (server vs file) and
+    // pre-fill the default port. Empty kind hides everything.
+    function onAgentDbKindChange() {
+      const kind = document.getElementById('agentDbKind').value;
+      const meta = _DB_KIND_META[kind];
+      const server = document.getElementById('agentDbServerFields');
+      const file   = document.getElementById('agentDbFileField');
+      const hint   = document.getElementById('agentDbHint');
+      server.hidden = !(meta && meta.kind === 'server');
+      file.hidden   = !(meta && meta.kind === 'file');
+      hint.hidden   = !meta;
+      if (meta && meta.kind === 'server') {
+        const portEl = document.getElementById('agentDbPort');
+        portEl.placeholder = String(meta.defaultPort);
+        if (!portEl.value.trim()) portEl.value = String(meta.defaultPort);
+      }
+    }
+
+    function _clearAgentDbFields() {
+      for (const id of ['agentDbHost', 'agentDbPort', 'agentDbName',
+                        'agentDbUser', 'agentDbPass', 'agentDbFile']) {
+        document.getElementById(id).value = '';
+      }
+    }
+
     function openAgentForm(id) {
       const a = id ? _agentsCache.find(x => x.id === id) : null;
       document.getElementById('agentFormId').value  = a ? a.id : '';
@@ -7445,10 +7500,12 @@
       document.getElementById('agentDesc').value      = a ? (a.description || '') : '';
       document.getElementById('agentPersona').value   = a ? (a.system_prompt || '') : '';
       document.getElementById('agentDbKind').value    = a ? (a.db_kind || '') : '';
-      document.getElementById('agentDbUrl').value     = '';   // secret: never pre-filled
-      document.getElementById('agentDbUrl').placeholder =
-        (a && a.has_db) ? '(saved — leave blank to keep)' : 'postgresql://user:pass@host:5432/db';
-      document.getElementById('agentDbLabel').value   = a ? (a.db_label || '') : '';
+      // Credentials are a secret: never pre-filled. On edit of an agent
+      // that has a saved connection, show a note and leave fields blank
+      // (= keep the stored URL unless the user fills them in).
+      _clearAgentDbFields();
+      document.getElementById('agentDbSavedNote').hidden = !(a && a.has_db);
+      onAgentDbKindChange();
       document.getElementById('agentWorkspace').value = a ? (a.workspace_dir || '') : '';
       document.getElementById('agentLocalOnly').checked = !!(a && a.local_only);
       const card = document.getElementById('agentFormCard');
@@ -7464,20 +7521,46 @@
       const id = document.getElementById('agentFormId').value;
       const name = document.getElementById('agentName').value.trim();
       if (!name) { toast(t('agent_name_required') || 'Name is required', true); return; }
-      const dbUrl = document.getElementById('agentDbUrl').value.trim();
+      const kind = document.getElementById('agentDbKind').value;
+      const meta = _DB_KIND_META[kind];
       const payload = {
         name,
         mode:          document.getElementById('agentMode').value,
         description:   document.getElementById('agentDesc').value.trim(),
         system_prompt: document.getElementById('agentPersona').value.trim(),
-        db_kind:       document.getElementById('agentDbKind').value,
-        db_label:      document.getElementById('agentDbLabel').value.trim(),
+        db_kind:       kind,
         workspace_dir: document.getElementById('agentWorkspace').value.trim() || null,
         local_only:    document.getElementById('agentLocalOnly').checked,
       };
-      // Create: send whatever URL was typed (may be ''). Edit: only send
-      // db_url when the user typed one — omitting keeps the stored secret.
-      if (!id || dbUrl) payload.db_url = dbUrl;
+      // Database: assemble the URL from the structured fields. Rules:
+      //  - no kind selected           → clear any binding (db_url '')
+      //  - kind selected, fields blank on EDIT → keep the stored secret
+      //    (omit db_url from the PATCH)
+      //  - fields filled              → build + validate + send URL, and
+      //    auto-derive a friendly label (host/db or file name)
+      if (!kind) {
+        payload.db_url = ''; payload.db_label = '';
+      } else {
+        const f = meta.kind === 'file'
+          ? { path: document.getElementById('agentDbFile').value }
+          : {
+              host: document.getElementById('agentDbHost').value,
+              port: document.getElementById('agentDbPort').value,
+              db:   document.getElementById('agentDbName').value,
+              user: document.getElementById('agentDbUser').value,
+              pass: document.getElementById('agentDbPass').value,
+            };
+        const anyFilled = Object.values(f).some(v => (v || '').trim());
+        if (anyFilled || !id) {
+          const r = buildDbUrlFromFields(kind, f);
+          if (r.error) { toast(r.error, true); return; }
+          payload.db_url = r.url;
+          payload.db_label = meta.kind === 'file'
+            ? (f.path.trim().split('/').pop() || kind)
+            : `${f.db.trim()}@${f.host.trim()}`;
+        }
+        // else: editing with blank fields → keep saved connection
+      }
       try {
         const r = await fetch(`${API}/agents${id ? '/' + id : ''}`, {
           method: id ? 'PATCH' : 'POST',
@@ -7702,46 +7785,57 @@
                         (message.detail ? `<br><span style="opacity:0.85;font-size:0.76rem">${escHtml(message.detail)}</span>` : '');
     }
 
-    // Build the SQLAlchemy URL from form fields. Returns ``null`` (and
-    // shows an inline error) when required fields are missing — better
-    // than letting the model post a half-baked URL to the backend.
+    // Pure URL assembly shared by the session "Connect a database" dialog
+    // and the Agent form. Takes plain field values, returns
+    // { url } or { error } — never touches the DOM, so both forms can
+    // render errors their own way. Users type host / port / user / pass /
+    // db name (or a file path); the SQLAlchemy driver URL is our concern.
+    function buildDbUrlFromFields(kind, f) {
+      const meta = _DB_KIND_META[kind];
+      if (!meta) return { error: 'unknown database type' };
+      if (meta.kind === 'file') {
+        const path = (f.path || '').trim();
+        if (!path) return { error: t('db_connect_file_required') || 'File path is required.' };
+        // SQLite uses 4 slashes for absolute paths in SQLAlchemy URLs.
+        // DuckDB accepts the same plus ':memory:'.
+        if (kind === 'duckdb' && path === ':memory:') return { url: `${meta.scheme}:///:memory:` };
+        return { url: `${meta.scheme}:///${path.replace(/^\//, '')}` };
+      }
+      const host = (f.host || '').trim();
+      const port = (f.port || '').trim() || String(meta.defaultPort);
+      const db   = (f.db   || '').trim();
+      const user = (f.user || '').trim();
+      const pass = f.pass || '';
+      if (!host || !db) {
+        return { error: t('db_connect_host_db_required') || 'Host and database name are required.' };
+      }
+      // user:pass@host:port/db — URL-encode credentials so special chars
+      // (@, /, :) don't break the parse.
+      const auth = user ? `${encodeURIComponent(user)}:${encodeURIComponent(pass)}@` : '';
+      // Oracle's SQLAlchemy URL uses ?service_name=foo, not /foo — the
+      // "Database name" field carries the service name.
+      if (kind === 'oracle') {
+        return { url: `${meta.scheme}://${auth}${host}:${port}/?service_name=${encodeURIComponent(db)}` };
+      }
+      return { url: `${meta.scheme}://${auth}${host}:${port}/${encodeURIComponent(db)}` };
+    }
+
+    // Session dialog wrapper: reads its own DOM, surfaces errors inline.
     function _buildDbConnectUrl() {
       const kind = document.getElementById('dbConnectKind').value;
       const meta = _DB_KIND_META[kind];
       if (!meta) return null;
-      if (meta.kind === 'file') {
-        const path = document.getElementById('dbConnectFile').value.trim();
-        if (!path) {
-          _setDbStatus('err', { title: t('db_connect_file_required') || 'File path is required.' });
-          return null;
-        }
-        // SQLite uses 4 slashes for absolute paths in SQLAlchemy URLs.
-        // DuckDB accepts the same plus ':memory:'.
-        if (kind === 'duckdb' && path === ':memory:') {
-          return `${meta.scheme}:///:memory:`;
-        }
-        return `${meta.scheme}:///${path.replace(/^\//, '')}`;
-      }
-      // Server form
-      const host = document.getElementById('dbConnectHost').value.trim();
-      const port = document.getElementById('dbConnectPort').value.trim() || String(meta.defaultPort);
-      const db   = document.getElementById('dbConnectDb').value.trim();
-      const user = document.getElementById('dbConnectUser').value.trim();
-      const pass = document.getElementById('dbConnectPass').value;
-      if (!host || !db) {
-        _setDbStatus('err', { title: t('db_connect_host_db_required') || 'Host and database name are required.' });
-        return null;
-      }
-      // Build user:pass@host:port/db. URL-encode credentials so
-      // special chars (@, /, :) don't break the parse.
-      const auth = user ? `${encodeURIComponent(user)}:${encodeURIComponent(pass || '')}@` : '';
-      // Oracle's SQLAlchemy URL uses ?service_name=foo, not /foo —
-      // we let users put the service name in the "Database name"
-      // field and translate here.
-      if (kind === 'oracle') {
-        return `${meta.scheme}://${auth}${host}:${port}/?service_name=${encodeURIComponent(db)}`;
-      }
-      return `${meta.scheme}://${auth}${host}:${port}/${encodeURIComponent(db)}`;
+      const r = buildDbUrlFromFields(kind, meta.kind === 'file'
+        ? { path: document.getElementById('dbConnectFile').value }
+        : {
+            host: document.getElementById('dbConnectHost').value,
+            port: document.getElementById('dbConnectPort').value,
+            db:   document.getElementById('dbConnectDb').value,
+            user: document.getElementById('dbConnectUser').value,
+            pass: document.getElementById('dbConnectPass').value,
+          });
+      if (r.error) { _setDbStatus('err', { title: r.error }); return null; }
+      return r.url;
     }
 
     async function testDbConnect() {
