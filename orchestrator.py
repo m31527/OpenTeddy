@@ -676,7 +676,9 @@ _ANSWER_TASK_STARTS = (
 )
 
 
-def _looks_like_file_producing_task(description: Optional[str]) -> bool:
+def _looks_like_file_producing_task(
+    description: Optional[str], mode: str = "code",
+) -> bool:
     """True iff the subtask description strongly implies a file should
     appear on disk. Used to detect hallucinated successes — see the
     callsite in _run_subtask for the full rationale.
@@ -705,6 +707,22 @@ def _looks_like_file_producing_task(description: Optional[str]) -> bool:
     has_noun = any(n in lower for n in _ARTIFACT_NOUNS)
     has_ext = any(ext in lower for ext in _ARTIFACT_EXTENSIONS)
     has_exec_phrase = any(p in lower for p in _EXECUTION_PHRASES)
+
+    # Analytic-mode exception: path A of the analytic design emits the
+    # report AS the result text — "整理成 Markdown 表格並輸出最終報告"
+    # is NOT supposed to write a file, yet "輸出"+"報告" tripped the
+    # verb+noun signal, force-failed the subtask through every retry,
+    # and burned minutes (exported trace 6ded1f30). In analytic mode
+    # only demand an on-disk artifact when the description names a real
+    # file signal: an extension, a save-to-file phrase, or the
+    # render_chart_report tool.
+    if mode == "analytic":
+        _save_phrases = (
+            "存成", "存檔", "储存", "儲存為", "写入", "寫入",
+            "save to", "save as", "render_chart_report", "output_path",
+        )
+        if not has_ext and not any(p in lower for p in _save_phrases):
+            return False
 
     # Strong signal #1: production verb + concrete artifact / file ext
     # → treat as file-producing regardless of how the goal opens.
@@ -973,6 +991,23 @@ class Orchestrator:
             for st in subtasks:
                 st = await self._run_subtask(st, req.context, mode=mode_value)
 
+                # ── Thread this result into the NEXT subtask's context ──
+                # Without this, each subtask's executor started blind: a
+                # final "format the results into a report" step could not
+                # see the query results produced two steps earlier, said
+                # "workspace is empty, no query was ever run", and burned
+                # its retries asking the user what to analyse (exported
+                # trace 6ded1f30). Last 2 results, truncated, is enough
+                # for a step to build on its predecessors without blowing
+                # up the context window.
+                if st.result:
+                    _prior = list(req.context.get("prior_results") or [])
+                    _prior.append(
+                        f"[step {st.order}: {(st.description or '')[:120]}]\n"
+                        + st.result[:1800]
+                    )
+                    req.context["prior_results"] = _prior[-2:]
+
                 # ── Live progress pill (Sprint 2B) ────────────────────
                 # Broadcast cumulative state so the chat UI's pill can
                 # show "subtask 3/5 · 🎯 0.85 · 💰 $0.043". Cheap —
@@ -1195,6 +1230,10 @@ class Orchestrator:
                     "db_list_tables / db_describe_table 逐張探索。\n"
                     "快照可能過時 — 只有在查詢因欄位/表不存在而失敗時，才用 "
                     "db_describe_table 重新確認。\n"
+                    "**查詢與報告同一步完成**：查詢子任務直接在 result 輸出"
+                    "完整 markdown 報告（表格+重點），❌ 不要另外規劃"
+                    "「整理結果 / 輸出報告」的獨立子任務 — 那會多一整輪執行"
+                    "且沒有新資訊。簡單問題規劃 1 個子任務就夠。\n"
                     "❌ 不要用 web_search / browser_fetch 去找內部營運資料"
                     "（品牌、工廠、倉庫、訂單、庫存等都在資料庫裡）。"
                 )
@@ -1206,6 +1245,9 @@ class Orchestrator:
                     "  2) `db_describe_table` **只看名稱與問題相關的表**"
                     "（sensor/log/messaging 這類明顯無關的不要看）\n"
                     "  3) `db_query` 下 SELECT 取數據回答（唯讀）\n"
+                    "**查詢與報告同一步完成**：最後的查詢子任務直接在 result "
+                    "輸出完整 markdown 報告，❌ 不要另外規劃「整理結果 / 輸出"
+                    "報告」的獨立子任務。\n"
                     "❌ 不要用 web_search / browser_fetch 去找內部營運資料"
                     "（品牌、工廠、倉庫、訂單、庫存等都在資料庫裡，不在網路上）。\n"
                     "只有確認資料庫沒有該資料時，才考慮外部搜尋。"
@@ -1503,7 +1545,7 @@ class Orchestrator:
                 # get false-failed.
                 if (mode in ("code", "analytic")
                         and not artifacts
-                        and _looks_like_file_producing_task(st.description)):
+                        and _looks_like_file_producing_task(st.description, mode)):
                     logger.info(
                         "Subtask %s should have produced a file but "
                         "workspace got 0 new artifacts — clamping "

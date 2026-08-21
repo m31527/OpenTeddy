@@ -740,13 +740,35 @@ class Executor:
                 "subdirectories of WORKSPACE — never to a sibling or parent. "
                 "Omit `working_dir` to default to WORKSPACE.\n\n"
             )
+        # Results of earlier subtasks in THIS task — rendered as their own
+        # block so a "summarise / build on the previous step" subtask can
+        # actually see what happened. Internal keys already injected into
+        # the system prompt (persona, db context/schema) are excluded from
+        # the Context json dump — duplicating them here would waste most
+        # of its 2000-char budget.
+        _internal_ctx_keys = (
+            "agent_persona", "db_context", "db_schema", "prior_results",
+        )
+        prior_block = ""
+        _prior = (context or {}).get("prior_results") or []
+        if _prior:
+            prior_block = (
+                "EARLIER SUBTASK RESULTS (already done in THIS task — "
+                "build on them, do NOT redo or re-ask for them):\n"
+                + "\n---\n".join(_prior) + "\n\n"
+            )
+        _public_ctx = {
+            k: v for k, v in (context or {}).items()
+            if k not in _internal_ctx_keys
+        }
         messages: List[Dict[str, Any]] = [
             {
                 "role": "user",
                 "content": (
                     workspace_block
+                    + prior_block
                     + f"Task: {description}\n\n"
-                    f"Context: {json.dumps(context, ensure_ascii=False)[:2000]}"
+                    f"Context: {json.dumps(_public_ctx, ensure_ascii=False)[:2000]}"
                 ),
             }
         ]
