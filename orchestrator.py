@@ -717,11 +717,18 @@ def _looks_like_file_producing_task(
     # file signal: an extension, a save-to-file phrase, or the
     # render_chart_report tool.
     if mode == "analytic":
+        # Only an explicit SAVE intent counts. A bare extension does not:
+        # analytic descriptions routinely name their INPUT data file
+        # ("分析 sales.csv 並輸出圖表報告"), and path A of the analytic
+        # design emits the report as result text with ```chart blocks —
+        # no file is written by design. Demanding an artifact there
+        # force-fails a correctly-completed subtask through every retry.
         _save_phrases = (
-            "存成", "存檔", "储存", "儲存為", "写入", "寫入",
-            "save to", "save as", "render_chart_report", "output_path",
+            "存成", "存檔", "储存", "儲存為", "写入", "寫入", "另存",
+            "save to", "save as", "write to", "output to",
+            "render_chart_report", "output_path",
         )
-        if not has_ext and not any(p in lower for p in _save_phrases):
+        if not any(p in lower for p in _save_phrases):
             return False
 
     # Strong signal #1: production verb + concrete artifact / file ext
@@ -818,9 +825,18 @@ class Orchestrator:
                             # agent proved a footgun (two exported traces
                             # ran schema-blind because of it). ~2-8s once,
                             # then stored forever.
-                            if (agent
-                                    and (agent.get("db_url") or "").strip()
-                                    and not (agent.get("schema_summary") or "").strip()):
+                            # Re-capture when MISSING **or STALE-FORMAT**.
+                            # "Only when empty" was a trap: agents that had
+                            # already stored a snapshot from a buggy build
+                            # (v1 truncated away the entity tables) kept
+                            # using it forever and never saw the fix.
+                            _need_snap = False
+                            if agent and (agent.get("db_url") or "").strip():
+                                from db_schema import is_current_format
+                                _need_snap = not is_current_format(
+                                    (agent.get("schema_summary") or "").strip()
+                                )
+                            if _need_snap:
                                 try:
                                     from db_schema import snapshot_schema
                                     _snap = await asyncio.wait_for(
@@ -1290,10 +1306,13 @@ class Orchestrator:
                     "account.company_name 猜品牌 → 會答出一堆帳號而不是工廠）。"
                     "找不到對應實體表時，寧可先 db_describe_table 確認，"
                     "也不要用不相干的表硬湊答案。\n"
-                    "**查詢與報告同一步完成**：查詢子任務直接在 result 輸出"
-                    "完整 markdown 報告（表格+重點），❌ 不要另外規劃"
-                    "「整理結果 / 輸出報告」的獨立子任務 — 那會多一整輪執行"
-                    "且沒有新資訊。簡單問題規劃 1 個子任務就夠。\n"
+                    "**查詢與報告同一步完成**：查詢完直接在同一個子任務把答案"
+                    "寫成**給人看的 markdown 報告**（標題 + 表格 + 重點摘要，"
+                    "需要圖表時照本模式的 ```chart 慣例）。"
+                    "❌ 最終答案不可以是原始 JSON／欄位傾印 — 那是內部格式，"
+                    "使用者要看的是整理過的報告。"
+                    "❌ 不要另外規劃「整理結果 / 輸出報告」的獨立子任務 — "
+                    "那會多一整輪執行且沒有新資訊。簡單問題 1 個子任務就夠。\n"
                     + _strategy +
                     "❌ 不要用 web_search / browser_fetch 去找內部營運資料"
                     "（品牌、工廠、倉庫、訂單、庫存等都在資料庫裡）。"

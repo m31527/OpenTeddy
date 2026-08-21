@@ -29,6 +29,20 @@ _MAX_TABLES = 120        # very wide DBs get truncated with a note
 _MAX_COLS_PER_TABLE = 30
 _MAX_CHARS = 9000        # hard cap on the stored summary
 
+# Bump when the snapshot FORMAT changes. Stored snapshots that don't
+# carry the current marker are re-captured on next use — without this, an
+# agent that stored a snapshot from a buggy older build keeps using it
+# forever (v1 alphabetically truncated away the ycm_* entity tables, and
+# the "capture only when empty" rule meant the fix never reached agents
+# that already had one).
+SCHEMA_FORMAT = "v2"
+_FORMAT_MARKER = f"[schema-{SCHEMA_FORMAT}]"
+
+
+def is_current_format(summary: str) -> bool:
+    """True when a stored snapshot was produced by the current format."""
+    return bool(summary) and summary.lstrip().startswith(_FORMAT_MARKER)
+
 # Infrastructure / plumbing tables: real, but almost never what a business
 # question is about. They get NAME-ONLY treatment so their (often very
 # wide) column lists can't crowd out the entity tables.
@@ -104,7 +118,8 @@ async def snapshot_schema(db_url: str, timeout_s: float = 20.0) -> str:
                         f", …+{len(cols) - _MAX_COLS_PER_TABLE} more"
                     return f"- {t}: {col_repr}{extra}"
 
-                head = f"tables({len(tables)}) — main tables with columns:"
+                head = (f"{_FORMAT_MARKER} tables({len(tables)}) — "
+                        "main tables with columns:")
                 detail: list[str] = []
                 used = len(head)
                 dropped: list[str] = []
