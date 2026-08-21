@@ -787,6 +787,14 @@ class Orchestrator:
                                     f"[Agent: {agent.get('name', '')}]\n"
                                     + agent["system_prompt"].strip()
                                 )
+                            # Programmatic schema snapshot (captured at
+                            # agent save) — with this in the prompt the
+                            # model skips the whole db_list_tables /
+                            # db_describe_table exploration phase (~9 LLM
+                            # rounds ≈ minutes) and queries directly.
+                            if agent and (agent.get("schema_summary") or "").strip():
+                                req.context["db_schema"] = \
+                                    agent["schema_summary"].strip()
                         except Exception:  # noqa: BLE001
                             pass
                     # ── Connected-database awareness ─────────────────────
@@ -1173,16 +1181,35 @@ class Orchestrator:
         # one, so the static mode prompts stay untouched for everyone else.
         _dbctx = (req.context or {}).get("db_context") or ""
         if _dbctx:
-            base_prompt += (
-                "\n\n--- ⚠️ 本 session 已連接資料庫（" + _dbctx + "）---\n"
-                "資料 / 統計 / 查詢類問題一律**優先查這個資料庫**，標準流程：\n"
-                "  1) `db_list_tables` 列出所有資料表\n"
-                "  2) `db_describe_table` 看候選表的欄位結構\n"
-                "  3) `db_query` 下 SELECT 取數據回答（唯讀）\n"
-                "❌ 不要用 web_search / browser_fetch 去找內部營運資料"
-                "（品牌、工廠、倉庫、訂單、庫存等都在資料庫裡，不在網路上）。\n"
-                "只有確認資料庫沒有該資料時，才考慮外部搜尋。"
-            )
+            _dbschema = (req.context or {}).get("db_schema") or ""
+            if _dbschema:
+                # Schema already known — go STRAIGHT to db_query. This is
+                # the difference between 1 planned step and ~9 exploration
+                # rounds of describe-table (measured: ~5 min on a 35B).
+                base_prompt += (
+                    "\n\n--- ⚠️ 本 session 已連接資料庫（" + _dbctx + "）---\n"
+                    "已知資料表結構（先前快照，欄位為 name(type)）：\n"
+                    + _dbschema +
+                    "\n\n資料 / 統計 / 查詢類問題：直接從上面挑相關的表，用 "
+                    "`db_query` 下 SELECT 回答（唯讀）。**不需要**再跑 "
+                    "db_list_tables / db_describe_table 逐張探索。\n"
+                    "快照可能過時 — 只有在查詢因欄位/表不存在而失敗時，才用 "
+                    "db_describe_table 重新確認。\n"
+                    "❌ 不要用 web_search / browser_fetch 去找內部營運資料"
+                    "（品牌、工廠、倉庫、訂單、庫存等都在資料庫裡）。"
+                )
+            else:
+                base_prompt += (
+                    "\n\n--- ⚠️ 本 session 已連接資料庫（" + _dbctx + "）---\n"
+                    "資料 / 統計 / 查詢類問題一律**優先查這個資料庫**，標準流程：\n"
+                    "  1) `db_list_tables` 列出所有資料表\n"
+                    "  2) `db_describe_table` **只看名稱與問題相關的表**"
+                    "（sensor/log/messaging 這類明顯無關的不要看）\n"
+                    "  3) `db_query` 下 SELECT 取數據回答（唯讀）\n"
+                    "❌ 不要用 web_search / browser_fetch 去找內部營運資料"
+                    "（品牌、工廠、倉庫、訂單、庫存等都在資料庫裡，不在網路上）。\n"
+                    "只有確認資料庫沒有該資料時，才考慮外部搜尋。"
+                )
 
         # For Code / Analytic modes, tell Gemma what the agent workspace is
         # so the shell plan uses a known directory (git clones land there

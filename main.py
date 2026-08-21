@@ -2088,10 +2088,40 @@ async def list_tasks(
 
 
 def _agent_public(row: dict) -> dict:
-    out = {k: v for k, v in row.items() if k != "db_url"}
+    # db_url is a secret; schema_summary is not secret but bulky — the
+    # list API carries a boolean + table count instead.
+    out = {k: v for k, v in row.items() if k not in ("db_url", "schema_summary")}
     out["local_only"] = bool(out.get("local_only"))
     out["has_db"] = bool((row.get("db_url") or "").strip())
+    schema = (row.get("schema_summary") or "").strip()
+    out["has_schema"] = bool(schema)
     return out
+
+
+async def _capture_agent_schema(agent_id: str) -> bool:
+    """Best-effort programmatic schema snapshot for an agent's bound DB.
+
+    Called after create/update when a db_url is present. Failure (DB
+    unreachable, bad credentials) is a WARNING, not an error — the agent
+    still saves; planning just falls back to LLM-driven exploration until
+    a later save succeeds. Returns True when a snapshot was stored."""
+    row = await tracker.get_agent(agent_id)
+    if not row or not (row.get("db_url") or "").strip():
+        return False
+    try:
+        from db_schema import snapshot_schema
+        summary = await snapshot_schema(row["db_url"])
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("agent %s schema snapshot failed (non-fatal): %s",
+                       agent_id, exc)
+        return False
+    await tracker.db.execute(
+        "UPDATE agents SET schema_summary=? WHERE id=?", (summary, agent_id),
+    )
+    await tracker.db.commit()
+    logger.info("agent %s schema snapshot stored (%d chars)",
+                agent_id, len(summary))
+    return True
 
 
 @app.get("/agents")
@@ -2103,8 +2133,11 @@ async def list_agents() -> dict:
 async def create_agent(body: CreateAgentRequest) -> dict:
     agent = AgentDefinition(**body.model_dump())
     await tracker.upsert_agent(agent)
+    schema_ok = await _capture_agent_schema(agent.id) if agent.db_url else False
     row = await tracker.get_agent(agent.id)
-    return {"agent": _agent_public(row)}
+    out = _agent_public(row)
+    out["schema_captured"] = schema_ok
+    return {"agent": out}
 
 
 @app.patch("/agents/{agent_id}")
@@ -2120,10 +2153,21 @@ async def update_agent(agent_id: str, body: UpdateAgentRequest) -> dict:
             "id", "name", "description", "system_prompt", "mode",
             "workspace_dir", "local_only", "db_kind", "db_url", "db_label",
         )},
+        schema_summary=(merged.get("schema_summary") or ""),
         created_at=datetime.fromisoformat(row["created_at"]),
     )
+    # Clearing the DB binding clears the snapshot too.
+    if not agent.db_url:
+        agent.schema_summary = ""
     await tracker.upsert_agent(agent)
-    return {"agent": _agent_public(await tracker.get_agent(agent_id))}
+    # Re-snapshot when the connection changed (a db_url was provided in
+    # this PATCH) or a binding exists but no snapshot was ever captured.
+    schema_ok = False
+    if agent.db_url and ("db_url" in data or not agent.schema_summary):
+        schema_ok = await _capture_agent_schema(agent_id)
+    out = _agent_public(await tracker.get_agent(agent_id))
+    out["schema_captured"] = schema_ok
+    return {"agent": out}
 
 
 @app.delete("/agents/{agent_id}")

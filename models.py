@@ -218,6 +218,10 @@ class AgentDefinition(BaseModel):
     db_kind: str = ""
     db_url: str = ""      # secret — never returned raw by list/get APIs
     db_label: str = ""
+    # Compact table/column snapshot captured programmatically at save time
+    # (db_schema.snapshot_schema) — injected into planning so the model
+    # skips LLM-driven schema exploration entirely.
+    schema_summary: str = ""
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
@@ -336,6 +340,7 @@ CREATE TABLE IF NOT EXISTS agents (
     db_kind       TEXT NOT NULL DEFAULT '',
     db_url        TEXT NOT NULL DEFAULT '',
     db_label      TEXT NOT NULL DEFAULT '',
+    schema_summary TEXT NOT NULL DEFAULT '',
     created_at    TEXT NOT NULL,
     updated_at    TEXT NOT NULL
 );

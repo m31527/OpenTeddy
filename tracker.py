@@ -145,6 +145,9 @@ class Tracker:
             # plain session). The agent's persona is looked up LIVE at
             # task time, so editing an agent updates all its sessions.
             "ALTER TABLE sessions ADD COLUMN agent_id TEXT NOT NULL DEFAULT ''",
+            # Programmatic schema snapshot captured at agent save time —
+            # lets planning skip LLM-driven table exploration entirely.
+            "ALTER TABLE agents ADD COLUMN schema_summary TEXT NOT NULL DEFAULT ''",
             # ── Scheduled tasks (cron-driven recurring runs) ──────────────
             # Each row is "this session runs this goal on this cron". The
             # session binding gives the schedule continuity of memory /
@@ -396,19 +399,21 @@ class Tracker:
         await self.db.execute(
             "INSERT INTO agents(id, name, description, system_prompt, mode, "
             "workspace_dir, local_only, db_kind, db_url, db_label, "
-            "created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "schema_summary, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(id) DO UPDATE SET "
             "name=excluded.name, description=excluded.description, "
             "system_prompt=excluded.system_prompt, mode=excluded.mode, "
             "workspace_dir=excluded.workspace_dir, local_only=excluded.local_only, "
             "db_kind=excluded.db_kind, db_url=excluded.db_url, "
-            "db_label=excluded.db_label, updated_at=excluded.updated_at",
+            "db_label=excluded.db_label, schema_summary=excluded.schema_summary, "
+            "updated_at=excluded.updated_at",
             (
                 agent.id, agent.name, agent.description, agent.system_prompt,
                 agent.mode.value if hasattr(agent.mode, "value") else str(agent.mode),
                 agent.workspace_dir, int(agent.local_only),
                 agent.db_kind, agent.db_url, agent.db_label,
+                getattr(agent, "schema_summary", "") or "",
                 agent.created_at.isoformat(), now,
             ),
         )

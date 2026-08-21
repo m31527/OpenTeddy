@@ -915,12 +915,23 @@ class Executor:
             # search for internal operational data.
             _dbctx = (context or {}).get("db_context") or ""
             if _dbctx:
-                effective_system += (
-                    "\n\n[⚠️ 本 session 已連接資料庫（" + _dbctx + "）。"
-                    "資料/統計/查詢問題優先用 db_list_tables → "
-                    "db_describe_table → db_query（唯讀 SELECT）從資料庫回答；"
-                    "內部營運資料（品牌/工廠/倉庫/訂單等）不要用 web_search 找。]"
-                )
+                _dbschema = (context or {}).get("db_schema") or ""
+                if _dbschema:
+                    effective_system += (
+                        "\n\n[⚠️ 本 session 已連接資料庫（" + _dbctx + "）。"
+                        "已知資料表結構如下 — 直接挑相關表用 db_query（唯讀 "
+                        "SELECT）回答，不需要 db_list_tables/describe 探索；"
+                        "只有查詢因表/欄位不存在失敗時才重新 describe。內部"
+                        "營運資料不要用 web_search 找。]\n" + _dbschema
+                    )
+                else:
+                    effective_system += (
+                        "\n\n[⚠️ 本 session 已連接資料庫（" + _dbctx + "）。"
+                        "資料/統計/查詢問題優先用 db_list_tables → "
+                        "db_describe_table（只看相關的表）→ db_query（唯讀 "
+                        "SELECT）從資料庫回答；內部營運資料（品牌/工廠/倉庫/"
+                        "訂單等）不要用 web_search 找。]"
+                    )
             if discovery_memos:
                 effective_system = (
                     effective_system
