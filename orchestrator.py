@@ -805,11 +805,41 @@ class Orchestrator:
                                     f"[Agent: {agent.get('name', '')}]\n"
                                     + agent["system_prompt"].strip()
                                 )
-                            # Programmatic schema snapshot (captured at
-                            # agent save) — with this in the prompt the
-                            # model skips the whole db_list_tables /
-                            # db_describe_table exploration phase (~9 LLM
-                            # rounds ≈ minutes) and queries directly.
+                            # Programmatic schema snapshot — with this in
+                            # the prompt the model skips the whole
+                            # db_list_tables / db_describe_table
+                            # exploration phase (~9 LLM rounds ≈ minutes)
+                            # and queries directly.
+                            #
+                            # SELF-HEALING: agents saved before the
+                            # snapshot feature (or whose save-time capture
+                            # failed) get it captured HERE, on their first
+                            # task — relying on the user to re-save the
+                            # agent proved a footgun (two exported traces
+                            # ran schema-blind because of it). ~2-8s once,
+                            # then stored forever.
+                            if (agent
+                                    and (agent.get("db_url") or "").strip()
+                                    and not (agent.get("schema_summary") or "").strip()):
+                                try:
+                                    from db_schema import snapshot_schema
+                                    _snap = await asyncio.wait_for(
+                                        snapshot_schema(agent["db_url"], timeout_s=8.0),
+                                        timeout=10.0,
+                                    )
+                                    await self.tracker.set_agent_schema(
+                                        agent_id, _snap,
+                                    )
+                                    agent["schema_summary"] = _snap
+                                    logger.info(
+                                        "Lazy schema snapshot captured for "
+                                        "agent %s (%d chars)", agent_id, len(_snap),
+                                    )
+                                except Exception as exc:  # noqa: BLE001
+                                    logger.warning(
+                                        "Lazy schema snapshot failed "
+                                        "(task continues without it): %s", exc,
+                                    )
                             if agent and (agent.get("schema_summary") or "").strip():
                                 req.context["db_schema"] = \
                                     agent["schema_summary"].strip()
@@ -1234,6 +1264,12 @@ class Orchestrator:
                     "完整 markdown 報告（表格+重點），❌ 不要另外規劃"
                     "「整理結果 / 輸出報告」的獨立子任務 — 那會多一整輪執行"
                     "且沒有新資訊。簡單問題規劃 1 個子任務就夠。\n"
+                    "**查詢預算策略**（工具呼叫上限 ~10 次，是稀缺資源）：先從"
+                    "上面的 schema 想好完整 JOIN 路徑，目標 **2-3 條查詢內"
+                    "拿到最終答案**：1 條鎖定過濾鍵（如品牌/組織 id）→ 1 條 "
+                    "JOIN 直接取最終結果。❌ 不要逐層探索關聯、不要逐頁翻"
+                    "被截斷的清單（改用 COUNT / 聚合 / WHERE 縮小）。"
+                    "**最終 JOIN 要早下，不要留到預算用完才想執行。**\n"
                     "❌ 不要用 web_search / browser_fetch 去找內部營運資料"
                     "（品牌、工廠、倉庫、訂單、庫存等都在資料庫裡）。"
                 )

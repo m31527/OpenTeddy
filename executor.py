@@ -944,7 +944,12 @@ class Executor:
                         "已知資料表結構如下 — 直接挑相關表用 db_query（唯讀 "
                         "SELECT）回答，不需要 db_list_tables/describe 探索；"
                         "只有查詢因表/欄位不存在失敗時才重新 describe。內部"
-                        "營運資料不要用 web_search 找。]\n" + _dbschema
+                        "營運資料不要用 web_search 找。"
+                        "查詢預算：工具呼叫上限 ~10 次 — 先想好 JOIN 路徑，"
+                        "目標 2-3 條查詢拿到最終答案（1 條鎖過濾鍵 → 1 條 "
+                        "JOIN 取結果）；截斷的清單用 COUNT/聚合/WHERE 縮小，"
+                        "不要逐頁翻；最終 JOIN 要早下，不要拖到預算用完。]\n"
+                        + _dbschema
                     )
                 else:
                     effective_system += (

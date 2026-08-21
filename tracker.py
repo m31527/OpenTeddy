@@ -433,6 +433,14 @@ class Tracker:
             rows = await cur.fetchall()
         return [dict(r) for r in rows]
 
+    async def set_agent_schema(self, agent_id: str, summary: str) -> None:
+        """Persist a programmatic schema snapshot on the agent row."""
+        await self.db.execute(
+            "UPDATE agents SET schema_summary=? WHERE id=?",
+            (summary or "", agent_id),
+        )
+        await self.db.commit()
+
     async def delete_agent(self, agent_id: str) -> bool:
         cur = await self.db.execute("DELETE FROM agents WHERE id=?", (agent_id,))
         # Detach (don't delete) this agent's sessions — the conversations
