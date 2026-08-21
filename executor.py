@@ -890,7 +890,17 @@ class Executor:
         compress_at_f = float(getattr(config, "context_compress_at", 0.7))
         compress_threshold = max(1024, int(num_ctx * compress_at_f))
 
-        for round_idx in range(_MAX_TOOL_ROUNDS):
+        # DB-connected sessions get extra headroom: a real analysis is
+        # "resolve filter key → JOIN → report", but entity semantics (e.g.
+        # brand → organization tree → factories) can legitimately need a
+        # few extra lookups. Exported trace 015ce16e hit the cap ONE query
+        # short of the answer — it had already WRITTEN the correct final
+        # JOIN but had no round left to run it. The budget-strategy prompt
+        # keeps typical runs at 2-4 calls; this margin is for the honest
+        # tail, not a licence to explore.
+        max_rounds = _MAX_TOOL_ROUNDS + (4 if (context or {}).get("db_context") else 0)
+
+        for round_idx in range(max_rounds):
             # ── Context watchdog (#4) ──────────────────────────────────────
             # If the previous round's prompt was already >= 70% of num_ctx,
             # we're one turn away from the model losing its grip. Compress
@@ -1618,13 +1628,16 @@ class Executor:
         # Hit max rounds — ask for a final forced answer
         logger.warning(
             "Reached max tool rounds (%d) for task %s — forcing final answer.",
-            _MAX_TOOL_ROUNDS, task_id,
+            max_rounds, task_id,
         )
         messages.append({
             "role": "user",
             "content": (
                 "You have used the maximum number of tool calls. "
-                "Summarise what you've learned and output the final JSON now."
+                "Summarise what you've learned and output the final JSON now. "
+                "Include ALL concrete data values you already retrieved "
+                "(numbers, names, dates) in a proper report — do NOT reply "
+                "with only a description of what remains to be done."
             ),
         })
         try:
