@@ -1251,6 +1251,31 @@ class Orchestrator:
                 # Schema already known — go STRAIGHT to db_query. This is
                 # the difference between 1 planned step and ~9 exploration
                 # rounds of describe-table (measured: ~5 min on a 35B).
+                #
+                # Guidance length is TIER-AWARE. OpenTeddy's default is a
+                # local model, and long multi-clause strategy text degrades
+                # small models — they follow the last thing they read. Big
+                # / cloud models get the full budget strategy; smaller ones
+                # get the short imperative version. Correctness rules that
+                # matter for every tier (entity-table matching, no web
+                # search) are in the shared part.
+                from model_profile import model_tier as _mt
+                from config import is_cloud_mode as _icm
+                # Cloud mode plans with a commercial model — always the
+                # strongest tier, regardless of what the local model tag
+                # says (a cloud model id carries no size to parse).
+                _tier = "open" if _icm() else _mt(config.gemma_model)
+                _strategy = (
+                    "**查詢預算策略**（工具呼叫上限 ~10 次，是稀缺資源）：先從"
+                    "上面的 schema 想好完整 JOIN 路徑，目標 **2-3 條查詢內"
+                    "拿到最終答案**：1 條鎖定過濾鍵（如品牌/組織 id）→ 1 條 "
+                    "JOIN 直接取最終結果。❌ 不要逐層探索關聯、不要逐頁翻"
+                    "被截斷的清單（改用 COUNT / 聚合 / WHERE 縮小）。"
+                    "**最終 JOIN 要早下，不要留到預算用完才想執行。**\n"
+                ) if _tier == "open" else (
+                    "查詢要精簡：先用 1 條查詢鎖定過濾鍵，再用 1 條 JOIN "
+                    "取最終結果。不要逐層慢慢試。\n"
+                )
                 base_prompt += (
                     "\n\n--- ⚠️ 本 session 已連接資料庫（" + _dbctx + "）---\n"
                     "已知資料表結構（先前快照，欄位為 name(type)）：\n"
@@ -1258,18 +1283,18 @@ class Orchestrator:
                     "\n\n資料 / 統計 / 查詢類問題：直接從上面挑相關的表，用 "
                     "`db_query` 下 SELECT 回答（唯讀）。**不需要**再跑 "
                     "db_list_tables / db_describe_table 逐張探索。\n"
-                    "快照可能過時 — 只有在查詢因欄位/表不存在而失敗時，才用 "
-                    "db_describe_table 重新確認。\n"
+                    "**挑表原則 — 問什麼實體就查什麼實體的表**：問「工廠」就"
+                    "查工廠主表、問「倉庫」就查倉庫主表、問「品牌下的 X」就先"
+                    "用品牌表/組織表找出關聯再帶出 X。❌ 絕對不要用帳號、"
+                    "使用者、log 這類旁支表去回答實體問題（例如用 "
+                    "account.company_name 猜品牌 → 會答出一堆帳號而不是工廠）。"
+                    "找不到對應實體表時，寧可先 db_describe_table 確認，"
+                    "也不要用不相干的表硬湊答案。\n"
                     "**查詢與報告同一步完成**：查詢子任務直接在 result 輸出"
                     "完整 markdown 報告（表格+重點），❌ 不要另外規劃"
                     "「整理結果 / 輸出報告」的獨立子任務 — 那會多一整輪執行"
                     "且沒有新資訊。簡單問題規劃 1 個子任務就夠。\n"
-                    "**查詢預算策略**（工具呼叫上限 ~10 次，是稀缺資源）：先從"
-                    "上面的 schema 想好完整 JOIN 路徑，目標 **2-3 條查詢內"
-                    "拿到最終答案**：1 條鎖定過濾鍵（如品牌/組織 id）→ 1 條 "
-                    "JOIN 直接取最終結果。❌ 不要逐層探索關聯、不要逐頁翻"
-                    "被截斷的清單（改用 COUNT / 聚合 / WHERE 縮小）。"
-                    "**最終 JOIN 要早下，不要留到預算用完才想執行。**\n"
+                    + _strategy +
                     "❌ 不要用 web_search / browser_fetch 去找內部營運資料"
                     "（品牌、工廠、倉庫、訂單、庫存等都在資料庫裡）。"
                 )

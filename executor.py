@@ -419,6 +419,22 @@ last message, not your intermediate thinking.
 """
 
 
+def _db_guidance_tier() -> str:
+    """Which verbosity tier the DB guidance block should use.
+
+    Long multi-clause strategy text helps a capable model plan a JOIN
+    upfront but degrades small local models, which tend to follow the
+    last instruction they read. Cloud mode always counts as the strongest
+    tier — a commercial model id carries no parseable size."""
+    try:
+        from config import is_cloud_mode
+        if is_cloud_mode():
+            return "open"
+    except Exception:  # noqa: BLE001
+        pass
+    return model_tier(config.qwen_model)
+
+
 def _system_prompt_for_mode(mode: str, model_name: str = "") -> str:
     """Pick the base prompt for the given mode, then bend its strictness
     to match the model's capability tier.
@@ -949,16 +965,26 @@ class Executor:
             if _dbctx:
                 _dbschema = (context or {}).get("db_schema") or ""
                 if _dbschema:
+                    # Tier-aware: small local models follow short imperative
+                    # rules better than a long multi-clause strategy.
+                    _budget = (
+                        "查詢預算：工具呼叫上限 ~10 次 — 先想好 JOIN 路徑，"
+                        "目標 2-3 條查詢拿到最終答案（1 條鎖過濾鍵 → 1 條 "
+                        "JOIN 取結果）；截斷的清單用 COUNT/聚合/WHERE 縮小，"
+                        "不要逐頁翻；最終 JOIN 要早下，不要拖到預算用完。"
+                    ) if _db_guidance_tier() == "open" else (
+                        "查詢要精簡：1 條鎖過濾鍵 → 1 條 JOIN 取結果。"
+                    )
                     effective_system += (
                         "\n\n[⚠️ 本 session 已連接資料庫（" + _dbctx + "）。"
                         "已知資料表結構如下 — 直接挑相關表用 db_query（唯讀 "
                         "SELECT）回答，不需要 db_list_tables/describe 探索；"
-                        "只有查詢因表/欄位不存在失敗時才重新 describe。內部"
-                        "營運資料不要用 web_search 找。"
-                        "查詢預算：工具呼叫上限 ~10 次 — 先想好 JOIN 路徑，"
-                        "目標 2-3 條查詢拿到最終答案（1 條鎖過濾鍵 → 1 條 "
-                        "JOIN 取結果）；截斷的清單用 COUNT/聚合/WHERE 縮小，"
-                        "不要逐頁翻；最終 JOIN 要早下，不要拖到預算用完。]\n"
+                        "只有查詢因表/欄位不存在失敗時才重新 describe。"
+                        "**問什麼實體就查什麼實體的表**：問工廠查工廠表、問"
+                        "倉庫查倉庫表、問「品牌下的 X」先用品牌/組織表找關聯"
+                        "再帶出 X；絕不用帳號/使用者/log 表去回答實體問題。"
+                        "內部營運資料不要用 web_search 找。"
+                        + _budget + "]\n"
                         + _dbschema
                     )
                 else:
