@@ -789,6 +789,19 @@ class Orchestrator:
                                 )
                         except Exception:  # noqa: BLE001
                             pass
+                    # ── Connected-database awareness ─────────────────────
+                    # The DB binding (agent-created or Analytic "Connect
+                    # database") makes the db_* TOOLS work, but without
+                    # this the PLANNER never learns a database exists —
+                    # so a data question like "YCM 品牌有幾個工廠" got
+                    # planned as a web search instead of db_list_tables →
+                    # db_query. Surface the fact (kind + label only, never
+                    # the URL) so planning and execution prefer the DB.
+                    if (sess.get("db_url") or "").strip():
+                        req.context["db_context"] = (
+                            f"kind={sess.get('db_kind') or 'sql'}, "
+                            f"label={sess.get('db_label') or 'connected database'}"
+                        )
             except Exception:  # noqa: BLE001
                 pass
         set_session_workspace(session_ws)
@@ -882,7 +895,13 @@ class Orchestrator:
         # Conservative: only fires when the classifier is confident
         # (>= 0.7) AND says BOTH needs_tools=False AND is_pure_chat=True.
         # Any uncertainty falls through to the normal plan→execute flow.
-        if getattr(config, "intent_classifier_enabled", True):
+        if (getattr(config, "intent_classifier_enabled", True)
+                and not (req.context or {}).get("db_context")):
+            # db_context guard: in a DB-connected session, a data question
+            # ("how many factories does brand X have") is easily
+            # misclassified as pure-chat — and the fast path would then
+            # HALLUCINATE an answer from training data instead of querying
+            # the database. Route DB sessions through the full planner.
             try:
                 intent = await self._classify_intent(req.goal, session_mode)
             except Exception as exc:  # noqa: BLE001
@@ -1148,6 +1167,21 @@ class Orchestrator:
             base_prompt += (
                 "\n\n--- Agent persona (standing instructions for this "
                 "session's role — plan accordingly) ---\n" + _persona
+            )
+
+        # Connected database — only present when the session actually has
+        # one, so the static mode prompts stay untouched for everyone else.
+        _dbctx = (req.context or {}).get("db_context") or ""
+        if _dbctx:
+            base_prompt += (
+                "\n\n--- ⚠️ 本 session 已連接資料庫（" + _dbctx + "）---\n"
+                "資料 / 統計 / 查詢類問題一律**優先查這個資料庫**，標準流程：\n"
+                "  1) `db_list_tables` 列出所有資料表\n"
+                "  2) `db_describe_table` 看候選表的欄位結構\n"
+                "  3) `db_query` 下 SELECT 取數據回答（唯讀）\n"
+                "❌ 不要用 web_search / browser_fetch 去找內部營運資料"
+                "（品牌、工廠、倉庫、訂單、庫存等都在資料庫裡，不在網路上）。\n"
+                "只有確認資料庫沒有該資料時，才考慮外部搜尋。"
             )
 
         # For Code / Analytic modes, tell Gemma what the agent workspace is

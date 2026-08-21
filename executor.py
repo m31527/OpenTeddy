@@ -910,6 +910,17 @@ class Executor:
                     "role for the whole session:]\n" + _persona
                     + "\n\n" + effective_system
                 )
+            # Connected database — mirror of the planner-side injection:
+            # data questions go to the db_* tools first, never to web
+            # search for internal operational data.
+            _dbctx = (context or {}).get("db_context") or ""
+            if _dbctx:
+                effective_system += (
+                    "\n\n[⚠️ 本 session 已連接資料庫（" + _dbctx + "）。"
+                    "資料/統計/查詢問題優先用 db_list_tables → "
+                    "db_describe_table → db_query（唯讀 SELECT）從資料庫回答；"
+                    "內部營運資料（品牌/工廠/倉庫/訂單等）不要用 web_search 找。]"
+                )
             if discovery_memos:
                 effective_system = (
                     effective_system
