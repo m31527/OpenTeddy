@@ -2503,6 +2503,71 @@ def _derive_db_label(kind: str, url: str) -> str:
     return f"{kind} connection"
 
 
+def _db_url_details(url: str) -> dict:
+    """Split a stored DB URL into its NON-SECRET parts so the connect
+    dialog can show what a session is actually attached to.
+
+    The password is never included — everything else (host, port,
+    database, username, or the file path for sqlite/duckdb) is
+    connection metadata the UI already half-exposes through the chip
+    label, and showing it is what every DB client does. Without this the
+    dialog opened blank on a connected session (notably one created from
+    an agent), which reads as "nothing is configured".
+    """
+    out = {"host": "", "port": "", "database": "", "username": "", "file_path": ""}
+    if not url:
+        return out
+    try:
+        from urllib.parse import urlparse, unquote
+        p = urlparse(url)
+        path = (p.path or "").lstrip("/")
+        if not p.hostname:
+            # File-backed engines (sqlite:///path, duckdb:///path)
+            out["file_path"] = "/" + path if path and not path.startswith(":") else path
+            return out
+        out["host"]     = p.hostname or ""
+        out["port"]     = str(p.port) if p.port else ""
+        out["username"] = unquote(p.username or "")
+        # Oracle carries the service name as ?service_name=foo
+        if "service_name=" in (p.query or ""):
+            from urllib.parse import parse_qs
+            out["database"] = (parse_qs(p.query).get("service_name") or [""])[0]
+        else:
+            out["database"] = unquote(path.split("?", 1)[0])
+    except Exception:  # noqa: BLE001
+        pass
+    return out
+
+
+def _merge_stored_password(new_url: str, stored_url: str) -> str:
+    """When the user re-submits the connect form without retyping the
+    password, splice the stored one back in — but ONLY when the target
+    is unmistakably the same connection (same host, port, database and
+    username). Anything else means they're pointing at a different DB and
+    must supply its own credentials."""
+    if not stored_url or not new_url:
+        return new_url
+    try:
+        from urllib.parse import urlparse
+        n, s = urlparse(new_url), urlparse(stored_url)
+        if n.password:                      # user typed one — respect it
+            return new_url
+        same = (
+            n.hostname == s.hostname and n.port == s.port
+            and (n.path or "") == (s.path or "")
+            and (n.username or "") == (s.username or "")
+        )
+        if not same or not s.password:
+            return new_url
+        # Rebuild netloc with the stored password.
+        userinfo = f"{n.username}:{s.password}" if n.username else ""
+        hostport = n.hostname + (f":{n.port}" if n.port else "")
+        netloc = f"{userinfo}@{hostport}" if userinfo else hostport
+        return n._replace(netloc=netloc).geturl()
+    except Exception:  # noqa: BLE001
+        return new_url
+
+
 async def _db_smoke_test(url: str) -> Optional[str]:
     """Run SELECT 1 against a candidate DB URL. Returns None on success,
     a user-facing error string on failure. Shared by both the dry-run
@@ -2535,14 +2600,19 @@ async def test_session_db_connect(session_id: str, body: DBConnectRequest) -> di
     if not body.kind or not body.url:
         from fastapi import HTTPException
         raise HTTPException(status_code=400, detail="kind and url are required")
-    err = await _db_smoke_test(body.url)
+    # Blank password + same target as the stored connection → reuse the
+    # saved secret, so "Test connection" works after the dialog prefills
+    # host/user/db without exposing the password.
+    _stored = await tracker.get_session_db_connection(session_id)
+    _url = _merge_stored_password(body.url, (_stored or {}).get("url") or "")
+    err = await _db_smoke_test(_url)
     if err:
         from fastapi import HTTPException
         raise HTTPException(status_code=400, detail=f"Connection failed: {err}")
     return {
         "ok":    True,
         "kind":  body.kind,
-        "label": _derive_db_label(body.kind, body.url),
+        "label": _derive_db_label(body.kind, _url),
     }
 
 
@@ -2553,11 +2623,14 @@ async def get_session_db_connect(session_id: str) -> dict:
     'connected' chip in the chat header on session-switch."""
     conn = await tracker.get_session_db_connection(session_id)
     if not conn:
-        return {"connected": False, "kind": "", "label": ""}
+        return {"connected": False, "kind": "", "label": "", "details": {}}
     return {
         "connected": True,
         "kind":  conn["kind"],
         "label": conn["label"],
+        # Non-secret connection details so the dialog can show WHAT is
+        # attached (host / port / db / user). Password is never included.
+        "details": _db_url_details(conn.get("url") or ""),
     }
 
 
@@ -2576,18 +2649,24 @@ async def set_session_db_connect(session_id: str, body: DBConnectRequest) -> dic
         from fastapi import HTTPException
         raise HTTPException(status_code=400, detail="kind and url are required")
 
+    # Blank password + same target as the stored connection → reuse the
+    # saved secret (the dialog prefills host/user/db but never the
+    # password, so re-saving after an edit must not wipe the credential).
+    _stored = await tracker.get_session_db_connection(session_id)
+    _url = _merge_stored_password(body.url, (_stored or {}).get("url") or "")
+
     # Smoke-test the connection BEFORE persisting. _db_smoke_test
     # returns None on success or the driver's actual error string —
     # "password authentication failed", "could not translate host
     # name", etc. — so the user can fix their input without guessing.
-    err = await _db_smoke_test(body.url)
+    err = await _db_smoke_test(_url)
     if err:
         from fastapi import HTTPException
         raise HTTPException(status_code=400, detail=f"Connection failed: {err}")
 
-    label = _derive_db_label(body.kind, body.url)
+    label = _derive_db_label(body.kind, _url)
     await tracker.set_session_db_connection(
-        session_id, body.kind, body.url, label,
+        session_id, body.kind, _url, label,
     )
 
     # Fire-and-forget the auto-discovery task. Submitted as a normal

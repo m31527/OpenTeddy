@@ -7681,6 +7681,36 @@
       duckdb:   { scheme: 'duckdb',           kind: 'file' },
     };
 
+    // Prefill the connect dialog from the session's CURRENT connection
+    // (host / port / db / user — never the password). Without this the
+    // dialog opened blank on an already-connected session, which reads
+    // as "nothing is configured" — most visible on a session spawned
+    // from an agent, where the user never typed the details here.
+    async function _prefillDbConnectModal() {
+      const sid = currentSessionId && currentSessionId();
+      if (!sid) return;
+      let d;
+      try {
+        const r = await fetch(`${API}/sessions/${sid}/db_connect`);
+        d = await r.json();
+      } catch { return; }
+      if (!d || !d.connected) return;
+      const det = d.details || {};
+      const kindEl = document.getElementById('dbConnectKind');
+      if (d.kind && kindEl) { kindEl.value = d.kind; onDbConnectKindChange(); }
+      const set = (id, v) => { const el = document.getElementById(id); if (el && v) el.value = v; };
+      set('dbConnectHost', det.host);
+      set('dbConnectPort', det.port);
+      set('dbConnectDb',   det.database);
+      set('dbConnectUser', det.username);
+      set('dbConnectFile', det.file_path);
+      const pwd = document.getElementById('dbConnectPass');
+      if (pwd) {
+        pwd.value = '';
+        pwd.placeholder = t('db_pass_saved') || '(已儲存 — 留空即沿用)';
+      }
+    }
+
     function openDbConnectModal() {
       const overlay = document.getElementById('dbConnectOverlay');
       if (!overlay) return;
@@ -7701,6 +7731,9 @@
       }
       onDbConnectKindChange();   // fills port default + flips form
       overlay.hidden = false;
+      // Show what this session is already attached to (async — the
+      // dialog is usable immediately, fields fill in a moment later).
+      _prefillDbConnectModal();
       // Auto-focus the first useful field after the form swaps in.
       setTimeout(() => {
         const meta = _DB_KIND_META[document.getElementById('dbConnectKind').value];
