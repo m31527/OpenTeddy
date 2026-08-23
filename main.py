@@ -2092,7 +2092,7 @@ def _agent_public(row: dict) -> dict:
     # secret but bulky — the list API carries booleans / names instead.
     out = {
         k: v for k, v in row.items()
-        if k not in ("db_url", "schema_summary", "api_credentials")
+        if k not in ("db_url", "schema_summary", "api_credentials", "api_docs")
     }
     out["local_only"] = bool(out.get("local_only"))
     out["has_db"] = bool((row.get("db_url") or "").strip())
@@ -2111,6 +2111,11 @@ def _agent_public(row: dict) -> dict:
         out["allowed_domains"] = json.loads(row.get("allowed_domains") or "[]")
     except Exception:  # noqa: BLE001
         out["allowed_domains"] = []
+    # api_docs can be several KB — the list API carries a flag + size so
+    # the UI can show "docs loaded (2.1 KB)" without shipping the text.
+    _docs = row.get("api_docs") or ""
+    out["has_api_docs"] = bool(_docs.strip())
+    out["api_docs_chars"] = len(_docs)
     return out
 
 
@@ -2147,7 +2152,11 @@ async def list_agents() -> dict:
 
 @app.post("/agents")
 async def create_agent(body: CreateAgentRequest) -> dict:
-    agent = AgentDefinition(**body.model_dump())
+    data = body.model_dump()
+    if data.get("api_docs"):
+        import api_docs as _ad
+        data["api_docs"] = _ad.condense(data["api_docs"])
+    agent = AgentDefinition(**data)
     await tracker.upsert_agent(agent)
     schema_ok = await _capture_agent_schema(agent.id) if agent.db_url else False
     row = await tracker.get_agent(agent.id)
@@ -2187,6 +2196,12 @@ async def update_agent(agent_id: str, body: UpdateAgentRequest) -> dict:
     except Exception:  # noqa: BLE001
         _domains = body.allowed_domains or []
 
+    if body.api_docs is None:
+        _docs = row.get("api_docs") or ""
+    else:
+        import api_docs as _ad
+        _docs = _ad.condense(body.api_docs)
+
     agent = AgentDefinition(
         **{k: merged[k] for k in (
             "id", "name", "description", "system_prompt", "mode",
@@ -2195,6 +2210,7 @@ async def update_agent(agent_id: str, body: UpdateAgentRequest) -> dict:
         schema_summary=(merged.get("schema_summary") or ""),
         api_credentials=_creds,
         allowed_domains=_domains,
+        api_docs=_docs,
         created_at=datetime.fromisoformat(row["created_at"]),
     )
     # Clearing the DB binding clears the snapshot too.
@@ -2209,6 +2225,87 @@ async def update_agent(agent_id: str, body: UpdateAgentRequest) -> dict:
     out = _agent_public(await tracker.get_agent(agent_id))
     out["schema_captured"] = schema_ok
     return {"agent": out}
+
+
+@app.get("/agents/{agent_id}/api_docs")
+async def get_agent_api_docs(agent_id: str) -> dict:
+    """Return the stored (condensed) API docs so the UI can show/edit
+    them. Not a secret — it's the endpoint list, no credentials."""
+    row = await tracker.get_agent(agent_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    return {"api_docs": row.get("api_docs") or ""}
+
+
+@app.post("/agents/{agent_id}/api_docs/import")
+async def import_agent_api_docs(
+    agent_id: str,
+    url: Optional[str] = Form(default=None),
+    file: Optional[UploadFile] = File(default=None),
+) -> dict:
+    """Import API documentation from a URL or an uploaded file.
+
+    Internal API docs are often behind auth or simply not published as
+    OpenAPI, so all three input paths matter: paste (handled by the
+    normal save), upload a .md/.json/.yaml, or fetch a URL. A URL fetch
+    reuses the agent's OWN credentials when the host is on its
+    allowed-domains list — that's what makes a login-gated internal doc
+    reachable. Whatever arrives is condensed (api_docs.condense) and
+    stored, so the model gets an endpoint list rather than 100 KB of
+    schema boilerplate.
+    """
+    row = await tracker.get_agent(agent_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    import api_docs as _ad
+
+    if file is not None:
+        raw = (await file.read()).decode("utf-8", errors="replace")
+        source = file.filename or "upload"
+    elif url:
+        # Use the agent's credentials for an allowlisted internal host.
+        headers = {}
+        try:
+            creds = json.loads(row.get("api_credentials") or "{}")
+            domains = json.loads(row.get("allowed_domains") or "[]")
+            from tools.http_tool import _host_allowed
+            if creds and domains and _host_allowed(url, domains):
+                # Bearer is the common case; a doc endpoint needing a
+                # different scheme can still be uploaded as a file.
+                first = next(iter(creds.values()), "")
+                if first:
+                    headers["Authorization"] = f"Bearer {first}"
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as c:
+                resp = await c.get(url, headers=headers)
+                resp.raise_for_status()
+                raw = resp.text
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(
+                status_code=400,
+                detail=(f"Could not fetch {url}: {exc}. If the docs need a "
+                        "login, upload the file instead."),
+            )
+        source = url
+    else:
+        raise HTTPException(status_code=400, detail="Provide a url or a file")
+
+    condensed = _ad.condense(raw)
+    if not condensed.strip():
+        raise HTTPException(status_code=400, detail="No usable content found")
+    await tracker.db.execute(
+        "UPDATE agents SET api_docs=? WHERE id=?", (condensed, agent_id),
+    )
+    await tracker.db.commit()
+    logger.info("Agent %s API docs imported from %s (%d → %d chars)",
+                agent_id, source, len(raw), len(condensed))
+    return {
+        "ok": True, "source": source,
+        "chars": len(condensed), "api_docs": condensed,
+    }
 
 
 @app.delete("/agents/{agent_id}")

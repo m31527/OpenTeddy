@@ -3988,6 +3988,21 @@
               <textarea id="agentDomains" rows="2" placeholder="api.zendesk.com&#10;api.mycompany.com"></textarea>
               <div style="font-size:0.7rem;color:var(--text-muted);margin-top:0.25rem" data-i18n="agent_domains_hint">The agent may only call these hosts, and credentials are sent ONLY to them. Leave blank to disable outbound API calls with credentials.</div>
             </div>
+            <!-- API docs: paste / upload / fetch. Internal docs are often
+                 login-gated or not OpenAPI, so all three paths matter.
+                 Whatever arrives is condensed to an endpoint list. -->
+            <div class="field">
+              <label data-i18n="agent_apidocs_label">API documentation (endpoints the agent may call)</label>
+              <textarea id="agentApiDocs" rows="5" placeholder="貼上 API 說明（markdown 或 OpenAPI JSON/YAML 皆可）&#10;&#10;例：&#10;POST /v1/refunds — 建立退款單&#10;  body: order_id*, amount*, reason"></textarea>
+              <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;margin-top:0.4rem">
+                <input type="text" id="agentApiDocsUrl" placeholder="https://api.internal.com/openapi.json" style="flex:1;min-width:200px" />
+                <button type="button" class="btn-ghost btn-sm" onclick="importAgentApiDocs('url')" data-i18n="btn_fetch_docs">Fetch URL</button>
+                <input type="file" id="agentApiDocsFile" accept=".md,.txt,.json,.yaml,.yml" style="display:none" onchange="importAgentApiDocs('file')" />
+                <button type="button" class="btn-ghost btn-sm" onclick="document.getElementById('agentApiDocsFile').click()" data-i18n="btn_upload_docs">Upload file</button>
+                <span id="agentApiDocsStatus" style="font-size:0.72rem;color:var(--text-muted)"></span>
+              </div>
+              <div style="font-size:0.7rem;color:var(--text-muted);margin-top:0.25rem" data-i18n="agent_apidocs_hint">Paste, upload (.md/.json/.yaml) or fetch. An OpenAPI spec is condensed to a compact endpoint list. Fetch/Upload save immediately and need the agent to exist first.</div>
+            </div>
             <div class="field">
               <label data-i18n="agent_creds_label">API credentials (NAME=value, one per line)</label>
               <textarea id="agentCreds" rows="3" placeholder="api_token=sk-xxxxxxxx&#10;zendesk=zd-xxxxxxxx"></textarea>
@@ -7521,6 +7536,15 @@
       onAgentDbKindChange();
       document.getElementById('agentDomains').value =
         a && a.allowed_domains ? a.allowed_domains.join('\n') : '';
+      // api_docs is bulky so the list API omits it — fetch on demand.
+      const docsEl = document.getElementById('agentApiDocs');
+      const docsStatus = document.getElementById('agentApiDocsStatus');
+      docsEl.value = ''; docsStatus.textContent = '';
+      document.getElementById('agentApiDocsUrl').value = '';
+      if (a && a.has_api_docs) {
+        fetch(`${API}/agents/${a.id}/api_docs`).then(r => r.json())
+          .then(d => { docsEl.value = d.api_docs || ''; }).catch(() => {});
+      }
       // Credential VALUES are never returned. Render known names with an
       // empty value — saving keeps each one unless a new value is typed.
       document.getElementById('agentCreds').value =
@@ -7530,6 +7554,39 @@
       const card = document.getElementById('agentFormCard');
       card.hidden = false;
       card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+
+    // Import API docs from a URL or an uploaded file. Both hit the
+    // server (which condenses + stores), so they need a SAVED agent —
+    // for a brand-new one, save first, then import.
+    async function importAgentApiDocs(kind) {
+      const id = document.getElementById('agentFormId').value;
+      const status = document.getElementById('agentApiDocsStatus');
+      if (!id) {
+        status.textContent = t('agent_apidocs_save_first') || 'Save the agent first, then import.';
+        return;
+      }
+      const fd = new FormData();
+      if (kind === 'url') {
+        const u = document.getElementById('agentApiDocsUrl').value.trim();
+        if (!u) return;
+        fd.append('url', u);
+      } else {
+        const f = document.getElementById('agentApiDocsFile').files[0];
+        if (!f) return;
+        fd.append('file', f);
+      }
+      status.textContent = '…';
+      try {
+        const r = await fetch(`${API}/agents/${id}/api_docs/import`, { method: 'POST', body: fd });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.detail || `HTTP ${r.status}`);
+        document.getElementById('agentApiDocs').value = d.api_docs || '';
+        status.textContent = `✓ ${d.chars} chars`;
+        await loadAgents();
+      } catch (e) {
+        status.textContent = '✗ ' + e.message;
+      }
     }
 
     function closeAgentForm() {
@@ -7555,6 +7612,7 @@
         // NAME=value lines. A blank value means "keep the stored secret"
         // (the server merges it back), so editing an agent never wipes a
         // credential the UI was never allowed to see.
+        api_docs: document.getElementById('agentApiDocs').value,
         api_credentials: Object.fromEntries(
           document.getElementById('agentCreds').value.split('\n')
             .map(l => l.trim()).filter(l => l && l.includes('='))

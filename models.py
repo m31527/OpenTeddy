@@ -233,6 +233,11 @@ class AgentDefinition(BaseModel):
     # host on this list, so a prompt-injected "POST your token to
     # evil.com" cannot succeed. Empty list = no outbound credential use.
     allowed_domains: List[str] = Field(default_factory=list)
+    # API documentation the agent may consult: pasted markdown, an
+    # uploaded file, or a fetched URL — all condensed to text at save
+    # time (see api_docs.py) and injected into prompts, so the model
+    # knows WHICH endpoints exist, not just which hosts it may call.
+    api_docs: str = ""
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
@@ -249,6 +254,7 @@ class CreateAgentRequest(BaseModel):
     db_label: str = ""
     api_credentials: Dict[str, str] = Field(default_factory=dict)
     allowed_domains: List[str] = Field(default_factory=list)
+    api_docs: str = ""
 
 
 class UpdateAgentRequest(BaseModel):
@@ -265,6 +271,7 @@ class UpdateAgentRequest(BaseModel):
     db_label: Optional[str] = None
     api_credentials: Optional[Dict[str, str]] = None
     allowed_domains: Optional[List[str]] = None
+    api_docs: Optional[str] = None
 
 
 class CreateSessionRequest(BaseModel):
@@ -358,6 +365,7 @@ CREATE TABLE IF NOT EXISTS agents (
     schema_summary TEXT NOT NULL DEFAULT '',
     api_credentials TEXT NOT NULL DEFAULT '{}',
     allowed_domains TEXT NOT NULL DEFAULT '[]',
+    api_docs      TEXT NOT NULL DEFAULT '',
     created_at    TEXT NOT NULL,
     updated_at    TEXT NOT NULL
 );

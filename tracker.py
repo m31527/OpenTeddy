@@ -153,6 +153,9 @@ class Tracker:
             # prompt); allowed_domains bounds where they may be sent.
             "ALTER TABLE agents ADD COLUMN api_credentials TEXT NOT NULL DEFAULT '{}'",
             "ALTER TABLE agents ADD COLUMN allowed_domains TEXT NOT NULL DEFAULT '[]'",
+            # Condensed API documentation (endpoint list) so the model
+            # knows which endpoints exist, not just which hosts.
+            "ALTER TABLE agents ADD COLUMN api_docs TEXT NOT NULL DEFAULT ''",
             # ── Scheduled tasks (cron-driven recurring runs) ──────────────
             # Each row is "this session runs this goal on this cron". The
             # session binding gives the schedule continuity of memory /
@@ -404,9 +407,9 @@ class Tracker:
         await self.db.execute(
             "INSERT INTO agents(id, name, description, system_prompt, mode, "
             "workspace_dir, local_only, db_kind, db_url, db_label, "
-            "schema_summary, api_credentials, allowed_domains, "
+            "schema_summary, api_credentials, allowed_domains, api_docs, "
             "created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(id) DO UPDATE SET "
             "name=excluded.name, description=excluded.description, "
             "system_prompt=excluded.system_prompt, mode=excluded.mode, "
@@ -415,6 +418,7 @@ class Tracker:
             "db_label=excluded.db_label, schema_summary=excluded.schema_summary, "
             "api_credentials=excluded.api_credentials, "
             "allowed_domains=excluded.allowed_domains, "
+            "api_docs=excluded.api_docs, "
             "updated_at=excluded.updated_at",
             (
                 agent.id, agent.name, agent.description, agent.system_prompt,
@@ -424,6 +428,7 @@ class Tracker:
                 getattr(agent, "schema_summary", "") or "",
                 json.dumps(getattr(agent, "api_credentials", {}) or {}),
                 json.dumps(getattr(agent, "allowed_domains", []) or []),
+                getattr(agent, "api_docs", "") or "",
                 agent.created_at.isoformat(), now,
             ),
         )

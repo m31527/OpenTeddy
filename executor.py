@@ -960,7 +960,7 @@ class Executor:
                 )
             # Outbound API access — names + hosts only, never secrets.
             _api = (context or {}).get("api_access") or {}
-            if _api.get("credentials") or _api.get("domains"):
+            if _api.get("credentials") or _api.get("domains") or _api.get("docs"):
                 effective_system += (
                     "\n\n[可呼叫外部 API。允許網域："
                     + (", ".join(_api.get("domains") or []) or "(未設定)")
@@ -970,6 +970,11 @@ class Executor:
                     "{{CRED:名稱}} 佔位符，系統送出前會替換成真值。"
                     "你看不到憑證內容，不要猜測或編造;只有允許網域會帶憑證。]"
                 )
+                if _api.get("docs"):
+                    effective_system += (
+                        "\n[可用 API 端點 — 只能用下列端點，不要臆造:]\n"
+                        + _api["docs"]
+                    )
 
             # Connected database — mirror of the planner-side injection:
             # data questions go to the db_* tools first, never to web

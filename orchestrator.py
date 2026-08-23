@@ -875,10 +875,12 @@ class Orchestrator:
                                     )
                                 except Exception:  # noqa: BLE001
                                     _names, _doms = [], []
-                                if _names or _doms:
+                                _docs = (agent.get("api_docs") or "").strip()
+                                if _names or _doms or _docs:
                                     req.context["api_access"] = {
                                         "credentials": _names,
                                         "domains": _doms,
+                                        "docs": _docs,
                                     }
                         except Exception:  # noqa: BLE001
                             pass
@@ -1282,7 +1284,7 @@ class Orchestrator:
         # Outbound API access for action-taking agents. Names + hosts
         # only; the secrets stay server-side (see tools/http_tool.py).
         _api = (req.context or {}).get("api_access") or {}
-        if _api.get("credentials") or _api.get("domains"):
+        if _api.get("credentials") or _api.get("domains") or _api.get("docs"):
             base_prompt += (
                 "\n\n--- 本 agent 可呼叫外部 API ---\n"
                 f"允許的網域：{', '.join(_api.get('domains') or []) or '(未設定)'}\n"
@@ -1293,6 +1295,11 @@ class Orchestrator:
                 "前替換成真正的值。**你看不到也不需要知道憑證內容**，不要"
                 "猜測或編造。只有允許網域的請求會帶上憑證。"
             )
+            if _api.get("docs"):
+                base_prompt += (
+                    "\n\n可用的 API 端點（依此規劃，不要臆造端點或參數）：\n"
+                    + _api["docs"]
+                )
 
         # Connected database — only present when the session actually has
         # one, so the static mode prompts stay untouched for everyone else.
