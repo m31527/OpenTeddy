@@ -148,6 +148,11 @@ class Tracker:
             # Programmatic schema snapshot captured at agent save time —
             # lets planning skip LLM-driven table exploration entirely.
             "ALTER TABLE agents ADD COLUMN schema_summary TEXT NOT NULL DEFAULT ''",
+            # Outbound API access for action-taking agents. Credentials
+            # are secret (never returned by any API, never put in a
+            # prompt); allowed_domains bounds where they may be sent.
+            "ALTER TABLE agents ADD COLUMN api_credentials TEXT NOT NULL DEFAULT '{}'",
+            "ALTER TABLE agents ADD COLUMN allowed_domains TEXT NOT NULL DEFAULT '[]'",
             # ── Scheduled tasks (cron-driven recurring runs) ──────────────
             # Each row is "this session runs this goal on this cron". The
             # session binding gives the schedule continuity of memory /
@@ -399,14 +404,17 @@ class Tracker:
         await self.db.execute(
             "INSERT INTO agents(id, name, description, system_prompt, mode, "
             "workspace_dir, local_only, db_kind, db_url, db_label, "
-            "schema_summary, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "schema_summary, api_credentials, allowed_domains, "
+            "created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(id) DO UPDATE SET "
             "name=excluded.name, description=excluded.description, "
             "system_prompt=excluded.system_prompt, mode=excluded.mode, "
             "workspace_dir=excluded.workspace_dir, local_only=excluded.local_only, "
             "db_kind=excluded.db_kind, db_url=excluded.db_url, "
             "db_label=excluded.db_label, schema_summary=excluded.schema_summary, "
+            "api_credentials=excluded.api_credentials, "
+            "allowed_domains=excluded.allowed_domains, "
             "updated_at=excluded.updated_at",
             (
                 agent.id, agent.name, agent.description, agent.system_prompt,
@@ -414,6 +422,8 @@ class Tracker:
                 agent.workspace_dir, int(agent.local_only),
                 agent.db_kind, agent.db_url, agent.db_label,
                 getattr(agent, "schema_summary", "") or "",
+                json.dumps(getattr(agent, "api_credentials", {}) or {}),
+                json.dumps(getattr(agent, "allowed_domains", []) or []),
                 agent.created_at.isoformat(), now,
             ),
         )
@@ -432,6 +442,38 @@ class Tracker:
         ) as cur:
             rows = await cur.fetchall()
         return [dict(r) for r in rows]
+
+    async def get_session_http_policy(self, session_id: str) -> dict:
+        """Outbound-HTTP policy for a session, from its agent template.
+
+        Returns ``{credentials: {name: value}, allowed_domains: [...]}``.
+        Server-side only — the credential VALUES must never reach the UI
+        or a prompt; the http tool substitutes them at call time. A
+        session with no agent (or an agent with nothing configured) gets
+        empty collections, i.e. today's unrestricted behaviour with no
+        credentials available.
+        """
+        empty = {"credentials": {}, "allowed_domains": []}
+        if not session_id:
+            return empty
+        async with self.db.execute(
+            "SELECT a.api_credentials, a.allowed_domains FROM sessions s "
+            "JOIN agents a ON a.id = s.agent_id WHERE s.id = ?",
+            (session_id,),
+        ) as cur:
+            row = await cur.fetchone()
+        if not row:
+            return empty
+        def _j(raw, fallback):
+            try:
+                v = json.loads(raw) if raw else fallback
+                return v if isinstance(v, type(fallback)) else fallback
+            except Exception:  # noqa: BLE001
+                return fallback
+        return {
+            "credentials":     _j(row[0], {}),
+            "allowed_domains": _j(row[1], []),
+        }
 
     async def set_agent_schema(self, agent_id: str, summary: str) -> None:
         """Persist a programmatic schema snapshot on the agent row."""

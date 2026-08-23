@@ -2088,13 +2088,29 @@ async def list_tasks(
 
 
 def _agent_public(row: dict) -> dict:
-    # db_url is a secret; schema_summary is not secret but bulky — the
-    # list API carries a boolean + table count instead.
-    out = {k: v for k, v in row.items() if k not in ("db_url", "schema_summary")}
+    # db_url and api_credentials are secrets; schema_summary is not
+    # secret but bulky — the list API carries booleans / names instead.
+    out = {
+        k: v for k, v in row.items()
+        if k not in ("db_url", "schema_summary", "api_credentials")
+    }
     out["local_only"] = bool(out.get("local_only"))
     out["has_db"] = bool((row.get("db_url") or "").strip())
     schema = (row.get("schema_summary") or "").strip()
     out["has_schema"] = bool(schema)
+    # Credential NAMES only — the values never leave the server. The UI
+    # shows which secrets exist; the model uses the names as
+    # {{CRED:name}} placeholders.
+    try:
+        out["credential_names"] = sorted(
+            json.loads(row.get("api_credentials") or "{}").keys()
+        )
+    except Exception:  # noqa: BLE001
+        out["credential_names"] = []
+    try:
+        out["allowed_domains"] = json.loads(row.get("allowed_domains") or "[]")
+    except Exception:  # noqa: BLE001
+        out["allowed_domains"] = []
     return out
 
 
@@ -2148,12 +2164,37 @@ async def update_agent(agent_id: str, body: UpdateAgentRequest) -> dict:
     data = body.model_dump(exclude_none=True)   # None = keep stored value
     merged = {**row, **data}
     merged["local_only"] = bool(merged.get("local_only"))
+    # Credentials: a PATCH that omits them keeps what's stored; sending a
+    # map REPLACES it (an empty map clears all secrets). An empty value
+    # for an existing name means "keep this one" — so the UI can render
+    # known names without ever holding the secret.
+    _stored_creds = {}
+    try:
+        _stored_creds = json.loads(row.get("api_credentials") or "{}")
+    except Exception:  # noqa: BLE001
+        pass
+    if body.api_credentials is None:
+        _creds = _stored_creds
+    else:
+        _creds = {
+            k: (v if v else _stored_creds.get(k, ""))
+            for k, v in body.api_credentials.items()
+        }
+        _creds = {k: v for k, v in _creds.items() if v}
+    try:
+        _domains = (body.allowed_domains if body.allowed_domains is not None
+                    else json.loads(row.get("allowed_domains") or "[]"))
+    except Exception:  # noqa: BLE001
+        _domains = body.allowed_domains or []
+
     agent = AgentDefinition(
         **{k: merged[k] for k in (
             "id", "name", "description", "system_prompt", "mode",
             "workspace_dir", "local_only", "db_kind", "db_url", "db_label",
         )},
         schema_summary=(merged.get("schema_summary") or ""),
+        api_credentials=_creds,
+        allowed_domains=_domains,
         created_at=datetime.fromisoformat(row["created_at"]),
     )
     # Clearing the DB binding clears the snapshot too.

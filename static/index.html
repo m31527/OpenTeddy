@@ -3980,6 +3980,19 @@
               <input type="text" id="agentDbFile" placeholder="/data/finance.db" autocomplete="off" />
             </div>
             <div style="font-size:0.7rem;color:var(--text-muted);margin:-0.25rem 0 0.75rem" id="agentDbHint" hidden data-i18n="agent_db_hint">Credentials are stored as a secret and never shown again. The connection URL is built for you.</div>
+            <!-- Outbound API access: lets an action-taking agent (customer
+                 service, ticketing) call authenticated APIs. Secrets stay
+                 server-side — the model only ever sees {{CRED:name}}. -->
+            <div class="field">
+              <label data-i18n="agent_domains_label">Allowed API domains (one per line)</label>
+              <textarea id="agentDomains" rows="2" placeholder="api.zendesk.com&#10;api.mycompany.com"></textarea>
+              <div style="font-size:0.7rem;color:var(--text-muted);margin-top:0.25rem" data-i18n="agent_domains_hint">The agent may only call these hosts, and credentials are sent ONLY to them. Leave blank to disable outbound API calls with credentials.</div>
+            </div>
+            <div class="field">
+              <label data-i18n="agent_creds_label">API credentials (NAME=value, one per line)</label>
+              <textarea id="agentCreds" rows="3" placeholder="api_token=sk-xxxxxxxx&#10;zendesk=zd-xxxxxxxx"></textarea>
+              <div style="font-size:0.7rem;color:var(--text-muted);margin-top:0.25rem" id="agentCredsHint" data-i18n="agent_creds_hint">Stored as secrets — never shown again and never placed in prompts. The model writes {{CRED:name}} and the value is substituted at call time. Leave a value blank to keep the saved one.</div>
+            </div>
             <div class="row">
               <div class="field" style="flex:1">
                 <label data-i18n="agent_workspace_label">Workspace dir (optional)</label>
@@ -7506,6 +7519,12 @@
       _clearAgentDbFields();
       document.getElementById('agentDbSavedNote').hidden = !(a && a.has_db);
       onAgentDbKindChange();
+      document.getElementById('agentDomains').value =
+        a && a.allowed_domains ? a.allowed_domains.join('\n') : '';
+      // Credential VALUES are never returned. Render known names with an
+      // empty value — saving keeps each one unless a new value is typed.
+      document.getElementById('agentCreds').value =
+        a && a.credential_names ? a.credential_names.map(n => `${n}=`).join('\n') : '';
       document.getElementById('agentWorkspace').value = a ? (a.workspace_dir || '') : '';
       document.getElementById('agentLocalOnly').checked = !!(a && a.local_only);
       const card = document.getElementById('agentFormCard');
@@ -7531,6 +7550,17 @@
         db_kind:       kind,
         workspace_dir: document.getElementById('agentWorkspace').value.trim() || null,
         local_only:    document.getElementById('agentLocalOnly').checked,
+        allowed_domains: document.getElementById('agentDomains').value
+          .split('\n').map(s => s.trim()).filter(Boolean),
+        // NAME=value lines. A blank value means "keep the stored secret"
+        // (the server merges it back), so editing an agent never wipes a
+        // credential the UI was never allowed to see.
+        api_credentials: Object.fromEntries(
+          document.getElementById('agentCreds').value.split('\n')
+            .map(l => l.trim()).filter(l => l && l.includes('='))
+            .map(l => { const i = l.indexOf('='); return [l.slice(0, i).trim(), l.slice(i + 1).trim()]; })
+            .filter(([k]) => k)
+        ),
       };
       // Database: assemble the URL from the structured fields. Rules:
       //  - no kind selected           → clear any binding (db_url '')

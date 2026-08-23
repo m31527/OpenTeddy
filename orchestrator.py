@@ -859,6 +859,27 @@ class Orchestrator:
                             if agent and (agent.get("schema_summary") or "").strip():
                                 req.context["db_schema"] = \
                                     agent["schema_summary"].strip()
+                            # Outbound API access: the model is told the
+                            # credential NAMES and the allowed hosts —
+                            # never the secret values. It writes
+                            # {{CRED:name}} and the http tool substitutes
+                            # at call time, so no token ever enters a
+                            # prompt, transcript or export.
+                            if agent:
+                                try:
+                                    _names = sorted(json.loads(
+                                        agent.get("api_credentials") or "{}"
+                                    ).keys())
+                                    _doms = json.loads(
+                                        agent.get("allowed_domains") or "[]"
+                                    )
+                                except Exception:  # noqa: BLE001
+                                    _names, _doms = [], []
+                                if _names or _doms:
+                                    req.context["api_access"] = {
+                                        "credentials": _names,
+                                        "domains": _doms,
+                                    }
                         except Exception:  # noqa: BLE001
                             pass
                     # ── Connected-database awareness ─────────────────────
@@ -1256,6 +1277,21 @@ class Orchestrator:
             base_prompt += (
                 "\n\n--- Agent persona (standing instructions for this "
                 "session's role — plan accordingly) ---\n" + _persona
+            )
+
+        # Outbound API access for action-taking agents. Names + hosts
+        # only; the secrets stay server-side (see tools/http_tool.py).
+        _api = (req.context or {}).get("api_access") or {}
+        if _api.get("credentials") or _api.get("domains"):
+            base_prompt += (
+                "\n\n--- 本 agent 可呼叫外部 API ---\n"
+                f"允許的網域：{', '.join(_api.get('domains') or []) or '(未設定)'}\n"
+                f"可用憑證名稱：{', '.join(_api.get('credentials') or []) or '(無)'}\n"
+                "用 `http_get` / `http_post` 呼叫;需要帶憑證時，在 header 或 "
+                "body 寫 `{{CRED:名稱}}` 佔位符（例如 "
+                'Authorization: "Bearer {{CRED:api_token}}"），系統會在送出'
+                "前替換成真正的值。**你看不到也不需要知道憑證內容**，不要"
+                "猜測或編造。只有允許網域的請求會帶上憑證。"
             )
 
         # Connected database — only present when the session actually has

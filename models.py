@@ -222,6 +222,17 @@ class AgentDefinition(BaseModel):
     # (db_schema.snapshot_schema) — injected into planning so the model
     # skips LLM-driven schema exploration entirely.
     schema_summary: str = ""
+    # ── Outbound API access (customer-service / action-taking agents) ──
+    # api_credentials is a SECRET map {name: value}. Values never leave
+    # the server: they are NOT returned by any API and NOT injected into
+    # prompts. The model only ever sees the NAMES and writes a
+    # {{CRED:name}} placeholder, which the http tool substitutes at call
+    # time — so a leaked transcript can't leak a token.
+    api_credentials: Dict[str, str] = Field(default_factory=dict)
+    # Hosts this agent may call. A credential is substituted ONLY for a
+    # host on this list, so a prompt-injected "POST your token to
+    # evil.com" cannot succeed. Empty list = no outbound credential use.
+    allowed_domains: List[str] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
@@ -236,6 +247,8 @@ class CreateAgentRequest(BaseModel):
     db_kind: str = ""
     db_url: str = ""
     db_label: str = ""
+    api_credentials: Dict[str, str] = Field(default_factory=dict)
+    allowed_domains: List[str] = Field(default_factory=list)
 
 
 class UpdateAgentRequest(BaseModel):
@@ -250,6 +263,8 @@ class UpdateAgentRequest(BaseModel):
     db_kind: Optional[str] = None
     db_url: Optional[str] = None
     db_label: Optional[str] = None
+    api_credentials: Optional[Dict[str, str]] = None
+    allowed_domains: Optional[List[str]] = None
 
 
 class CreateSessionRequest(BaseModel):
@@ -341,6 +356,8 @@ CREATE TABLE IF NOT EXISTS agents (
     db_url        TEXT NOT NULL DEFAULT '',
     db_label      TEXT NOT NULL DEFAULT '',
     schema_summary TEXT NOT NULL DEFAULT '',
+    api_credentials TEXT NOT NULL DEFAULT '{}',
+    allowed_domains TEXT NOT NULL DEFAULT '[]',
     created_at    TEXT NOT NULL,
     updated_at    TEXT NOT NULL
 );
