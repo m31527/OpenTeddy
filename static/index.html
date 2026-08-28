@@ -1154,7 +1154,7 @@
     }
 
     /* ── Form Inputs ─────────────────────────────────────────────────────── */
-    textarea, input[type=text], input[type=number], input[type=date], select {
+    textarea, input[type=text], input[type=password], input[type=number], input[type=date], select {
       width: 100%;
       background: var(--bg-primary);
       border: 1px solid var(--border);
@@ -3445,6 +3445,9 @@
                deep-links / history entries still resolve cleanly. -->
           <button class="sidebar-nav-btn" data-tab="tools"    onclick="switchTab('tools')"    data-i18n-title="nav_tools"    title="Tools"><span class="nav-icon">🔧</span><span class="nav-label" data-i18n="nav_tools">Tools</span></button>
           <button class="sidebar-nav-btn" data-tab="memory"   onclick="switchTab('memory')"   data-i18n-title="nav_memory"   title="Memory"><span class="nav-icon">🧠</span><span class="nav-label" data-i18n="nav_memory">Memory</span></button>
+          <!-- User-defined Agents: reusable role templates (persona +
+               bound DB / workspace / privacy) you can spawn sessions from. -->
+          <button class="sidebar-nav-btn" data-tab="agents"   onclick="switchTab('agents')"   data-i18n-title="nav_agents"   title="Agents"><span class="nav-icon">🤖</span><span class="nav-label" data-i18n="nav_agents">Agents</span></button>
           <!-- Usage nav button hidden — the savings pill at the bottom
                of the sidebar already shows the live "saved vs. GPT-4"
                number, and clicking the pill routes here. Two entry
@@ -3878,6 +3881,151 @@
       </div>
 
       <!-- ── MEMORY TAB ──────────────────────────────────────────────────── -->
+      <!-- ── Agents: user-defined reusable role templates ────────────────
+           An agent = persona instructions + base mode + bound resources
+           (database / workspace / privacy). "Start session" spawns a new
+           conversation pre-configured from it; the persona is injected
+           into planning + execution live, so editing an agent updates
+           every session built from it. -->
+      <div id="tab-agents" class="tab-panel">
+        <div class="panel-header"><h1 data-i18n="panel_agents">Agents</h1></div>
+        <div class="container">
+          <div class="card">
+            <div style="display:flex;gap:0.75rem;margin-bottom:1rem;align-items:center;flex-wrap:wrap">
+              <h2 style="margin:0" data-i18n="agents_heading">Your Agents</h2>
+              <span style="color:var(--text-muted);font-size:0.8rem" data-i18n="agents_hint">Reusable roles: persona + bound database / workspace. Start a session from one and it arrives already configured.</span>
+              <button class="btn-primary btn-sm" style="margin-left:auto" onclick="openAgentForm()" data-i18n="btn_new_agent">+ New Agent</button>
+              <button class="btn-ghost btn-sm" onclick="loadAgents()" data-i18n="btn_refresh">Refresh</button>
+            </div>
+            <div id="agentList" style="display:flex;flex-direction:column;gap:0.6rem">
+              <div style="color:var(--text-muted);font-size:0.875rem;padding:1rem 0" data-i18n="no_agents">No agents yet — create one to define a reusable role.</div>
+            </div>
+          </div>
+
+          <div class="card" id="agentFormCard" hidden>
+            <h2 id="agentFormTitle" data-i18n="agent_form_new">New Agent</h2>
+            <input type="hidden" id="agentFormId" />
+            <div class="row">
+              <div class="field" style="flex:1">
+                <label data-i18n="agent_name_label">Name</label>
+                <input type="text" id="agentName" placeholder="財務 DB 分析師" />
+              </div>
+              <div class="field" style="flex:0 0 160px">
+                <label data-i18n="agent_mode_label">Base mode</label>
+                <select id="agentMode">
+                  <option value="analytic">Analytic</option>
+                  <option value="code">Code</option>
+                  <option value="chat">Chat</option>
+                </select>
+              </div>
+            </div>
+            <div class="field">
+              <label data-i18n="agent_desc_label">Description</label>
+              <input type="text" id="agentDesc" placeholder="分析財務資料庫並產出月報" />
+            </div>
+            <div class="field">
+              <label data-i18n="agent_persona_label">Persona / standing instructions</label>
+              <textarea id="agentPersona" rows="5" placeholder="你是財務資料分析師。回答一律附上查詢依據；金額用千分位；發現異常主動標記。"></textarea>
+              <div style="font-size:0.7rem;color:var(--text-muted);margin-top:0.25rem" data-i18n="agent_persona_hint">Injected into every plan + execution step for sessions created from this agent.</div>
+            </div>
+            <!-- Database binding. Pick a type → the matching fields appear;
+                 the SQLAlchemy URL is assembled from them (shared
+                 buildDbUrlFromFields), so users never hand-write a URL. -->
+            <div class="row">
+              <div class="field" style="flex:0 0 160px">
+                <label data-i18n="agent_db_kind_label">Database</label>
+                <select id="agentDbKind" onchange="onAgentDbKindChange()">
+                  <option value="">(none)</option>
+                  <option value="postgres">PostgreSQL</option>
+                  <option value="mysql">MySQL / MariaDB</option>
+                  <option value="mssql">SQL Server</option>
+                  <option value="oracle">Oracle</option>
+                  <option value="sqlite">SQLite (file)</option>
+                  <option value="duckdb">DuckDB (file)</option>
+                </select>
+              </div>
+              <div class="field" style="flex:1" id="agentDbSavedNote" hidden>
+                <label>&nbsp;</label>
+                <div style="font-size:0.78rem;color:var(--text-muted);padding-top:0.5rem" data-i18n="agent_db_saved_note">🗄 A connection is saved. Fill the fields below only to replace it.</div>
+              </div>
+            </div>
+            <div id="agentDbServerFields" hidden>
+              <div class="row">
+                <div class="field" style="flex:2">
+                  <label data-i18n="db_connect_host_label">Host</label>
+                  <input type="text" id="agentDbHost" placeholder="10.0.0.5" autocomplete="off" />
+                </div>
+                <div class="field" style="flex:0 0 110px">
+                  <label data-i18n="db_connect_port_label">Port</label>
+                  <input type="text" id="agentDbPort" placeholder="5432" autocomplete="off" />
+                </div>
+                <div class="field" style="flex:2">
+                  <label data-i18n="db_connect_db_label">Database name</label>
+                  <input type="text" id="agentDbName" placeholder="finance" autocomplete="off" />
+                </div>
+              </div>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.85rem">
+                <div class="field" style="min-width:0">
+                  <label data-i18n="db_connect_user_label">Username</label>
+                  <input type="text" id="agentDbUser" placeholder="readonly_user" autocomplete="off" style="width:100%;box-sizing:border-box" />
+                </div>
+                <div class="field" style="min-width:0">
+                  <label data-i18n="db_connect_pass_label">Password</label>
+                  <input type="password" id="agentDbPass" placeholder="••••••••" autocomplete="new-password" style="width:100%;box-sizing:border-box" />
+                </div>
+              </div>
+            </div>
+            <div class="field" id="agentDbFileField" hidden>
+              <label data-i18n="db_connect_file_label">Database file path</label>
+              <input type="text" id="agentDbFile" placeholder="/data/finance.db" autocomplete="off" />
+            </div>
+            <div style="font-size:0.7rem;color:var(--text-muted);margin:-0.25rem 0 0.75rem" id="agentDbHint" hidden data-i18n="agent_db_hint">Credentials are stored as a secret and never shown again. The connection URL is built for you.</div>
+            <!-- Outbound API access: lets an action-taking agent (customer
+                 service, ticketing) call authenticated APIs. Secrets stay
+                 server-side — the model only ever sees {{CRED:name}}. -->
+            <div class="field">
+              <label data-i18n="agent_domains_label">Allowed API domains (one per line)</label>
+              <textarea id="agentDomains" rows="2" placeholder="api.zendesk.com&#10;api.mycompany.com"></textarea>
+              <div style="font-size:0.7rem;color:var(--text-muted);margin-top:0.25rem" data-i18n="agent_domains_hint">The agent may only call these hosts, and credentials are sent ONLY to them. Leave blank to disable outbound API calls with credentials.</div>
+            </div>
+            <!-- API docs: paste / upload / fetch. Internal docs are often
+                 login-gated or not OpenAPI, so all three paths matter.
+                 Whatever arrives is condensed to an endpoint list. -->
+            <div class="field">
+              <label data-i18n="agent_apidocs_label">API documentation (endpoints the agent may call)</label>
+              <textarea id="agentApiDocs" rows="5" placeholder="貼上 API 說明（markdown 或 OpenAPI JSON/YAML 皆可）&#10;&#10;例：&#10;POST /v1/refunds — 建立退款單&#10;  body: order_id*, amount*, reason"></textarea>
+              <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;margin-top:0.4rem">
+                <input type="text" id="agentApiDocsUrl" placeholder="https://api.internal.com/openapi.json" style="flex:1;min-width:200px" />
+                <button type="button" class="btn-ghost btn-sm" onclick="importAgentApiDocs('url')" data-i18n="btn_fetch_docs">Fetch URL</button>
+                <input type="file" id="agentApiDocsFile" accept=".md,.txt,.json,.yaml,.yml" style="display:none" onchange="importAgentApiDocs('file')" />
+                <button type="button" class="btn-ghost btn-sm" onclick="document.getElementById('agentApiDocsFile').click()" data-i18n="btn_upload_docs">Upload file</button>
+                <span id="agentApiDocsStatus" style="font-size:0.72rem;color:var(--text-muted)"></span>
+              </div>
+              <div style="font-size:0.7rem;color:var(--text-muted);margin-top:0.25rem" data-i18n="agent_apidocs_hint">Paste, upload (.md/.json/.yaml) or fetch. An OpenAPI spec is condensed to a compact endpoint list. Fetch/Upload save immediately and need the agent to exist first.</div>
+            </div>
+            <div class="field">
+              <label data-i18n="agent_creds_label">API credentials (NAME=value, one per line)</label>
+              <textarea id="agentCreds" rows="3" placeholder="api_token=sk-xxxxxxxx&#10;zendesk=zd-xxxxxxxx"></textarea>
+              <div style="font-size:0.7rem;color:var(--text-muted);margin-top:0.25rem" id="agentCredsHint" data-i18n="agent_creds_hint">Stored as secrets — never shown again and never placed in prompts. The model writes {{CRED:name}} and the value is substituted at call time. Leave a value blank to keep the saved one.</div>
+            </div>
+            <div class="row">
+              <div class="field" style="flex:1">
+                <label data-i18n="agent_workspace_label">Workspace dir (optional)</label>
+                <input type="text" id="agentWorkspace" placeholder="(blank = isolated per session)" />
+              </div>
+              <label class="radio-inline" style="align-self:flex-end;padding-bottom:0.6rem">
+                <input type="checkbox" id="agentLocalOnly" />
+                <span data-i18n="agent_local_only_label">Local only (never call cloud LLM)</span>
+              </label>
+            </div>
+            <div style="display:flex;gap:0.5rem;justify-content:flex-end">
+              <button class="btn-ghost" onclick="closeAgentForm()" data-i18n="btn_cancel">Cancel</button>
+              <button class="btn-primary" onclick="saveAgent()" data-i18n="btn_save">Save</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <div id="tab-memory" class="tab-panel">
         <div class="panel-header"><h1 data-i18n="panel_memory">Memory</h1></div>
         <div class="container">
@@ -7296,9 +7444,252 @@
 
       if (name === 'tools')    loadTools();   // also covers ex-'skills'
       if (name === 'memory')   loadMemory();
+      if (name === 'agents')   loadAgents();
       if (name === 'usage')    { loadUsageSummary(); loadUsageRecords(1); loadPerfStats(); }
       if (name === 'settings') loadSettings();
       closeSidebar();
+    }
+
+    // ── User-defined Agents (reusable role templates) ──────────────────────
+    // CRUD against /agents + "start session from agent". The API never
+    // returns db_url (secret) — the form treats a blank URL on edit as
+    // "keep the saved one" (PATCH omits the field).
+    let _agentsCache = [];
+    const MODE_ICON = { chat: '💬', code: '💻', analytic: '📊' };
+
+    async function loadAgents() {
+      const list = document.getElementById('agentList');
+      if (!list) return;
+      try {
+        const r = await fetch(`${API}/agents`);
+        const d = await r.json();
+        _agentsCache = d.agents || [];
+      } catch (e) {
+        list.innerHTML = `<div style="color:var(--danger);font-size:0.85rem">${escHtml(String(e.message || e))}</div>`;
+        return;
+      }
+      if (!_agentsCache.length) {
+        list.innerHTML = `<div style="color:var(--text-muted);font-size:0.875rem;padding:1rem 0">${escHtml(t('no_agents') || 'No agents yet — create one to define a reusable role.')}</div>`;
+        return;
+      }
+      list.innerHTML = _agentsCache.map(a => `
+        <div class="card" style="margin:0;padding:0.9rem 1rem;display:flex;gap:0.9rem;align-items:flex-start">
+          <div style="font-size:1.4rem;line-height:1">${MODE_ICON[a.mode] || '🤖'}</div>
+          <div style="flex:1;min-width:0">
+            <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap">
+              <strong>${escHtml(a.name)}</strong>
+              <span style="font-size:0.7rem;color:var(--text-muted);border:1px solid var(--border);border-radius:6px;padding:0 0.4rem">${escHtml(a.mode)}</span>
+              ${a.has_db ? `<span style="font-size:0.7rem;color:var(--text-muted)">🗄 ${escHtml(a.db_label || a.db_kind || 'db')}</span>` : ''}
+              ${a.local_only ? `<span style="font-size:0.7rem;color:var(--text-muted)">🔒 local only</span>` : ''}
+            </div>
+            ${a.description ? `<div style="font-size:0.82rem;color:var(--text-muted);margin-top:0.2rem">${escHtml(a.description)}</div>` : ''}
+            ${a.system_prompt ? `<div style="font-size:0.75rem;color:var(--text-muted);margin-top:0.35rem;white-space:pre-wrap;max-height:3.6em;overflow:hidden">${escHtml(a.system_prompt)}</div>` : ''}
+          </div>
+          <div style="display:flex;gap:0.4rem;flex-shrink:0">
+            <button class="btn-primary btn-sm" onclick="startAgentSession('${a.id}')" title="${escHtml(t('btn_start_session') || 'Start session')}">▶ ${escHtml(t('btn_start_session') || 'Start session')}</button>
+            <button class="btn-ghost btn-sm" onclick="openAgentForm('${a.id}')" title="Edit">✏️</button>
+            <button class="btn-ghost btn-sm" onclick="deleteAgent('${a.id}')" title="Delete">🗑</button>
+          </div>
+        </div>`).join('');
+    }
+
+    // Show the field set matching the chosen DB type (server vs file) and
+    // pre-fill the default port. Empty kind hides everything.
+    function onAgentDbKindChange() {
+      const kind = document.getElementById('agentDbKind').value;
+      const meta = _DB_KIND_META[kind];
+      const server = document.getElementById('agentDbServerFields');
+      const file   = document.getElementById('agentDbFileField');
+      const hint   = document.getElementById('agentDbHint');
+      server.hidden = !(meta && meta.kind === 'server');
+      file.hidden   = !(meta && meta.kind === 'file');
+      hint.hidden   = !meta;
+      if (meta && meta.kind === 'server') {
+        const portEl = document.getElementById('agentDbPort');
+        portEl.placeholder = String(meta.defaultPort);
+        if (!portEl.value.trim()) portEl.value = String(meta.defaultPort);
+      }
+    }
+
+    function _clearAgentDbFields() {
+      for (const id of ['agentDbHost', 'agentDbPort', 'agentDbName',
+                        'agentDbUser', 'agentDbPass', 'agentDbFile']) {
+        document.getElementById(id).value = '';
+      }
+    }
+
+    function openAgentForm(id) {
+      const a = id ? _agentsCache.find(x => x.id === id) : null;
+      document.getElementById('agentFormId').value  = a ? a.id : '';
+      document.getElementById('agentFormTitle').textContent =
+        a ? (t('agent_form_edit') || 'Edit Agent') : (t('agent_form_new') || 'New Agent');
+      document.getElementById('agentName').value      = a ? a.name : '';
+      document.getElementById('agentMode').value      = a ? a.mode : 'analytic';
+      document.getElementById('agentDesc').value      = a ? (a.description || '') : '';
+      document.getElementById('agentPersona').value   = a ? (a.system_prompt || '') : '';
+      document.getElementById('agentDbKind').value    = a ? (a.db_kind || '') : '';
+      // Credentials are a secret: never pre-filled. On edit of an agent
+      // that has a saved connection, show a note and leave fields blank
+      // (= keep the stored URL unless the user fills them in).
+      _clearAgentDbFields();
+      document.getElementById('agentDbSavedNote').hidden = !(a && a.has_db);
+      onAgentDbKindChange();
+      document.getElementById('agentDomains').value =
+        a && a.allowed_domains ? a.allowed_domains.join('\n') : '';
+      // api_docs is bulky so the list API omits it — fetch on demand.
+      const docsEl = document.getElementById('agentApiDocs');
+      const docsStatus = document.getElementById('agentApiDocsStatus');
+      docsEl.value = ''; docsStatus.textContent = '';
+      document.getElementById('agentApiDocsUrl').value = '';
+      if (a && a.has_api_docs) {
+        fetch(`${API}/agents/${a.id}/api_docs`).then(r => r.json())
+          .then(d => { docsEl.value = d.api_docs || ''; }).catch(() => {});
+      }
+      // Credential VALUES are never returned. Render known names with an
+      // empty value — saving keeps each one unless a new value is typed.
+      document.getElementById('agentCreds').value =
+        a && a.credential_names ? a.credential_names.map(n => `${n}=`).join('\n') : '';
+      document.getElementById('agentWorkspace').value = a ? (a.workspace_dir || '') : '';
+      document.getElementById('agentLocalOnly').checked = !!(a && a.local_only);
+      const card = document.getElementById('agentFormCard');
+      card.hidden = false;
+      card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+
+    // Import API docs from a URL or an uploaded file. Both hit the
+    // server (which condenses + stores), so they need a SAVED agent —
+    // for a brand-new one, save first, then import.
+    async function importAgentApiDocs(kind) {
+      const id = document.getElementById('agentFormId').value;
+      const status = document.getElementById('agentApiDocsStatus');
+      if (!id) {
+        status.textContent = t('agent_apidocs_save_first') || 'Save the agent first, then import.';
+        return;
+      }
+      const fd = new FormData();
+      if (kind === 'url') {
+        const u = document.getElementById('agentApiDocsUrl').value.trim();
+        if (!u) return;
+        fd.append('url', u);
+      } else {
+        const f = document.getElementById('agentApiDocsFile').files[0];
+        if (!f) return;
+        fd.append('file', f);
+      }
+      status.textContent = '…';
+      try {
+        const r = await fetch(`${API}/agents/${id}/api_docs/import`, { method: 'POST', body: fd });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.detail || `HTTP ${r.status}`);
+        document.getElementById('agentApiDocs').value = d.api_docs || '';
+        status.textContent = `✓ ${d.chars} chars`;
+        await loadAgents();
+      } catch (e) {
+        status.textContent = '✗ ' + e.message;
+      }
+    }
+
+    function closeAgentForm() {
+      document.getElementById('agentFormCard').hidden = true;
+    }
+
+    async function saveAgent() {
+      const id = document.getElementById('agentFormId').value;
+      const name = document.getElementById('agentName').value.trim();
+      if (!name) { toast(t('agent_name_required') || 'Name is required', true); return; }
+      const kind = document.getElementById('agentDbKind').value;
+      const meta = _DB_KIND_META[kind];
+      const payload = {
+        name,
+        mode:          document.getElementById('agentMode').value,
+        description:   document.getElementById('agentDesc').value.trim(),
+        system_prompt: document.getElementById('agentPersona').value.trim(),
+        db_kind:       kind,
+        workspace_dir: document.getElementById('agentWorkspace').value.trim() || null,
+        local_only:    document.getElementById('agentLocalOnly').checked,
+        allowed_domains: document.getElementById('agentDomains').value
+          .split('\n').map(s => s.trim()).filter(Boolean),
+        // NAME=value lines. A blank value means "keep the stored secret"
+        // (the server merges it back), so editing an agent never wipes a
+        // credential the UI was never allowed to see.
+        api_docs: document.getElementById('agentApiDocs').value,
+        api_credentials: Object.fromEntries(
+          document.getElementById('agentCreds').value.split('\n')
+            .map(l => l.trim()).filter(l => l && l.includes('='))
+            .map(l => { const i = l.indexOf('='); return [l.slice(0, i).trim(), l.slice(i + 1).trim()]; })
+            .filter(([k]) => k)
+        ),
+      };
+      // Database: assemble the URL from the structured fields. Rules:
+      //  - no kind selected           → clear any binding (db_url '')
+      //  - kind selected, fields blank on EDIT → keep the stored secret
+      //    (omit db_url from the PATCH)
+      //  - fields filled              → build + validate + send URL, and
+      //    auto-derive a friendly label (host/db or file name)
+      if (!kind) {
+        payload.db_url = ''; payload.db_label = '';
+      } else {
+        const f = meta.kind === 'file'
+          ? { path: document.getElementById('agentDbFile').value }
+          : {
+              host: document.getElementById('agentDbHost').value,
+              port: document.getElementById('agentDbPort').value,
+              db:   document.getElementById('agentDbName').value,
+              user: document.getElementById('agentDbUser').value,
+              pass: document.getElementById('agentDbPass').value,
+            };
+        const anyFilled = Object.values(f).some(v => (v || '').trim());
+        if (anyFilled || !id) {
+          const r = buildDbUrlFromFields(kind, f);
+          if (r.error) { toast(r.error, true); return; }
+          payload.db_url = r.url;
+          payload.db_label = meta.kind === 'file'
+            ? (f.path.trim().split('/').pop() || kind)
+            : `${f.db.trim()}@${f.host.trim()}`;
+        }
+        // else: editing with blank fields → keep saved connection
+      }
+      try {
+        const r = await fetch(`${API}/agents${id ? '/' + id : ''}`, {
+          method: id ? 'PATCH' : 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || `HTTP ${r.status}`);
+        toast(t('agent_saved') || 'Agent saved');
+        closeAgentForm();
+        await loadAgents();
+      } catch (e) {
+        toast((t('agent_save_failed') || 'Save failed') + ': ' + e.message, true);
+      }
+    }
+
+    async function deleteAgent(id) {
+      const a = _agentsCache.find(x => x.id === id);
+      if (!confirm((t('agent_delete_confirm') || 'Delete agent') + ` "${a ? a.name : id}"?`)) return;
+      try {
+        await fetch(`${API}/agents/${id}`, { method: 'DELETE' });
+        await loadAgents();
+      } catch (e) {
+        toast('Delete failed: ' + e.message, true);
+      }
+    }
+
+    async function startAgentSession(id) {
+      try {
+        const r = await fetch(`${API}/agents/${id}/sessions`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({}),
+        });
+        if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || `HTTP ${r.status}`);
+        const s = await r.json();
+        await loadSessions();
+        await switchSession(s.id);
+        toast((t('agent_session_started') || 'Session started from agent'));
+      } catch (e) {
+        toast('Could not start session: ' + e.message, true);
+      }
     }
 
     // ── Input keyboard handling ────────────────────────────────────────────
@@ -7378,6 +7769,36 @@
       duckdb:   { scheme: 'duckdb',           kind: 'file' },
     };
 
+    // Prefill the connect dialog from the session's CURRENT connection
+    // (host / port / db / user — never the password). Without this the
+    // dialog opened blank on an already-connected session, which reads
+    // as "nothing is configured" — most visible on a session spawned
+    // from an agent, where the user never typed the details here.
+    async function _prefillDbConnectModal() {
+      const sid = currentSessionId && currentSessionId();
+      if (!sid) return;
+      let d;
+      try {
+        const r = await fetch(`${API}/sessions/${sid}/db_connect`);
+        d = await r.json();
+      } catch { return; }
+      if (!d || !d.connected) return;
+      const det = d.details || {};
+      const kindEl = document.getElementById('dbConnectKind');
+      if (d.kind && kindEl) { kindEl.value = d.kind; onDbConnectKindChange(); }
+      const set = (id, v) => { const el = document.getElementById(id); if (el && v) el.value = v; };
+      set('dbConnectHost', det.host);
+      set('dbConnectPort', det.port);
+      set('dbConnectDb',   det.database);
+      set('dbConnectUser', det.username);
+      set('dbConnectFile', det.file_path);
+      const pwd = document.getElementById('dbConnectPass');
+      if (pwd) {
+        pwd.value = '';
+        pwd.placeholder = t('db_pass_saved') || '(已儲存 — 留空即沿用)';
+      }
+    }
+
     function openDbConnectModal() {
       const overlay = document.getElementById('dbConnectOverlay');
       if (!overlay) return;
@@ -7398,6 +7819,9 @@
       }
       onDbConnectKindChange();   // fills port default + flips form
       overlay.hidden = false;
+      // Show what this session is already attached to (async — the
+      // dialog is usable immediately, fields fill in a moment later).
+      _prefillDbConnectModal();
       // Auto-focus the first useful field after the form swaps in.
       setTimeout(() => {
         const meta = _DB_KIND_META[document.getElementById('dbConnectKind').value];
@@ -7482,46 +7906,57 @@
                         (message.detail ? `<br><span style="opacity:0.85;font-size:0.76rem">${escHtml(message.detail)}</span>` : '');
     }
 
-    // Build the SQLAlchemy URL from form fields. Returns ``null`` (and
-    // shows an inline error) when required fields are missing — better
-    // than letting the model post a half-baked URL to the backend.
+    // Pure URL assembly shared by the session "Connect a database" dialog
+    // and the Agent form. Takes plain field values, returns
+    // { url } or { error } — never touches the DOM, so both forms can
+    // render errors their own way. Users type host / port / user / pass /
+    // db name (or a file path); the SQLAlchemy driver URL is our concern.
+    function buildDbUrlFromFields(kind, f) {
+      const meta = _DB_KIND_META[kind];
+      if (!meta) return { error: 'unknown database type' };
+      if (meta.kind === 'file') {
+        const path = (f.path || '').trim();
+        if (!path) return { error: t('db_connect_file_required') || 'File path is required.' };
+        // SQLite uses 4 slashes for absolute paths in SQLAlchemy URLs.
+        // DuckDB accepts the same plus ':memory:'.
+        if (kind === 'duckdb' && path === ':memory:') return { url: `${meta.scheme}:///:memory:` };
+        return { url: `${meta.scheme}:///${path.replace(/^\//, '')}` };
+      }
+      const host = (f.host || '').trim();
+      const port = (f.port || '').trim() || String(meta.defaultPort);
+      const db   = (f.db   || '').trim();
+      const user = (f.user || '').trim();
+      const pass = f.pass || '';
+      if (!host || !db) {
+        return { error: t('db_connect_host_db_required') || 'Host and database name are required.' };
+      }
+      // user:pass@host:port/db — URL-encode credentials so special chars
+      // (@, /, :) don't break the parse.
+      const auth = user ? `${encodeURIComponent(user)}:${encodeURIComponent(pass)}@` : '';
+      // Oracle's SQLAlchemy URL uses ?service_name=foo, not /foo — the
+      // "Database name" field carries the service name.
+      if (kind === 'oracle') {
+        return { url: `${meta.scheme}://${auth}${host}:${port}/?service_name=${encodeURIComponent(db)}` };
+      }
+      return { url: `${meta.scheme}://${auth}${host}:${port}/${encodeURIComponent(db)}` };
+    }
+
+    // Session dialog wrapper: reads its own DOM, surfaces errors inline.
     function _buildDbConnectUrl() {
       const kind = document.getElementById('dbConnectKind').value;
       const meta = _DB_KIND_META[kind];
       if (!meta) return null;
-      if (meta.kind === 'file') {
-        const path = document.getElementById('dbConnectFile').value.trim();
-        if (!path) {
-          _setDbStatus('err', { title: t('db_connect_file_required') || 'File path is required.' });
-          return null;
-        }
-        // SQLite uses 4 slashes for absolute paths in SQLAlchemy URLs.
-        // DuckDB accepts the same plus ':memory:'.
-        if (kind === 'duckdb' && path === ':memory:') {
-          return `${meta.scheme}:///:memory:`;
-        }
-        return `${meta.scheme}:///${path.replace(/^\//, '')}`;
-      }
-      // Server form
-      const host = document.getElementById('dbConnectHost').value.trim();
-      const port = document.getElementById('dbConnectPort').value.trim() || String(meta.defaultPort);
-      const db   = document.getElementById('dbConnectDb').value.trim();
-      const user = document.getElementById('dbConnectUser').value.trim();
-      const pass = document.getElementById('dbConnectPass').value;
-      if (!host || !db) {
-        _setDbStatus('err', { title: t('db_connect_host_db_required') || 'Host and database name are required.' });
-        return null;
-      }
-      // Build user:pass@host:port/db. URL-encode credentials so
-      // special chars (@, /, :) don't break the parse.
-      const auth = user ? `${encodeURIComponent(user)}:${encodeURIComponent(pass || '')}@` : '';
-      // Oracle's SQLAlchemy URL uses ?service_name=foo, not /foo —
-      // we let users put the service name in the "Database name"
-      // field and translate here.
-      if (kind === 'oracle') {
-        return `${meta.scheme}://${auth}${host}:${port}/?service_name=${encodeURIComponent(db)}`;
-      }
-      return `${meta.scheme}://${auth}${host}:${port}/${encodeURIComponent(db)}`;
+      const r = buildDbUrlFromFields(kind, meta.kind === 'file'
+        ? { path: document.getElementById('dbConnectFile').value }
+        : {
+            host: document.getElementById('dbConnectHost').value,
+            port: document.getElementById('dbConnectPort').value,
+            db:   document.getElementById('dbConnectDb').value,
+            user: document.getElementById('dbConnectUser').value,
+            pass: document.getElementById('dbConnectPass').value,
+          });
+      if (r.error) { _setDbStatus('err', { title: r.error }); return null; }
+      return r.url;
     }
 
     async function testDbConnect() {

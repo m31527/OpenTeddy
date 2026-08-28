@@ -570,6 +570,68 @@ Returns the bridge's runtime state — `running`, `inbound_enabled`,
 `chat_id` (the single fastest answer to "why isn't my bot replying?"),
 and any in-flight chats. Token is never returned, only a boolean flag.
 
+## Agents — reusable roles with bound databases
+
+The 🤖 **Agents** tab lets you define reusable role templates — persona
+instructions + a base mode + bound resources (database, workspace,
+local-only privacy) — and spawn sessions from them. Build a
+"財務 DB 分析師" once (persona + read-only DB binding); every
+**▶ Start session** after that lands in a conversation that is already
+connected and in character. One agent → unlimited sessions; deleting a
+conversation never loses the configured role, and editing the agent
+updates every session built from it (the persona is looked up live at
+task time).
+
+Database credentials are entered as structured fields (host / port /
+user / password — the driver URL is assembled for you), stored as a
+secret, and never returned by any API.
+
+### Connecting a cloud-hosted database (GCP VM + Tailscale)
+
+The recommended way to let an agent reach a database running on a cloud
+VM (e.g. Postgres/MySQL in Docker on GCP) — **without exposing the DB to
+the public internet**: join the VM to your tailnet with a **Tailscale
+auth key**. The auth key is a machine credential (the `key.json` of
+Tailscale): the VM authenticates itself once, then the daemon keeps the
+encrypted connection alive forever — across reboots, with nothing to
+babysit.
+
+```bash
+# 1. Tailscale admin console → Settings → Keys → Generate auth key
+#    (tick Pre-authorized; Reusable/non-expiring for long-lived machines)
+
+# 2. On the GCP VM:
+curl -fsSL https://tailscale.com/install.sh | sh
+sudo tailscale up --authkey tskey-auth-xxxxx
+tailscale ip -4          # note the VM's 100.x.y.z
+```
+
+Then in the Agent form: **Host = the VM's `100.x.y.z`**, port/db/user as
+usual. Verify from the OpenTeddy machine first:
+
+```bash
+psql -h 100.x.y.z -U teddy_ro -d yourdb -c 'SELECT 1'
+```
+
+Three rules that keep this safe:
+
+1. **Read-only DB user.** Create a `teddy_ro` account with `SELECT`
+   only and bind the agent to it — reports and analysis never need
+   write access, and a wrong prompt physically cannot mutate data.
+   Actions ("approve this", "create that") belong to the system's API
+   layer, never to a direct DB write.
+2. **Don't expose the DB publicly.** In docker-compose, bind the port
+   to localhost (`127.0.0.1:5432:5432`) and keep the cloud firewall
+   closed — Tailscale traffic doesn't need any inbound rules.
+3. **Machine credential hygiene.** Treat the auth key like any secret;
+   scope it with tags in the Tailscale admin console if your tailnet is
+   shared.
+
+Prefer GCP-native auditing? The equivalent flow with IAM is an **IAP
+tunnel + service-account `key.json`** (`gcloud compute start-iap-tunnel`
+under systemd) — same result, more moving parts. For managed Cloud SQL
+instances, use the official Cloud SQL Auth Proxy instead.
+
 ## Fleet — distributed "AI brain cluster" (optional)
 
 Turn several OpenTeddy installs into one cluster: a **central** node

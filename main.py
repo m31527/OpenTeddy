@@ -30,6 +30,8 @@ from escalation import EscalationAgent
 from executor import Executor
 from memory import MemoryManager
 from models import (
+    AgentDefinition,
+    CreateAgentRequest,
     CreateSessionRequest,
     RunRequest,
     RunResponse,
@@ -40,6 +42,7 @@ from models import (
     StatusResponse,
     TaskRequest,
     TaskStatus,
+    UpdateAgentRequest,
 )
 from orchestrator import Orchestrator
 from settings_store import SETTINGS_META, settings_store
@@ -2077,6 +2080,258 @@ async def list_tasks(
 
 # ── Session endpoints ─────────────────────────────────────────────────────────
 
+# ── User-defined Agents (reusable role templates) ─────────────────────────────
+# An agent = persona + bound resources (DB / workspace / privacy) on top of
+# an existing mode. Sessions created from an agent copy its configuration;
+# the persona is looked up live at task time. db_url is a SECRET: the API
+# returns has_db + db_label only, never the raw URL.
+
+
+def _agent_public(row: dict) -> dict:
+    # db_url and api_credentials are secrets; schema_summary is not
+    # secret but bulky — the list API carries booleans / names instead.
+    out = {
+        k: v for k, v in row.items()
+        if k not in ("db_url", "schema_summary", "api_credentials", "api_docs")
+    }
+    out["local_only"] = bool(out.get("local_only"))
+    out["has_db"] = bool((row.get("db_url") or "").strip())
+    schema = (row.get("schema_summary") or "").strip()
+    out["has_schema"] = bool(schema)
+    # Credential NAMES only — the values never leave the server. The UI
+    # shows which secrets exist; the model uses the names as
+    # {{CRED:name}} placeholders.
+    try:
+        out["credential_names"] = sorted(
+            json.loads(row.get("api_credentials") or "{}").keys()
+        )
+    except Exception:  # noqa: BLE001
+        out["credential_names"] = []
+    try:
+        out["allowed_domains"] = json.loads(row.get("allowed_domains") or "[]")
+    except Exception:  # noqa: BLE001
+        out["allowed_domains"] = []
+    # api_docs can be several KB — the list API carries a flag + size so
+    # the UI can show "docs loaded (2.1 KB)" without shipping the text.
+    _docs = row.get("api_docs") or ""
+    out["has_api_docs"] = bool(_docs.strip())
+    out["api_docs_chars"] = len(_docs)
+    return out
+
+
+async def _capture_agent_schema(agent_id: str) -> bool:
+    """Best-effort programmatic schema snapshot for an agent's bound DB.
+
+    Called after create/update when a db_url is present. Failure (DB
+    unreachable, bad credentials) is a WARNING, not an error — the agent
+    still saves; planning just falls back to LLM-driven exploration until
+    a later save succeeds. Returns True when a snapshot was stored."""
+    row = await tracker.get_agent(agent_id)
+    if not row or not (row.get("db_url") or "").strip():
+        return False
+    try:
+        from db_schema import snapshot_schema
+        summary = await snapshot_schema(row["db_url"])
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("agent %s schema snapshot failed (non-fatal): %s",
+                       agent_id, exc)
+        return False
+    await tracker.db.execute(
+        "UPDATE agents SET schema_summary=? WHERE id=?", (summary, agent_id),
+    )
+    await tracker.db.commit()
+    logger.info("agent %s schema snapshot stored (%d chars)",
+                agent_id, len(summary))
+    return True
+
+
+@app.get("/agents")
+async def list_agents() -> dict:
+    return {"agents": [_agent_public(a) for a in await tracker.list_agents()]}
+
+
+@app.post("/agents")
+async def create_agent(body: CreateAgentRequest) -> dict:
+    data = body.model_dump()
+    if data.get("api_docs"):
+        import api_docs as _ad
+        data["api_docs"] = _ad.condense(data["api_docs"])
+    agent = AgentDefinition(**data)
+    await tracker.upsert_agent(agent)
+    schema_ok = await _capture_agent_schema(agent.id) if agent.db_url else False
+    row = await tracker.get_agent(agent.id)
+    out = _agent_public(row)
+    out["schema_captured"] = schema_ok
+    return {"agent": out}
+
+
+@app.patch("/agents/{agent_id}")
+async def update_agent(agent_id: str, body: UpdateAgentRequest) -> dict:
+    row = await tracker.get_agent(agent_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    data = body.model_dump(exclude_none=True)   # None = keep stored value
+    merged = {**row, **data}
+    merged["local_only"] = bool(merged.get("local_only"))
+    # Credentials: a PATCH that omits them keeps what's stored; sending a
+    # map REPLACES it (an empty map clears all secrets). An empty value
+    # for an existing name means "keep this one" — so the UI can render
+    # known names without ever holding the secret.
+    _stored_creds = {}
+    try:
+        _stored_creds = json.loads(row.get("api_credentials") or "{}")
+    except Exception:  # noqa: BLE001
+        pass
+    if body.api_credentials is None:
+        _creds = _stored_creds
+    else:
+        _creds = {
+            k: (v if v else _stored_creds.get(k, ""))
+            for k, v in body.api_credentials.items()
+        }
+        _creds = {k: v for k, v in _creds.items() if v}
+    try:
+        _domains = (body.allowed_domains if body.allowed_domains is not None
+                    else json.loads(row.get("allowed_domains") or "[]"))
+    except Exception:  # noqa: BLE001
+        _domains = body.allowed_domains or []
+
+    if body.api_docs is None:
+        _docs = row.get("api_docs") or ""
+    else:
+        import api_docs as _ad
+        _docs = _ad.condense(body.api_docs)
+
+    agent = AgentDefinition(
+        **{k: merged[k] for k in (
+            "id", "name", "description", "system_prompt", "mode",
+            "workspace_dir", "local_only", "db_kind", "db_url", "db_label",
+        )},
+        schema_summary=(merged.get("schema_summary") or ""),
+        api_credentials=_creds,
+        allowed_domains=_domains,
+        api_docs=_docs,
+        created_at=datetime.fromisoformat(row["created_at"]),
+    )
+    # Clearing the DB binding clears the snapshot too.
+    if not agent.db_url:
+        agent.schema_summary = ""
+    await tracker.upsert_agent(agent)
+    # Re-snapshot when the connection changed (a db_url was provided in
+    # this PATCH) or a binding exists but no snapshot was ever captured.
+    schema_ok = False
+    if agent.db_url and ("db_url" in data or not agent.schema_summary):
+        schema_ok = await _capture_agent_schema(agent_id)
+    out = _agent_public(await tracker.get_agent(agent_id))
+    out["schema_captured"] = schema_ok
+    return {"agent": out}
+
+
+@app.get("/agents/{agent_id}/api_docs")
+async def get_agent_api_docs(agent_id: str) -> dict:
+    """Return the stored (condensed) API docs so the UI can show/edit
+    them. Not a secret — it's the endpoint list, no credentials."""
+    row = await tracker.get_agent(agent_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    return {"api_docs": row.get("api_docs") or ""}
+
+
+@app.post("/agents/{agent_id}/api_docs/import")
+async def import_agent_api_docs(
+    agent_id: str,
+    url: Optional[str] = Form(default=None),
+    file: Optional[UploadFile] = File(default=None),
+) -> dict:
+    """Import API documentation from a URL or an uploaded file.
+
+    Internal API docs are often behind auth or simply not published as
+    OpenAPI, so all three input paths matter: paste (handled by the
+    normal save), upload a .md/.json/.yaml, or fetch a URL. A URL fetch
+    reuses the agent's OWN credentials when the host is on its
+    allowed-domains list — that's what makes a login-gated internal doc
+    reachable. Whatever arrives is condensed (api_docs.condense) and
+    stored, so the model gets an endpoint list rather than 100 KB of
+    schema boilerplate.
+    """
+    row = await tracker.get_agent(agent_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    import api_docs as _ad
+
+    if file is not None:
+        raw = (await file.read()).decode("utf-8", errors="replace")
+        source = file.filename or "upload"
+    elif url:
+        # Use the agent's credentials for an allowlisted internal host.
+        headers = {}
+        try:
+            creds = json.loads(row.get("api_credentials") or "{}")
+            domains = json.loads(row.get("allowed_domains") or "[]")
+            from tools.http_tool import _host_allowed
+            if creds and domains and _host_allowed(url, domains):
+                # Bearer is the common case; a doc endpoint needing a
+                # different scheme can still be uploaded as a file.
+                first = next(iter(creds.values()), "")
+                if first:
+                    headers["Authorization"] = f"Bearer {first}"
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as c:
+                resp = await c.get(url, headers=headers)
+                resp.raise_for_status()
+                raw = resp.text
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(
+                status_code=400,
+                detail=(f"Could not fetch {url}: {exc}. If the docs need a "
+                        "login, upload the file instead."),
+            )
+        source = url
+    else:
+        raise HTTPException(status_code=400, detail="Provide a url or a file")
+
+    condensed = _ad.condense(raw)
+    if not condensed.strip():
+        raise HTTPException(status_code=400, detail="No usable content found")
+    await tracker.db.execute(
+        "UPDATE agents SET api_docs=? WHERE id=?", (condensed, agent_id),
+    )
+    await tracker.db.commit()
+    logger.info("Agent %s API docs imported from %s (%d → %d chars)",
+                agent_id, source, len(raw), len(condensed))
+    return {
+        "ok": True, "source": source,
+        "chars": len(condensed), "api_docs": condensed,
+    }
+
+
+@app.delete("/agents/{agent_id}")
+async def delete_agent(agent_id: str) -> dict:
+    ok = await tracker.delete_agent(agent_id)
+    return {"deleted": ok}
+
+
+@app.post("/agents/{agent_id}/sessions", response_model=Session)
+async def create_session_from_agent(agent_id: str, body: dict = None) -> Session:
+    """Spawn a new session pre-configured from an agent template."""
+    row = await tracker.get_agent(agent_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    session_id = str(uuid.uuid4())
+    title = ((body or {}).get("title") or "").strip() or row["name"]
+    await tracker.create_session_from_agent(session_id, row, title=title)
+    sess = await tracker.get_session(session_id)
+    return Session(
+        id=session_id, title=title,
+        mode=SessionMode(sess.get("mode") or "analytic"),
+        workspace_dir=sess.get("workspace_dir"),
+        local_only=bool(sess.get("local_only")),
+    )
+
+
 @app.get("/sessions", response_model=SessionListResponse)
 async def list_sessions(limit: int = 50) -> SessionListResponse:
     rows = await tracker.list_sessions(limit=limit)
@@ -2386,6 +2641,71 @@ def _derive_db_label(kind: str, url: str) -> str:
     return f"{kind} connection"
 
 
+def _db_url_details(url: str) -> dict:
+    """Split a stored DB URL into its NON-SECRET parts so the connect
+    dialog can show what a session is actually attached to.
+
+    The password is never included — everything else (host, port,
+    database, username, or the file path for sqlite/duckdb) is
+    connection metadata the UI already half-exposes through the chip
+    label, and showing it is what every DB client does. Without this the
+    dialog opened blank on a connected session (notably one created from
+    an agent), which reads as "nothing is configured".
+    """
+    out = {"host": "", "port": "", "database": "", "username": "", "file_path": ""}
+    if not url:
+        return out
+    try:
+        from urllib.parse import urlparse, unquote
+        p = urlparse(url)
+        path = (p.path or "").lstrip("/")
+        if not p.hostname:
+            # File-backed engines (sqlite:///path, duckdb:///path)
+            out["file_path"] = "/" + path if path and not path.startswith(":") else path
+            return out
+        out["host"]     = p.hostname or ""
+        out["port"]     = str(p.port) if p.port else ""
+        out["username"] = unquote(p.username or "")
+        # Oracle carries the service name as ?service_name=foo
+        if "service_name=" in (p.query or ""):
+            from urllib.parse import parse_qs
+            out["database"] = (parse_qs(p.query).get("service_name") or [""])[0]
+        else:
+            out["database"] = unquote(path.split("?", 1)[0])
+    except Exception:  # noqa: BLE001
+        pass
+    return out
+
+
+def _merge_stored_password(new_url: str, stored_url: str) -> str:
+    """When the user re-submits the connect form without retyping the
+    password, splice the stored one back in — but ONLY when the target
+    is unmistakably the same connection (same host, port, database and
+    username). Anything else means they're pointing at a different DB and
+    must supply its own credentials."""
+    if not stored_url or not new_url:
+        return new_url
+    try:
+        from urllib.parse import urlparse
+        n, s = urlparse(new_url), urlparse(stored_url)
+        if n.password:                      # user typed one — respect it
+            return new_url
+        same = (
+            n.hostname == s.hostname and n.port == s.port
+            and (n.path or "") == (s.path or "")
+            and (n.username or "") == (s.username or "")
+        )
+        if not same or not s.password:
+            return new_url
+        # Rebuild netloc with the stored password.
+        userinfo = f"{n.username}:{s.password}" if n.username else ""
+        hostport = n.hostname + (f":{n.port}" if n.port else "")
+        netloc = f"{userinfo}@{hostport}" if userinfo else hostport
+        return n._replace(netloc=netloc).geturl()
+    except Exception:  # noqa: BLE001
+        return new_url
+
+
 async def _db_smoke_test(url: str) -> Optional[str]:
     """Run SELECT 1 against a candidate DB URL. Returns None on success,
     a user-facing error string on failure. Shared by both the dry-run
@@ -2418,14 +2738,19 @@ async def test_session_db_connect(session_id: str, body: DBConnectRequest) -> di
     if not body.kind or not body.url:
         from fastapi import HTTPException
         raise HTTPException(status_code=400, detail="kind and url are required")
-    err = await _db_smoke_test(body.url)
+    # Blank password + same target as the stored connection → reuse the
+    # saved secret, so "Test connection" works after the dialog prefills
+    # host/user/db without exposing the password.
+    _stored = await tracker.get_session_db_connection(session_id)
+    _url = _merge_stored_password(body.url, (_stored or {}).get("url") or "")
+    err = await _db_smoke_test(_url)
     if err:
         from fastapi import HTTPException
         raise HTTPException(status_code=400, detail=f"Connection failed: {err}")
     return {
         "ok":    True,
         "kind":  body.kind,
-        "label": _derive_db_label(body.kind, body.url),
+        "label": _derive_db_label(body.kind, _url),
     }
 
 
@@ -2436,11 +2761,14 @@ async def get_session_db_connect(session_id: str) -> dict:
     'connected' chip in the chat header on session-switch."""
     conn = await tracker.get_session_db_connection(session_id)
     if not conn:
-        return {"connected": False, "kind": "", "label": ""}
+        return {"connected": False, "kind": "", "label": "", "details": {}}
     return {
         "connected": True,
         "kind":  conn["kind"],
         "label": conn["label"],
+        # Non-secret connection details so the dialog can show WHAT is
+        # attached (host / port / db / user). Password is never included.
+        "details": _db_url_details(conn.get("url") or ""),
     }
 
 
@@ -2459,18 +2787,24 @@ async def set_session_db_connect(session_id: str, body: DBConnectRequest) -> dic
         from fastapi import HTTPException
         raise HTTPException(status_code=400, detail="kind and url are required")
 
+    # Blank password + same target as the stored connection → reuse the
+    # saved secret (the dialog prefills host/user/db but never the
+    # password, so re-saving after an edit must not wipe the credential).
+    _stored = await tracker.get_session_db_connection(session_id)
+    _url = _merge_stored_password(body.url, (_stored or {}).get("url") or "")
+
     # Smoke-test the connection BEFORE persisting. _db_smoke_test
     # returns None on success or the driver's actual error string —
     # "password authentication failed", "could not translate host
     # name", etc. — so the user can fix their input without guessing.
-    err = await _db_smoke_test(body.url)
+    err = await _db_smoke_test(_url)
     if err:
         from fastapi import HTTPException
         raise HTTPException(status_code=400, detail=f"Connection failed: {err}")
 
-    label = _derive_db_label(body.kind, body.url)
+    label = _derive_db_label(body.kind, _url)
     await tracker.set_session_db_connection(
-        session_id, body.kind, body.url, label,
+        session_id, body.kind, _url, label,
     )
 
     # Fire-and-forget the auto-discovery task. Submitted as a normal

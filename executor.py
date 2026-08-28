@@ -419,6 +419,22 @@ last message, not your intermediate thinking.
 """
 
 
+def _db_guidance_tier() -> str:
+    """Which verbosity tier the DB guidance block should use.
+
+    Long multi-clause strategy text helps a capable model plan a JOIN
+    upfront but degrades small local models, which tend to follow the
+    last instruction they read. Cloud mode always counts as the strongest
+    tier — a commercial model id carries no parseable size."""
+    try:
+        from config import is_cloud_mode
+        if is_cloud_mode():
+            return "open"
+    except Exception:  # noqa: BLE001
+        pass
+    return model_tier(config.qwen_model)
+
+
 def _system_prompt_for_mode(mode: str, model_name: str = "") -> str:
     """Pick the base prompt for the given mode, then bend its strictness
     to match the model's capability tier.
@@ -740,13 +756,35 @@ class Executor:
                 "subdirectories of WORKSPACE — never to a sibling or parent. "
                 "Omit `working_dir` to default to WORKSPACE.\n\n"
             )
+        # Results of earlier subtasks in THIS task — rendered as their own
+        # block so a "summarise / build on the previous step" subtask can
+        # actually see what happened. Internal keys already injected into
+        # the system prompt (persona, db context/schema) are excluded from
+        # the Context json dump — duplicating them here would waste most
+        # of its 2000-char budget.
+        _internal_ctx_keys = (
+            "agent_persona", "db_context", "db_schema", "prior_results",
+        )
+        prior_block = ""
+        _prior = (context or {}).get("prior_results") or []
+        if _prior:
+            prior_block = (
+                "EARLIER SUBTASK RESULTS (already done in THIS task — "
+                "build on them, do NOT redo or re-ask for them):\n"
+                + "\n---\n".join(_prior) + "\n\n"
+            )
+        _public_ctx = {
+            k: v for k, v in (context or {}).items()
+            if k not in _internal_ctx_keys
+        }
         messages: List[Dict[str, Any]] = [
             {
                 "role": "user",
                 "content": (
                     workspace_block
+                    + prior_block
                     + f"Task: {description}\n\n"
-                    f"Context: {json.dumps(context, ensure_ascii=False)[:2000]}"
+                    f"Context: {json.dumps(_public_ctx, ensure_ascii=False)[:2000]}"
                 ),
             }
         ]
@@ -868,7 +906,17 @@ class Executor:
         compress_at_f = float(getattr(config, "context_compress_at", 0.7))
         compress_threshold = max(1024, int(num_ctx * compress_at_f))
 
-        for round_idx in range(_MAX_TOOL_ROUNDS):
+        # DB-connected sessions get extra headroom: a real analysis is
+        # "resolve filter key → JOIN → report", but entity semantics (e.g.
+        # brand → organization tree → factories) can legitimately need a
+        # few extra lookups. Exported trace 015ce16e hit the cap ONE query
+        # short of the answer — it had already WRITTEN the correct final
+        # JOIN but had no round left to run it. The budget-strategy prompt
+        # keeps typical runs at 2-4 calls; this margin is for the honest
+        # tail, not a licence to explore.
+        max_rounds = _MAX_TOOL_ROUNDS + (4 if (context or {}).get("db_context") else 0)
+
+        for round_idx in range(max_rounds):
             # ── Context watchdog (#4) ──────────────────────────────────────
             # If the previous round's prompt was already >= 70% of num_ctx,
             # we're one turn away from the model losing its grip. Compress
@@ -899,9 +947,78 @@ class Executor:
             # (not `messages`) keeps them safe from #4 compression
             # which only ever rewrites the messages[] history.
             effective_system = system_prompt
+            # User-defined agent persona — standing instructions from the
+            # agent template this session was created from. Prepended so
+            # role framing comes before task mechanics; kept in `system`
+            # (like the memos below) so history compression can't drop it.
+            _persona = (context or {}).get("agent_persona") or ""
+            if _persona:
+                effective_system = (
+                    "[Agent persona — you are acting as this configured "
+                    "role for the whole session:]\n" + _persona
+                    + "\n\n" + effective_system
+                )
+            # Outbound API access — names + hosts only, never secrets.
+            _api = (context or {}).get("api_access") or {}
+            if _api.get("credentials") or _api.get("domains") or _api.get("docs"):
+                effective_system += (
+                    "\n\n[可呼叫外部 API。允許網域："
+                    + (", ".join(_api.get("domains") or []) or "(未設定)")
+                    + "；可用憑證名稱："
+                    + (", ".join(_api.get("credentials") or []) or "(無)")
+                    + "。用 http_get / http_post，需要憑證時在 header/body 寫 "
+                    "{{CRED:名稱}} 佔位符，系統送出前會替換成真值。"
+                    "你看不到憑證內容，不要猜測或編造;只有允許網域會帶憑證。]"
+                )
+                if _api.get("docs"):
+                    effective_system += (
+                        "\n[可用 API 端點 — 只能用下列端點，不要臆造:]\n"
+                        + _api["docs"]
+                    )
+
+            # Connected database — mirror of the planner-side injection:
+            # data questions go to the db_* tools first, never to web
+            # search for internal operational data.
+            _dbctx = (context or {}).get("db_context") or ""
+            if _dbctx:
+                _dbschema = (context or {}).get("db_schema") or ""
+                if _dbschema:
+                    # Tier-aware: small local models follow short imperative
+                    # rules better than a long multi-clause strategy.
+                    _budget = (
+                        "查詢預算：工具呼叫上限 ~10 次 — 先想好 JOIN 路徑，"
+                        "目標 2-3 條查詢拿到最終答案（1 條鎖過濾鍵 → 1 條 "
+                        "JOIN 取結果）；截斷的清單用 COUNT/聚合/WHERE 縮小，"
+                        "不要逐頁翻；最終 JOIN 要早下，不要拖到預算用完。"
+                    ) if _db_guidance_tier() == "open" else (
+                        "查詢要精簡：1 條鎖過濾鍵 → 1 條 JOIN 取結果。"
+                    )
+                    effective_system += (
+                        "\n\n[⚠️ 本 session 已連接資料庫（" + _dbctx + "）。"
+                        "已知資料表結構如下 — 直接挑相關表用 db_query（唯讀 "
+                        "SELECT）回答，不需要 db_list_tables/describe 探索；"
+                        "只有查詢因表/欄位不存在失敗時才重新 describe。"
+                        "**問什麼實體就查什麼實體的表**：問工廠查工廠表、問"
+                        "倉庫查倉庫表、問「品牌下的 X」先用品牌/組織表找關聯"
+                        "再帶出 X；絕不用帳號/使用者/log 表去回答實體問題。"
+                        "內部營運資料不要用 web_search 找。"
+                        "**最終答案要寫成給人看的 markdown 報告**（標題+表格"
+                        "+重點摘要），❌ 不可以直接傾印原始 JSON 或欄位列表。"
+                        "查不到的部分要在報告裡誠實說明，不要略過。"
+                        + _budget + "]\n"
+                        + _dbschema
+                    )
+                else:
+                    effective_system += (
+                        "\n\n[⚠️ 本 session 已連接資料庫（" + _dbctx + "）。"
+                        "資料/統計/查詢問題優先用 db_list_tables → "
+                        "db_describe_table（只看相關的表）→ db_query（唯讀 "
+                        "SELECT）從資料庫回答；內部營運資料（品牌/工廠/倉庫/"
+                        "訂單等）不要用 web_search 找。]"
+                    )
             if discovery_memos:
                 effective_system = (
-                    system_prompt
+                    effective_system
                     + "\n\n[Discovery memo — what you ALREADY learned in this subtask. "
                     "Do NOT call these tools again on the same file/path; "
                     "use the info below directly:]\n"
@@ -1558,13 +1675,16 @@ class Executor:
         # Hit max rounds — ask for a final forced answer
         logger.warning(
             "Reached max tool rounds (%d) for task %s — forcing final answer.",
-            _MAX_TOOL_ROUNDS, task_id,
+            max_rounds, task_id,
         )
         messages.append({
             "role": "user",
             "content": (
                 "You have used the maximum number of tool calls. "
-                "Summarise what you've learned and output the final JSON now."
+                "Summarise what you've learned and output the final JSON now. "
+                "Include ALL concrete data values you already retrieved "
+                "(numbers, names, dates) in a proper report — do NOT reply "
+                "with only a description of what remains to be done."
             ),
         })
         try:

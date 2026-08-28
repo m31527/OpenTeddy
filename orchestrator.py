@@ -676,7 +676,9 @@ _ANSWER_TASK_STARTS = (
 )
 
 
-def _looks_like_file_producing_task(description: Optional[str]) -> bool:
+def _looks_like_file_producing_task(
+    description: Optional[str], mode: str = "code",
+) -> bool:
     """True iff the subtask description strongly implies a file should
     appear on disk. Used to detect hallucinated successes — see the
     callsite in _run_subtask for the full rationale.
@@ -705,6 +707,29 @@ def _looks_like_file_producing_task(description: Optional[str]) -> bool:
     has_noun = any(n in lower for n in _ARTIFACT_NOUNS)
     has_ext = any(ext in lower for ext in _ARTIFACT_EXTENSIONS)
     has_exec_phrase = any(p in lower for p in _EXECUTION_PHRASES)
+
+    # Analytic-mode exception: path A of the analytic design emits the
+    # report AS the result text — "整理成 Markdown 表格並輸出最終報告"
+    # is NOT supposed to write a file, yet "輸出"+"報告" tripped the
+    # verb+noun signal, force-failed the subtask through every retry,
+    # and burned minutes (exported trace 6ded1f30). In analytic mode
+    # only demand an on-disk artifact when the description names a real
+    # file signal: an extension, a save-to-file phrase, or the
+    # render_chart_report tool.
+    if mode == "analytic":
+        # Only an explicit SAVE intent counts. A bare extension does not:
+        # analytic descriptions routinely name their INPUT data file
+        # ("分析 sales.csv 並輸出圖表報告"), and path A of the analytic
+        # design emits the report as result text with ```chart blocks —
+        # no file is written by design. Demanding an artifact there
+        # force-fails a correctly-completed subtask through every retry.
+        _save_phrases = (
+            "存成", "存檔", "储存", "儲存為", "写入", "寫入", "另存",
+            "save to", "save as", "write to", "output to",
+            "render_chart_report", "output_path",
+        )
+        if not any(p in lower for p in _save_phrases):
+            return False
 
     # Strong signal #1: production verb + concrete artifact / file ext
     # → treat as file-producing regardless of how the goal opens.
@@ -772,6 +797,106 @@ class Orchestrator:
                     session_ws = sess.get("workspace_dir") or None
                     session_local_only = bool(sess.get("local_only"))
                     session_mode = (sess.get("mode") or "code").lower()
+                    # ── User-defined agent persona ────────────────────────
+                    # Sessions created from an agent template carry its id;
+                    # the persona is looked up LIVE (not copied) so editing
+                    # the agent updates every session built from it. The
+                    # persona travels via req.context, which already flows
+                    # into planning AND every executor subtask.
+                    agent_id = (sess.get("agent_id") or "").strip()
+                    if agent_id:
+                        try:
+                            agent = await self.tracker.get_agent(agent_id)
+                            if agent and (agent.get("system_prompt") or "").strip():
+                                req.context["agent_persona"] = (
+                                    f"[Agent: {agent.get('name', '')}]\n"
+                                    + agent["system_prompt"].strip()
+                                )
+                            # Programmatic schema snapshot — with this in
+                            # the prompt the model skips the whole
+                            # db_list_tables / db_describe_table
+                            # exploration phase (~9 LLM rounds ≈ minutes)
+                            # and queries directly.
+                            #
+                            # SELF-HEALING: agents saved before the
+                            # snapshot feature (or whose save-time capture
+                            # failed) get it captured HERE, on their first
+                            # task — relying on the user to re-save the
+                            # agent proved a footgun (two exported traces
+                            # ran schema-blind because of it). ~2-8s once,
+                            # then stored forever.
+                            # Re-capture when MISSING **or STALE-FORMAT**.
+                            # "Only when empty" was a trap: agents that had
+                            # already stored a snapshot from a buggy build
+                            # (v1 truncated away the entity tables) kept
+                            # using it forever and never saw the fix.
+                            _need_snap = False
+                            if agent and (agent.get("db_url") or "").strip():
+                                from db_schema import is_current_format
+                                _need_snap = not is_current_format(
+                                    (agent.get("schema_summary") or "").strip()
+                                )
+                            if _need_snap:
+                                try:
+                                    from db_schema import snapshot_schema
+                                    _snap = await asyncio.wait_for(
+                                        snapshot_schema(agent["db_url"], timeout_s=8.0),
+                                        timeout=10.0,
+                                    )
+                                    await self.tracker.set_agent_schema(
+                                        agent_id, _snap,
+                                    )
+                                    agent["schema_summary"] = _snap
+                                    logger.info(
+                                        "Lazy schema snapshot captured for "
+                                        "agent %s (%d chars)", agent_id, len(_snap),
+                                    )
+                                except Exception as exc:  # noqa: BLE001
+                                    logger.warning(
+                                        "Lazy schema snapshot failed "
+                                        "(task continues without it): %s", exc,
+                                    )
+                            if agent and (agent.get("schema_summary") or "").strip():
+                                req.context["db_schema"] = \
+                                    agent["schema_summary"].strip()
+                            # Outbound API access: the model is told the
+                            # credential NAMES and the allowed hosts —
+                            # never the secret values. It writes
+                            # {{CRED:name}} and the http tool substitutes
+                            # at call time, so no token ever enters a
+                            # prompt, transcript or export.
+                            if agent:
+                                try:
+                                    _names = sorted(json.loads(
+                                        agent.get("api_credentials") or "{}"
+                                    ).keys())
+                                    _doms = json.loads(
+                                        agent.get("allowed_domains") or "[]"
+                                    )
+                                except Exception:  # noqa: BLE001
+                                    _names, _doms = [], []
+                                _docs = (agent.get("api_docs") or "").strip()
+                                if _names or _doms or _docs:
+                                    req.context["api_access"] = {
+                                        "credentials": _names,
+                                        "domains": _doms,
+                                        "docs": _docs,
+                                    }
+                        except Exception:  # noqa: BLE001
+                            pass
+                    # ── Connected-database awareness ─────────────────────
+                    # The DB binding (agent-created or Analytic "Connect
+                    # database") makes the db_* TOOLS work, but without
+                    # this the PLANNER never learns a database exists —
+                    # so a data question like "YCM 品牌有幾個工廠" got
+                    # planned as a web search instead of db_list_tables →
+                    # db_query. Surface the fact (kind + label only, never
+                    # the URL) so planning and execution prefer the DB.
+                    if (sess.get("db_url") or "").strip():
+                        req.context["db_context"] = (
+                            f"kind={sess.get('db_kind') or 'sql'}, "
+                            f"label={sess.get('db_label') or 'connected database'}"
+                        )
             except Exception:  # noqa: BLE001
                 pass
         set_session_workspace(session_ws)
@@ -865,7 +990,13 @@ class Orchestrator:
         # Conservative: only fires when the classifier is confident
         # (>= 0.7) AND says BOTH needs_tools=False AND is_pure_chat=True.
         # Any uncertainty falls through to the normal plan→execute flow.
-        if getattr(config, "intent_classifier_enabled", True):
+        if (getattr(config, "intent_classifier_enabled", True)
+                and not (req.context or {}).get("db_context")):
+            # db_context guard: in a DB-connected session, a data question
+            # ("how many factories does brand X have") is easily
+            # misclassified as pure-chat — and the fast path would then
+            # HALLUCINATE an answer from training data instead of querying
+            # the database. Route DB sessions through the full planner.
             try:
                 intent = await self._classify_intent(req.goal, session_mode)
             except Exception as exc:  # noqa: BLE001
@@ -928,6 +1059,23 @@ class Orchestrator:
             total_subtasks = len(subtasks)
             for st in subtasks:
                 st = await self._run_subtask(st, req.context, mode=mode_value)
+
+                # ── Thread this result into the NEXT subtask's context ──
+                # Without this, each subtask's executor started blind: a
+                # final "format the results into a report" step could not
+                # see the query results produced two steps earlier, said
+                # "workspace is empty, no query was ever run", and burned
+                # its retries asking the user what to analyse (exported
+                # trace 6ded1f30). Last 2 results, truncated, is enough
+                # for a step to build on its predecessors without blowing
+                # up the context window.
+                if st.result:
+                    _prior = list(req.context.get("prior_results") or [])
+                    _prior.append(
+                        f"[step {st.order}: {(st.description or '')[:120]}]\n"
+                        + st.result[:1800]
+                    )
+                    req.context["prior_results"] = _prior[-2:]
 
                 # ── Live progress pill (Sprint 2B) ────────────────────
                 # Broadcast cumulative state so the chat UI's pill can
@@ -1121,6 +1269,112 @@ class Orchestrator:
         # the user's declared intent.
         mode_value = req.mode.value if hasattr(req.mode, "value") else str(req.mode)
         base_prompt = _plan_prompt_for_mode(mode_value, config.gemma_model)
+
+        # User-defined agent persona (session created from an agent
+        # template) — standing instructions shape HOW this agent plans:
+        # a "財務 DB 分析師" should plan DB queries + reports, not
+        # generic shell exploration.
+        _persona = (req.context or {}).get("agent_persona") or ""
+        if _persona:
+            base_prompt += (
+                "\n\n--- Agent persona (standing instructions for this "
+                "session's role — plan accordingly) ---\n" + _persona
+            )
+
+        # Outbound API access for action-taking agents. Names + hosts
+        # only; the secrets stay server-side (see tools/http_tool.py).
+        _api = (req.context or {}).get("api_access") or {}
+        if _api.get("credentials") or _api.get("domains") or _api.get("docs"):
+            base_prompt += (
+                "\n\n--- 本 agent 可呼叫外部 API ---\n"
+                f"允許的網域：{', '.join(_api.get('domains') or []) or '(未設定)'}\n"
+                f"可用憑證名稱：{', '.join(_api.get('credentials') or []) or '(無)'}\n"
+                "用 `http_get` / `http_post` 呼叫;需要帶憑證時，在 header 或 "
+                "body 寫 `{{CRED:名稱}}` 佔位符（例如 "
+                'Authorization: "Bearer {{CRED:api_token}}"），系統會在送出'
+                "前替換成真正的值。**你看不到也不需要知道憑證內容**，不要"
+                "猜測或編造。只有允許網域的請求會帶上憑證。"
+            )
+            if _api.get("docs"):
+                base_prompt += (
+                    "\n\n可用的 API 端點（依此規劃，不要臆造端點或參數）：\n"
+                    + _api["docs"]
+                )
+
+        # Connected database — only present when the session actually has
+        # one, so the static mode prompts stay untouched for everyone else.
+        _dbctx = (req.context or {}).get("db_context") or ""
+        if _dbctx:
+            _dbschema = (req.context or {}).get("db_schema") or ""
+            if _dbschema:
+                # Schema already known — go STRAIGHT to db_query. This is
+                # the difference between 1 planned step and ~9 exploration
+                # rounds of describe-table (measured: ~5 min on a 35B).
+                #
+                # Guidance length is TIER-AWARE. OpenTeddy's default is a
+                # local model, and long multi-clause strategy text degrades
+                # small models — they follow the last thing they read. Big
+                # / cloud models get the full budget strategy; smaller ones
+                # get the short imperative version. Correctness rules that
+                # matter for every tier (entity-table matching, no web
+                # search) are in the shared part.
+                from model_profile import model_tier as _mt
+                from config import is_cloud_mode as _icm
+                # Cloud mode plans with a commercial model — always the
+                # strongest tier, regardless of what the local model tag
+                # says (a cloud model id carries no size to parse).
+                _tier = "open" if _icm() else _mt(config.gemma_model)
+                _strategy = (
+                    "**查詢預算策略**（工具呼叫上限 ~10 次，是稀缺資源）：先從"
+                    "上面的 schema 想好完整 JOIN 路徑，目標 **2-3 條查詢內"
+                    "拿到最終答案**：1 條鎖定過濾鍵（如品牌/組織 id）→ 1 條 "
+                    "JOIN 直接取最終結果。❌ 不要逐層探索關聯、不要逐頁翻"
+                    "被截斷的清單（改用 COUNT / 聚合 / WHERE 縮小）。"
+                    "**最終 JOIN 要早下，不要留到預算用完才想執行。**\n"
+                ) if _tier == "open" else (
+                    "查詢要精簡：先用 1 條查詢鎖定過濾鍵，再用 1 條 JOIN "
+                    "取最終結果。不要逐層慢慢試。\n"
+                )
+                base_prompt += (
+                    "\n\n--- ⚠️ 本 session 已連接資料庫（" + _dbctx + "）---\n"
+                    "已知資料表結構（先前快照，欄位為 name(type)）：\n"
+                    + _dbschema +
+                    "\n\n資料 / 統計 / 查詢類問題：直接從上面挑相關的表，用 "
+                    "`db_query` 下 SELECT 回答（唯讀）。**不需要**再跑 "
+                    "db_list_tables / db_describe_table 逐張探索。\n"
+                    "**挑表原則 — 問什麼實體就查什麼實體的表**：問「工廠」就"
+                    "查工廠主表、問「倉庫」就查倉庫主表、問「品牌下的 X」就先"
+                    "用品牌表/組織表找出關聯再帶出 X。❌ 絕對不要用帳號、"
+                    "使用者、log 這類旁支表去回答實體問題（例如用 "
+                    "account.company_name 猜品牌 → 會答出一堆帳號而不是工廠）。"
+                    "找不到對應實體表時，寧可先 db_describe_table 確認，"
+                    "也不要用不相干的表硬湊答案。\n"
+                    "**查詢與報告同一步完成**：查詢完直接在同一個子任務把答案"
+                    "寫成**給人看的 markdown 報告**（標題 + 表格 + 重點摘要，"
+                    "需要圖表時照本模式的 ```chart 慣例）。"
+                    "❌ 最終答案不可以是原始 JSON／欄位傾印 — 那是內部格式，"
+                    "使用者要看的是整理過的報告。"
+                    "❌ 不要另外規劃「整理結果 / 輸出報告」的獨立子任務 — "
+                    "那會多一整輪執行且沒有新資訊。簡單問題 1 個子任務就夠。\n"
+                    + _strategy +
+                    "❌ 不要用 web_search / browser_fetch 去找內部營運資料"
+                    "（品牌、工廠、倉庫、訂單、庫存等都在資料庫裡）。"
+                )
+            else:
+                base_prompt += (
+                    "\n\n--- ⚠️ 本 session 已連接資料庫（" + _dbctx + "）---\n"
+                    "資料 / 統計 / 查詢類問題一律**優先查這個資料庫**，標準流程：\n"
+                    "  1) `db_list_tables` 列出所有資料表\n"
+                    "  2) `db_describe_table` **只看名稱與問題相關的表**"
+                    "（sensor/log/messaging 這類明顯無關的不要看）\n"
+                    "  3) `db_query` 下 SELECT 取數據回答（唯讀）\n"
+                    "**查詢與報告同一步完成**：最後的查詢子任務直接在 result "
+                    "輸出完整 markdown 報告，❌ 不要另外規劃「整理結果 / 輸出"
+                    "報告」的獨立子任務。\n"
+                    "❌ 不要用 web_search / browser_fetch 去找內部營運資料"
+                    "（品牌、工廠、倉庫、訂單、庫存等都在資料庫裡，不在網路上）。\n"
+                    "只有確認資料庫沒有該資料時，才考慮外部搜尋。"
+                )
 
         # For Code / Analytic modes, tell Gemma what the agent workspace is
         # so the shell plan uses a known directory (git clones land there
@@ -1414,7 +1668,7 @@ class Orchestrator:
                 # get false-failed.
                 if (mode in ("code", "analytic")
                         and not artifacts
-                        and _looks_like_file_producing_task(st.description)):
+                        and _looks_like_file_producing_task(st.description, mode)):
                     logger.info(
                         "Subtask %s should have produced a file but "
                         "workspace got 0 new artifacts — clamping "
