@@ -219,15 +219,43 @@ async def http_post(
     # way through work that was succeeding. Generative endpoints are
     # legitimately this slow, so the ceiling has to clear them.
     tmo = _DEFAULT_TIMEOUT if not timeout else max(1.0, min(float(timeout), 3600.0))
+
+    # Tell the subtask watchdog how long this may legitimately take.
+    # Without it the orchestrator's own deadline (default 900s) cancels a
+    # 31-minute video generation that is running perfectly, and the user
+    # has to raise a GLOBAL setting — making every other task equally
+    # slow to catch when it really is stuck. Reserve the worst case now,
+    # refund the unused remainder below, so only real elapsed time is
+    # charged. httpx's own timeout still bounds the call.
+    _reserved = 0.0
+    if tmo > _DEFAULT_TIMEOUT:
+        try:
+            from tools._context import add_deadline_credit
+            add_deadline_credit(tmo)
+            _reserved = tmo
+        except Exception:  # noqa: BLE001
+            _reserved = 0.0
+    _call_started = time.monotonic()
+
     try:
-        async with httpx.AsyncClient(timeout=tmo, follow_redirects=True) as client:
-            if form:
-                # (None, value) makes httpx emit a multipart part with no
-                # filename — byte-for-byte what `curl -F key=value` sends.
-                files = {k: (None, str(v)) for k, v in form.items()}
-                resp = await client.post(url, files=files, headers=headers or {})
-            else:
-                resp = await client.post(url, json=body or {}, headers=headers or {})
+        try:
+            async with httpx.AsyncClient(timeout=tmo, follow_redirects=True) as client:
+                if form:
+                    # (None, value) makes httpx emit a multipart part with no
+                    # filename — byte-for-byte what `curl -F key=value` sends.
+                    files = {k: (None, str(v)) for k, v in form.items()}
+                    resp = await client.post(url, files=files, headers=headers or {})
+                else:
+                    resp = await client.post(url, json=body or {}, headers=headers or {})
+        finally:
+            if _reserved:
+                try:
+                    from tools._context import add_deadline_credit
+                    add_deadline_credit(
+                        -(_reserved - (time.monotonic() - _call_started))
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
 
         fail = _http_failure(resp, _creds)
         if fail:

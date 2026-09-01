@@ -80,40 +80,65 @@ def reset_session_id(token: object) -> None:
         pass
 
 
-# Time a subtask spent BLOCKED ON A HUMAN (waiting for tool approval).
+# ── Subtask deadline credit ───────────────────────────────────────────────────
 #
-# The orchestrator caps each subtask with a wall-clock timeout, but the
-# approval prompt blocks inside the tool call — i.e. inside that same
-# budget. So a user who takes two minutes to read a high-risk call and
-# click Approve silently spends two minutes of the agent's execution
-# time, and a genuinely long operation (video generation, a big build)
-# then gets cancelled for "timeout" when it was really the human's
-# thinking time. Penalising the agent for the human's deliberation is
-# wrong — and it punishes exactly the careful reviewing we want.
+# The orchestrator caps each subtask with a wall-clock timeout. That
+# budget is meant to catch a stuck agent — a model looping, a tool
+# hanging. It is NOT meant to cap work that is demonstrably progressing,
+# but a plain wall-clock timer cannot tell the two apart, so anything
+# genuinely slow gets killed and reported as "timeout" while succeeding.
 #
-# The orchestrator seeds a fresh budget dict per subtask; tool_registry
-# adds however long each approval blocked; the orchestrator extends the
-# deadline by that amount. A mutable dict is used deliberately: asyncio
-# copies the ContextVar into the child task by reference, so mutations
-# made deep in a tool call are visible to the watchdog above.
-_approval_pause: ContextVar[Optional[dict]] = ContextVar(
-    "openteddy_approval_pause", default=None,
+# Two things legitimately consume wall-clock without the agent being
+# stuck, and both are credited back here:
+#
+#   1. HUMAN TIME — the approval prompt blocks inside the tool call, so
+#      seconds the user spends reading a high-risk call and deciding are
+#      billed to the agent. That punishes exactly the careful review the
+#      approval gate exists to encourage.
+#   2. DECLARED LONG WORK — a tool that announces up front how long it
+#      may take (http_post timeout=2700 against a video endpoint that
+#      really does run 31 minutes). The tool's own timeout already bounds
+#      it, so the subtask watchdog double-bounding it adds no safety,
+#      only false cancellations.
+#
+# The effect is a timeout that tolerates slow work without going blind:
+# the default stays tight (a hung agent is still caught in ~15 min) while
+# a call that declares 45 minutes gets exactly 45 minutes, no global
+# setting to raise and no other task made less responsive.
+#
+# Long work RESERVES its worst case before starting and REFUNDS whatever
+# it didn't use, so the deadline covers the call while it is in flight
+# but only the real elapsed time is charged once it returns.
+#
+# A mutable dict is used deliberately: asyncio copies the ContextVar into
+# the child task by reference, so mutations made deep inside a tool call
+# are visible to the watchdog running above it.
+_deadline_credit: ContextVar[Optional[dict]] = ContextVar(
+    "openteddy_deadline_credit", default=None,
 )
 
 
 def new_approval_budget() -> dict:
-    """Start a fresh per-subtask pause budget. Call BEFORE spawning the
+    """Start a fresh per-subtask credit budget. Call BEFORE spawning the
     executor task so the child inherits this dict."""
     budget: dict = {"paused": 0.0}
-    _approval_pause.set(budget)
+    _deadline_credit.set(budget)
     return budget
 
 
-def add_approval_pause(seconds: float) -> None:
-    """Record time spent waiting on a human. No-op outside a subtask."""
-    budget = _approval_pause.get()
+def add_deadline_credit(seconds: float) -> None:
+    """Extend (or, with a negative value, refund) the subtask deadline.
+
+    No-op outside a subtask. The running total is floored at zero so a
+    mismatched refund can never shorten the original budget."""
+    budget = _deadline_credit.get()
     if budget is not None:
-        budget["paused"] = budget.get("paused", 0.0) + max(0.0, seconds)
+        budget["paused"] = max(0.0, budget.get("paused", 0.0) + seconds)
+
+
+def add_approval_pause(seconds: float) -> None:
+    """Credit time spent waiting on a human."""
+    add_deadline_credit(max(0.0, seconds))
 
 
 def set_triggered_by(origin: str) -> object:
