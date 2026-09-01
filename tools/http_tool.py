@@ -213,7 +213,12 @@ async def http_post(
         # Credentials can appear in form fields too.
         _missing: set = set()
         form = _substitute(form, _creds, _missing)
-    tmo = _DEFAULT_TIMEOUT if not timeout else max(1.0, min(float(timeout), 900.0))
+    # Cap is 1 hour, not 15 minutes: a measured 15-second H3 video took
+    # 31m26s to generate. A 900s ceiling silently clamped an explicit
+    # timeout=2700 back down and killed the request two thirds of the
+    # way through work that was succeeding. Generative endpoints are
+    # legitimately this slow, so the ceiling has to clear them.
+    tmo = _DEFAULT_TIMEOUT if not timeout else max(1.0, min(float(timeout), 3600.0))
     try:
         async with httpx.AsyncClient(timeout=tmo, follow_redirects=True) as client:
             if form:
@@ -425,7 +430,7 @@ _SCHEMA_POST: Dict[str, Any] = {
                 },
                 "timeout": {
                     "type": "number",
-                    "description": "Seconds to wait (default 30, max 900).",
+                    "description": "Seconds to wait (default 30, max 3600). Generative endpoints can take 30+ minutes — set this generously.",
                 },
             },
             "required": ["url"],
