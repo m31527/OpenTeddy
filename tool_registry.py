@@ -360,11 +360,22 @@ class ToolRegistry:
             except Exception:  # noqa: BLE001
                 auto_after = 0.0
                 wait_to = 1800.0
-            approved = await self._store.wait_for_resolution(
-                approval_id,
-                timeout=wait_to,
-                auto_approve_after=auto_after,
-            )
+            # Time spent here is HUMAN time, not agent time — bank it so
+            # the orchestrator can extend the subtask deadline by the
+            # same amount (see tools/_context.add_approval_pause).
+            _wait_started = time.monotonic()
+            try:
+                approved = await self._store.wait_for_resolution(
+                    approval_id,
+                    timeout=wait_to,
+                    auto_approve_after=auto_after,
+                )
+            finally:
+                try:
+                    from tools._context import add_approval_pause
+                    add_approval_pause(time.monotonic() - _wait_started)
+                except Exception:  # noqa: BLE001
+                    pass
             if not approved:
                 return make_result(
                     False,

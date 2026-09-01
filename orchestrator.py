@@ -1597,10 +1597,44 @@ class Orchestrator:
 
         for attempt in range(max_local_retries):
             try:
-                st = await asyncio.wait_for(
-                    self.executor.execute(st, context, mode=mode),
-                    timeout=float(effective_sub_timeout),
+                # Deadline that CREDITS BACK time the subtask spent
+                # blocked on a human approval prompt. A plain
+                # asyncio.wait_for counted the user's deliberation
+                # against the agent's execution budget, so approving a
+                # long operation (video generation, a big build) after
+                # thinking about it for a minute could cancel work that
+                # was running perfectly — reported as "subtask timeout".
+                # We poll a shielded task and push the deadline out by
+                # whatever the approval gate banked.
+                import time as _t
+                from tools._context import new_approval_budget
+                _budget = new_approval_budget()
+                _exec_task = asyncio.create_task(
+                    self.executor.execute(st, context, mode=mode)
                 )
+                _deadline = _t.monotonic() + float(effective_sub_timeout)
+                while True:
+                    _remaining = (
+                        _deadline + float(_budget.get("paused", 0.0))
+                        - _t.monotonic()
+                    )
+                    if _remaining <= 0:
+                        _exec_task.cancel()
+                        try:
+                            await _exec_task
+                        except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                            pass
+                        raise asyncio.TimeoutError
+                    try:
+                        # shield so the short poll interval can't cancel
+                        # the real work; re-check the credit every 5s.
+                        st = await asyncio.wait_for(
+                            asyncio.shield(_exec_task),
+                            timeout=min(_remaining, 5.0),
+                        )
+                        break
+                    except asyncio.TimeoutError:
+                        continue
             except asyncio.TimeoutError:
                 logger.warning(
                     "Subtask %s timed out after %ds on attempt %d/%d — escalating to Claude.",

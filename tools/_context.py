@@ -80,6 +80,42 @@ def reset_session_id(token: object) -> None:
         pass
 
 
+# Time a subtask spent BLOCKED ON A HUMAN (waiting for tool approval).
+#
+# The orchestrator caps each subtask with a wall-clock timeout, but the
+# approval prompt blocks inside the tool call — i.e. inside that same
+# budget. So a user who takes two minutes to read a high-risk call and
+# click Approve silently spends two minutes of the agent's execution
+# time, and a genuinely long operation (video generation, a big build)
+# then gets cancelled for "timeout" when it was really the human's
+# thinking time. Penalising the agent for the human's deliberation is
+# wrong — and it punishes exactly the careful reviewing we want.
+#
+# The orchestrator seeds a fresh budget dict per subtask; tool_registry
+# adds however long each approval blocked; the orchestrator extends the
+# deadline by that amount. A mutable dict is used deliberately: asyncio
+# copies the ContextVar into the child task by reference, so mutations
+# made deep in a tool call are visible to the watchdog above.
+_approval_pause: ContextVar[Optional[dict]] = ContextVar(
+    "openteddy_approval_pause", default=None,
+)
+
+
+def new_approval_budget() -> dict:
+    """Start a fresh per-subtask pause budget. Call BEFORE spawning the
+    executor task so the child inherits this dict."""
+    budget: dict = {"paused": 0.0}
+    _approval_pause.set(budget)
+    return budget
+
+
+def add_approval_pause(seconds: float) -> None:
+    """Record time spent waiting on a human. No-op outside a subtask."""
+    budget = _approval_pause.get()
+    if budget is not None:
+        budget["paused"] = budget.get("paused", 0.0) + max(0.0, seconds)
+
+
 def set_triggered_by(origin: str) -> object:
     """Bind the task origin (e.g. ``"telegram"``) for the current async
     task. Returns the reset token. Caller is responsible for resetting
