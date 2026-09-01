@@ -180,9 +180,25 @@ async def http_get(
 async def http_post(
     url: str,
     body: Optional[Dict[str, Any]] = None,
+    form: Optional[Dict[str, Any]] = None,
     headers: Optional[Dict[str, str]] = None,
+    save_to: Optional[str] = None,
+    timeout: Optional[float] = None,
 ) -> Dict[str, Any]:
     """Perform an HTTP POST request. HIGH risk — requires approval.
+
+    Encoding: pass `body` for JSON, or `form` for multipart/form-data —
+    the equivalent of curl's `-F`, which many APIs (file uploads, media
+    generation) require and a JSON body would be rejected by.
+
+    `save_to` writes the raw response to a workspace file instead of
+    trying to read it as text — required for binary results (video,
+    images, PDFs), which would otherwise come back as truncated garbage.
+    The saved file is reported as an artifact so it appears as a
+    download.
+
+    `timeout` overrides the 30 s default (capped at 15 min) for slow
+    generative endpoints.
 
     Supports {{CRED:name}} placeholders resolved from the agent's stored
     credentials — see the policy block above."""
@@ -190,9 +206,26 @@ async def http_post(
     err, url, headers, body, _creds = await _apply_policy(url, headers, body)
     if err:
         return make_result(False, error=err, duration_ms=_ms(start))
+    if form:
+        # Credentials can appear in form fields too.
+        _missing: set = set()
+        form = _substitute(form, _creds, _missing)
+    tmo = _DEFAULT_TIMEOUT if not timeout else max(1.0, min(float(timeout), 900.0))
     try:
-        async with httpx.AsyncClient(timeout=_DEFAULT_TIMEOUT, follow_redirects=True) as client:
-            resp = await client.post(url, json=body or {}, headers=headers or {})
+        async with httpx.AsyncClient(timeout=tmo, follow_redirects=True) as client:
+            if form:
+                # (None, value) makes httpx emit a multipart part with no
+                # filename — byte-for-byte what `curl -F key=value` sends.
+                files = {k: (None, str(v)) for k, v in form.items()}
+                resp = await client.post(url, files=files, headers=headers or {})
+            else:
+                resp = await client.post(url, json=body or {}, headers=headers or {})
+
+        if save_to:
+            saved = _save_response(resp, save_to)
+            saved["status_code"] = resp.status_code
+            return make_result(True, result=saved, duration_ms=_ms(start))
+
         return make_result(
             True,
             result={
@@ -211,11 +244,51 @@ async def http_post(
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 def _safe_body(resp: httpx.Response) -> Any:
-    """Try JSON decode, fallback to truncated text."""
+    """Try JSON decode, fallback to truncated text.
+
+    Binary payloads (video/image/pdf) are NOT returned as text — a 4 KB
+    slice of an mp4 is noise that also wastes the model's context. The
+    caller is told to re-issue the request with save_to instead."""
+    ctype = (resp.headers.get("content-type") or "").lower()
+    if ctype and not any(
+        t in ctype for t in ("json", "text", "xml", "html", "javascript")
+    ):
+        return (
+            f"<binary response: {ctype}, {len(resp.content)} bytes — "
+            "not shown. Re-run this call with save_to='filename.ext' to "
+            "write it to the workspace.>"
+        )
     try:
         return resp.json()
     except Exception:  # noqa: BLE001
         return resp.text[:4096]
+
+
+def _save_response(resp: httpx.Response, save_to: str) -> Dict[str, Any]:
+    """Write the raw response body to a workspace-anchored file.
+
+    Same path rules as file_tool: relative paths resolve against the
+    session workspace, so a saved video lands where the rest of the
+    session's artifacts live (and gets picked up as a download)."""
+    import os
+    from pathlib import Path
+    expanded = os.path.expanduser(save_to)
+    if os.path.isabs(expanded):
+        p = Path(expanded).resolve()
+    else:
+        try:
+            from config import effective_workspace_dir
+            ws = effective_workspace_dir()
+        except Exception:  # noqa: BLE001
+            ws = os.getcwd()
+        p = Path(os.path.join(ws, expanded)).resolve()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_bytes(resp.content)
+    return {
+        "path": str(p),
+        "bytes_written": len(resp.content),
+        "content_type": resp.headers.get("content-type", ""),
+    }
 
 
 def _ms(start: float) -> int:
@@ -253,19 +326,50 @@ _SCHEMA_POST: Dict[str, Any] = {
     "type": "function",
     "function": {
         "name": "http_post",
-        "description": "Perform an HTTP POST request (sends JSON body). Requires approval.",
+        "description": (
+            "Perform an HTTP POST. Use `body` for a JSON payload, or "
+            "`form` for multipart/form-data (the equivalent of curl -F, "
+            "required by many upload / media-generation APIs). Use "
+            "`save_to` to write a binary response (video, image, pdf) to "
+            "a workspace file, and `timeout` for slow endpoints. "
+            "Requires approval."
+        ),
         "parameters": {
             "type": "object",
             "properties": {
                 "url": {"type": "string", "description": "Full URL to POST to."},
                 "body": {
                     "type": "object",
-                    "description": "JSON body to send.",
+                    "description": "JSON body to send. Omit when using `form`.",
+                },
+                "form": {
+                    "type": "object",
+                    "description": (
+                        "multipart/form-data fields (curl -F). Values are "
+                        "sent as strings. Use this instead of `body` when "
+                        "the API expects form fields rather than JSON."
+                    ),
                 },
                 "headers": {
                     "type": "object",
-                    "description": "Optional HTTP headers.",
+                    "description": (
+                        "Optional HTTP headers, e.g. "
+                        '{"Authorization": "Bearer {{CRED:my_token}}"}. '
+                        "Credential placeholders are substituted server-side."
+                    ),
                     "additionalProperties": {"type": "string"},
+                },
+                "save_to": {
+                    "type": "string",
+                    "description": (
+                        "Write the raw response to this workspace file "
+                        "(e.g. 'output.mp4') instead of returning it as "
+                        "text. Required for binary responses."
+                    ),
+                },
+                "timeout": {
+                    "type": "number",
+                    "description": "Seconds to wait (default 30, max 900).",
                 },
             },
             "required": ["url"],
