@@ -162,6 +162,9 @@ async def http_get(
     try:
         async with httpx.AsyncClient(timeout=_DEFAULT_TIMEOUT, follow_redirects=True) as client:
             resp = await client.get(url, headers=headers or {}, params=params or {})
+        fail = _http_failure(resp, _creds)
+        if fail:
+            return make_result(False, error=fail, duration_ms=_ms(start))
         return make_result(
             True,
             result={
@@ -221,9 +224,22 @@ async def http_post(
             else:
                 resp = await client.post(url, json=body or {}, headers=headers or {})
 
+        fail = _http_failure(resp, _creds)
+        if fail:
+            # Never write an error payload to disk. A 24-byte
+            # {"error":"Unauthorized"} saved as output.mp4 looks like a
+            # produced artifact to every layer above (the empty-artifact
+            # guard sees a file, the model reports success) — the user
+            # gets told a video was generated when nothing was. Fail
+            # loudly with the server's actual message instead.
+            return make_result(False, error=fail, duration_ms=_ms(start))
+
         if save_to:
             saved = _save_response(resp, save_to)
             saved["status_code"] = resp.status_code
+            warn = _suspect_not_binary(resp)
+            if warn:
+                saved["warning"] = warn
             return make_result(True, result=saved, duration_ms=_ms(start))
 
         return make_result(
@@ -262,6 +278,46 @@ def _safe_body(resp: httpx.Response) -> Any:
         return resp.json()
     except Exception:  # noqa: BLE001
         return resp.text[:4096]
+
+
+def _http_failure(resp: httpx.Response, creds: Dict[str, str]) -> Optional[str]:
+    """Return a user-facing error when the response is an HTTP failure.
+
+    Without this a 401 came back as success=True: the model saw a
+    "successful" call, save_to wrote {"error":"Unauthorized"} to
+    output.mp4, and the user was told their video was generated. Any
+    non-2xx is a failure and must say so, quoting the server's own
+    message (credential values redacted)."""
+    if resp.status_code < 400:
+        return None
+    try:
+        detail = resp.text[:600]
+    except Exception:  # noqa: BLE001
+        detail = f"<{len(resp.content)} bytes>"
+    hint = ""
+    if resp.status_code in (401, 403):
+        hint = (
+            " — the credential was rejected. Check that the agent's "
+            "credential value is current and that the header uses "
+            "{{CRED:name}} (a literal $VAR or placeholder text is sent "
+            "as-is and will 401)."
+        )
+    return _redact(f"HTTP {resp.status_code}: {detail}{hint}", creds)
+
+
+def _suspect_not_binary(resp: httpx.Response) -> Optional[str]:
+    """Flag a 2xx response that was saved but doesn't look like the
+    binary the caller expected — some APIs return 200 with an error
+    document. Advisory only; the file is still written."""
+    ctype = (resp.headers.get("content-type") or "").lower()
+    size = len(resp.content)
+    if any(t in ctype for t in ("json", "text/plain", "text/html")) or size < 1024:
+        return (
+            f"Saved {size} bytes of {ctype or 'unknown type'} — this does "
+            "NOT look like a media file. It is probably an error response. "
+            "Inspect it before reporting success to the user."
+        )
+    return None
 
 
 def _save_response(resp: httpx.Response, save_to: str) -> Dict[str, Any]:
