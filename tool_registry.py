@@ -468,6 +468,10 @@ class ToolRegistry:
         # output" failure mode that hit the user on the first Threads
         # task. Canonical URL is threads.net; threads.com is unrelated.
         from tools.threads_search_tool import THREADS_TOOLS
+        # Cross-session digest: the latest result of every scheduled job
+        # in one call, so overall status can be asked once instead of
+        # opening each reporting session in turn.
+        from tools.digest_tool import DIGEST_TOOLS
 
         for fn, schema, risk in (
             SHELL_TOOLS + FILE_TOOLS + HTTP_TOOLS
@@ -475,7 +479,7 @@ class ToolRegistry:
             + NOTIFY_TOOLS + REPORT_TOOLS + ANALYTIC_TOOLS
             + SEARCH_TOOLS + BROWSER_TOOLS + MARKITDOWN_TOOLS
             + CYBER_SKILLS_TOOLS + GITHUB_TRENDING_TOOLS
-            + CHROME_ATTACHED_TOOLS + THREADS_TOOLS
+            + CHROME_ATTACHED_TOOLS + THREADS_TOOLS + DIGEST_TOOLS
         ):
             self.register(fn, schema, risk)
 

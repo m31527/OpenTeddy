@@ -699,6 +699,45 @@ class Tracker:
         d["enabled"] = bool(d.get("enabled", 0))
         return d
 
+    async def schedule_digest(self, hours: int = 24) -> List[dict]:
+        """Latest run of every enabled schedule, across ALL sessions.
+
+        Each schedule reports into its own session, which is right for
+        running the work and useless for seeing the whole picture: an
+        owner would have to open every session in turn and read each
+        result separately. This joins each schedule to the task its last
+        run produced so one caller can see everything at once.
+
+        Deliberately crosses session boundaries — the opposite of memory
+        retrieval, which is session-scoped to stop projects contaminating
+        each other. That is safe here because it returns only what
+        scheduled jobs already produced, and dangerous to widen: do not
+        extend it to arbitrary conversation history.
+
+        Rows carry a `stale` flag rather than being filtered out. A job
+        that silently stopped reporting is exactly what an owner most
+        needs told — dropping it would make a broken schedule look like
+        an absence of news.
+        """
+        cutoff = (datetime.utcnow() - timedelta(hours=hours)).isoformat()
+        cur = await self.db.execute(
+            "SELECT st.id, st.session_id, st.cron, st.goal, st.last_run_at, "
+            "       st.last_status, st.last_error, st.consecutive_failures, "
+            "       st.next_run_at, "
+            "       s.title AS session_title, s.mode AS session_mode, "
+            "       t.summary AS result, t.status AS task_status "
+            "FROM scheduled_tasks st "
+            "LEFT JOIN sessions s ON s.id = st.session_id "
+            "LEFT JOIN tasks    t ON t.id = st.last_task_id "
+            "WHERE st.enabled = 1 "
+            "ORDER BY st.last_run_at DESC",
+        )
+        rows = [dict(r) for r in await cur.fetchall()]
+        for r in rows:
+            last = r.get("last_run_at") or ""
+            r["stale"] = bool(not last or last < cutoff)
+        return rows
+
     async def list_scheduled_tasks(
         self, session_id: Optional[str] = None, enabled_only: bool = False,
     ) -> List[dict]:

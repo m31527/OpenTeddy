@@ -3244,6 +3244,31 @@ async def create_schedule(body: _ScheduleCreateBody) -> dict:
     return {"success": True, "data": row, "error": None}
 
 
+@app.get("/digest")
+async def get_digest(hours: int = 24) -> dict:
+    """Latest run of every enabled schedule, across all sessions.
+
+    Backs both the "how are things today" question (via the
+    read_schedule_digest tool) and any external dashboard. Failed and
+    silent jobs come back flagged rather than filtered — a schedule that
+    quietly stopped firing is the single most important thing to surface,
+    and omitting it would make a broken job look like good news."""
+    rows = await tracker.schedule_digest(hours=hours)
+    return {
+        "success": True,
+        "data": {
+            "window_hours": hours,
+            "total": len(rows),
+            "needs_attention": [
+                r for r in rows
+                if r.get("last_status") == "failure" or r.get("stale")
+            ],
+            "schedules": rows,
+        },
+        "error": None,
+    }
+
+
 @app.get("/schedules")
 async def list_schedules(session_id: Optional[str] = None) -> dict:
     """List schedules. Filter by session_id if supplied (e.g. the UI
