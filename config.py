@@ -126,6 +126,16 @@ class Config:
         default_factory=lambda: os.getenv("QWEN_MODEL", "qwen3.5:2b")
     )
 
+    # Voice fast path — the SMALL model that answers spoken questions
+    # (voice_fastpath.py). Kept separate from the planner/executor choice
+    # on purpose: the voice lane trades depth for a sub-second reply, and
+    # a 2-4B model is the right tool even when the executor is 27B+.
+    # Defaults to the executor model so an untouched install still works.
+    voice_model: str = field(
+        default_factory=lambda: os.getenv("VOICE_MODEL", "")
+        or os.getenv("QWEN_MODEL", "qwen3.5:2b")
+    )
+
     # Ollama `keep_alive` — how long Ollama keeps a loaded model in VRAM
     # after the last request. Default 5 min unloads aggressively, which
     # forces a 5-15 s cold reload every time the user pauses for coffee.

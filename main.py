@@ -356,6 +356,11 @@ async def _warmup_ollama_models() -> None:
         models_to_warm.append(("orchestrator", g_model))
     if q_model and q_model != g_model:
         models_to_warm.append(("executor", q_model))
+    # The voice lane has a ~1.5 s budget; a cold load alone is 5-30 s.
+    # It must be resident from boot, not loaded on the first question.
+    v_model = (getattr(config, "voice_model", "") or "").strip()
+    if v_model and v_model not in (g_model, q_model):
+        models_to_warm.append(("voice", v_model))
 
     if not models_to_warm:
         return
@@ -3210,6 +3215,39 @@ async def ollama_status() -> dict:
 # around the public surface. Request / response shapes are deliberately
 # flat dicts (not Pydantic models) so curl-based usage stays trivial — the
 # UI work is a v2 concern.
+
+class _VoiceAskBody(BaseModel):
+    question: str
+    session_id: Optional[str] = None
+    hours: int = 24
+    # Optional override so a client can compare small models for latency
+    # without touching config.
+    model: Optional[str] = None
+
+
+@app.post("/voice/ask")
+async def voice_ask(body: _VoiceAskBody) -> dict:
+    """Voice fast path: one spoken question → one SPOKEN answer, fast.
+
+    Routes to the cheapest lane that can answer (template / small model /
+    background work) and returns per-lane timings so latency is measured
+    rather than assumed. When the answer needs real work, the job is
+    dispatched to the orchestrator and `task_id` comes back immediately;
+    completion arrives on the normal task WebSocket. See voice_fastpath.py.
+    """
+    from voice_fastpath import ask as _voice_ask
+    try:
+        return await _voice_ask(
+            body.question, session_id=body.session_id,
+            hours=body.hours, model=body.model,
+        )
+    except Exception as exc:  # noqa: BLE001
+        # httpx timeouts stringify to "" — keep the type so the log says
+        # what actually happened.
+        logger.error("voice_ask failed: %s: %s", type(exc).__name__, exc,
+                     exc_info=True)
+        raise HTTPException(status_code=502, detail=f"{type(exc).__name__}: {exc}")
+
 
 class _ScheduleCreateBody(BaseModel):
     session_id: str
