@@ -234,6 +234,14 @@ cd ~/OpenTeddy
 ./run.sh --help             # full flag list
 ```
 
+To stop it (e.g. before a `git pull` + restart), use the matching stopper rather than `pkill` — `--reload` runs a supervisor *and* a worker, and killing only the worker just gets it respawned:
+
+```bash
+./stop.sh                   # stop the server on :8000 (or OPENTEDDY_PORT)
+./stop.sh --port 8001       # a different port
+./stop.sh --all             # every OpenTeddy instance on this machine
+```
+
 > ⚠️ **`--host 0.0.0.0` opens the agent to every machine that can reach the port.** The agent has `shell_exec_write` / `delete_file` and other powerful tools. Only use `0.0.0.0` when you trust every device on that network — a private home LAN, a Tailscale tailnet, or a server behind a real firewall. For public servers, put it behind nginx / Caddy / Cloudflare Tunnel with auth. **For "I want to use OpenTeddy from my phone", the recommended setup is `--host 0.0.0.0` + Tailscale — see [Remote Access](#remote-access-phone--telegram--tailscale).**
 
 Customisation flags for the **installer**: `--dir <path>`, `--force`, `--skip-models`. See `./install.sh --help`.
