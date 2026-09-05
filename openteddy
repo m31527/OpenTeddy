@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# openteddy — CLI door into the OpenTeddy Runtime.
+#
+# Symlink this anywhere on your PATH and it still finds the repo's venv:
+#   ln -s "$(pwd)/openteddy" ~/.local/bin/openteddy
+#
+# Talks to the running runtime (default http://127.0.0.1:8000, or
+# $OPENTEDDY_URL). It does not start one — ./run.sh or
+# `openteddy service install` does that.
+set -euo pipefail
+
+SELF="${BASH_SOURCE[0]}"
+# Resolve symlinks portably (macOS readlink may lack -f on older systems).
+while [[ -L "$SELF" ]]; do
+  DIR="$(cd "$(dirname "$SELF")" && pwd)"
+  SELF="$(readlink "$SELF")"
+  [[ "$SELF" != /* ]] && SELF="$DIR/$SELF"
+done
+DIR="$(cd "$(dirname "$SELF")" && pwd)"
+
+PY="$DIR/.venv/bin/python"
+[[ -x "$PY" ]] || PY="$(command -v python3)"
+exec "$PY" "$DIR/openteddy_cli.py" "$@"

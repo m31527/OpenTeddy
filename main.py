@@ -1980,6 +1980,21 @@ async def _start_task(
         token = set_triggered_by(origin) if origin else None
         try:
             return await orchestrator.run(req)
+        except asyncio.CancelledError:
+            # A background task has no waiter to record the interrupt, so
+            # without this the row stays "running" forever and every
+            # follower (SSE, CLI --follow) waits on a task that is gone.
+            cancelled_msg = "⏹️ 任務已被使用者中斷"
+            try:
+                await tracker.update_task_status(task_id, TaskStatus.FAILED, cancelled_msg)
+                await ws_manager.broadcast({
+                    "type": "task.done", "task_id": task_id,
+                    "session_id": session_id, "status": "failed",
+                    "summary": cancelled_msg, "cancelled": True,
+                })
+            except Exception:  # noqa: BLE001
+                pass
+            raise
         finally:
             if token is not None:
                 reset_triggered_by(token)
@@ -3120,6 +3135,27 @@ async def generate_skill(name: str, description: str) -> dict:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+class _SkillRunBody(BaseModel):
+    input: dict[str, Any] = {}
+
+
+@app.post("/skills/{name}/run")
+async def run_skill(name: str, body: _SkillRunBody) -> dict:
+    """Invoke one skill directly with the given input — no planner, no
+    model. This is the Runtime's "call a capability by name" door for
+    CLI and external programs; the orchestrator keeps choosing skills on
+    its own for natural-language tasks."""
+    if not await tracker.get_skill(name):
+        raise HTTPException(status_code=404, detail=f"Skill '{name}' not found")
+    import time as _time
+    t0 = _time.monotonic()
+    ok, output = await skill_factory.invoke_skill(
+        name, subtask_id=f"direct-{uuid.uuid4().hex[:8]}", input_data=body.input,
+    )
+    return {"name": name, "success": ok, "output": output,
+            "duration_ms": int((_time.monotonic() - t0) * 1000)}
 
 
 @app.post("/skills/{name}/promote")

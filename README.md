@@ -262,6 +262,37 @@ Request fields: `intent` (required), `session_id` **or** `agent_id` (a session i
 
 **Unattended runs need a tool scope.** An agent may declare `allowed_tools` (see `GET /tools` for names). A scoped agent's executor sees only those tools and the registry refuses everything else — so a prompt injection cannot reach `shell`/`python` to route around the domain allowlist. Only a scoped agent may run with `require_approval: false` (or auto-approve inside a schedule); the destructive-action denylist is enforced regardless. `POST /run` remains as the synchronous form the web UI uses.
 
+### CLI
+
+`./openteddy` is a thin client over the Task API — symlink it onto your PATH (`ln -s "$(pwd)/openteddy" ~/.local/bin/openteddy`). It submits work, follows the task's event stream, and answers approval prompts from the terminal, so the web UI can stay closed:
+
+```bash
+openteddy run "Analyze ~/sales.xlsx and create a chart"   # follow live; approve prompts with y/N
+openteddy run "..." --agent 客服 --unattended            # no prompts — needs a scoped agent
+openteddy run "..." --local-only --no-follow             # print the task id and return
+
+openteddy task list                 # recent tasks
+openteddy task status <id> --follow # attach to a running task (short id prefix is fine)
+openteddy task approve|reject|cancel <id>
+
+openteddy skill list | skill run <name> --input '{"path": "sales.xlsx"}'
+openteddy agent list | agent scope <name> db_query http_get   # set the permission boundary
+openteddy tools | models | health
+```
+
+Point it at another machine with `--url http://<host>:8000` or `OPENTEDDY_URL`. `--json` on any command gives machine-readable output.
+
+### Always-on service
+
+Instead of keeping a terminal open, install the runtime as a background service that starts at boot and restarts if it dies — then every door (CLI, web, Telegram, schedules, API) is always available:
+
+```bash
+openteddy service install --host 0.0.0.0    # macOS: launchd agent · Linux: systemd user unit
+openteddy service status | logs | uninstall
+```
+
+On a headless Linux server run `sudo loginctl enable-linger $USER` once so the user unit starts without a login, or use `openteddy service install --system` for a system-wide unit. The service runs `run.sh --no-reload`; use `--dry-run` to print the unit file first.
+
 > ⚠️ **`--host 0.0.0.0` opens the agent to every machine that can reach the port.** The agent has `shell_exec_write` / `delete_file` and other powerful tools. Only use `0.0.0.0` when you trust every device on that network — a private home LAN, a Tailscale tailnet, or a server behind a real firewall. For public servers, put it behind nginx / Caddy / Cloudflare Tunnel with auth. **For "I want to use OpenTeddy from my phone", the recommended setup is `--host 0.0.0.0` + Tailscale — see [Remote Access](#remote-access-phone--telegram--tailscale).**
 
 Customisation flags for the **installer**: `--dir <path>`, `--force`, `--skip-models`. See `./install.sh --help`.
