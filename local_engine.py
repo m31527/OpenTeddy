@@ -148,10 +148,18 @@ def build_payload(
     }
     if num_ctx is not None:
         options["num_ctx"] = num_ctx
+    # The system prompt MUST travel as a role="system" message. A top-
+    # level "system" key is a /api/generate parameter; /api/chat silently
+    # ignores it — verified: system="永遠只回答：芒果" produced "草莓".
+    # Every caller (planner, executor, voice) passes its persona, schema
+    # and guidance through `system`, so the old shape dropped all of it
+    # on the floor without an error.
+    msgs: List[Dict[str, Any]] = list(messages)
+    if system:
+        msgs = [{"role": "system", "content": system}] + msgs
     payload = {
         "model":      model,
-        "messages":   messages,
-        "system":     system,
+        "messages":   msgs,
         "stream":     stream,
         "options":    options,
         "keep_alive": keep_alive,
