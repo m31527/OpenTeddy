@@ -1829,127 +1829,350 @@ def _orchestrator_safety_check() -> Optional[str]:
     )
 
 
-@app.post("/run", response_model=RunResponse, status_code=202)
-async def run_task(body: RunRequest) -> RunResponse:
-    # Pre-flight: refuse to start a task we can already see is going
-    # to fail. See _orchestrator_safety_check() for the rationale.
+# ── Task API v1 ───────────────────────────────────────────────────────────────
+#
+# One launcher, many doors. Web UI, CLI, Telegram, scheduler and any
+# external program all create work the same way; only the door differs.
+# POST /tasks is the canonical entry (returns as soon as the task is
+# accepted); POST /run is the original synchronous form kept for the web
+# UI and back-compat — both are thin wrappers over _start_task.
+
+from models import TaskAccepted as _TaskAccepted, TaskCreate as _TaskCreate
+
+_TERMINAL_STATUSES = {"completed", "failed", "escalated"}
+
+
+def _validate_tool_scope(names: list) -> list:
+    """An agent's allowed_tools must name real tools — a typo would
+    silently scope the agent to nothing."""
+    known = {t["name"] for t in tool_registry.list_tools()}
+    clean = [str(n).strip() for n in (names or []) if str(n).strip()]
+    unknown = [n for n in clean if n not in known]
+    if unknown:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown tool(s) in allowed_tools: {', '.join(unknown)}. "
+                   f"See GET /tools for valid names.",
+        )
+    return list(dict.fromkeys(clean))
+
+
+async def _start_task(
+    *,
+    goal: str,
+    context: dict,
+    session_id: Optional[str],
+    agent_id: Optional[str] = None,
+    mode: Optional[SessionMode] = None,
+    priority: int = 1,
+    task_id: Optional[str] = None,
+    privacy: Optional[str] = None,
+    require_approval: Optional[bool] = None,
+) -> tuple[str, Optional[str], Optional["asyncio.Task"], Optional[str]]:
+    """Validate, bind, and launch a task WITHOUT waiting for it.
+
+    Returns (task_id, session_id, asyncio_task, shortcut_message). When
+    the natural-language scheduling shortcut fires, no task runs and
+    shortcut_message carries the confirmation text instead.
+    """
     block_msg = _orchestrator_safety_check()
     if block_msg:
-        # 400 (not 422) so generic FastAPI validation error handlers
-        # don't mangle the body — the UI displays our message verbatim.
-        from fastapi import HTTPException
         raise HTTPException(status_code=400, detail=block_msg)
+    task_id = task_id or str(uuid.uuid4())
 
-    # Use a client-supplied task_id when present so the UI can call
-    # POST /tasks/{id}/cancel (Stop button) on the *same* id it sent.
-    task_id = body.task_id or str(uuid.uuid4())
+    # ── Agent binding: a task aimed at an agent gets a session built
+    # from it (persona, DB, credentials, scope all come along).
+    agent_row = None
+    if agent_id:
+        agent_row = await tracker.get_agent(agent_id)
+        if not agent_row:
+            raise HTTPException(status_code=404, detail="Agent not found")
+        if not session_id:
+            session_id = str(uuid.uuid4())
+            await tracker.create_session_from_agent(
+                session_id, agent_row, title=goal[:60] or "New session",
+            )
 
-    # Resolve the mode. Priority:
-    #   1. Explicit override in body.mode (rare — UI usually omits it)
-    #   2. The mode stored on the session row (what the user picked in the UI)
-    #   3. Default to CODE for back-compat with sessions that pre-date modes
-    resolved_mode = body.mode or SessionMode.CODE
-    if body.session_id and not body.mode:
+    # ── Mode: explicit > session's > CODE (back-compat) ──────────────────
+    resolved_mode = mode or SessionMode.CODE
+    sess = None
+    if session_id:
         try:
-            sess = await tracker.get_session(body.session_id)
-            if sess and sess.get("mode"):
-                resolved_mode = SessionMode(sess["mode"])
+            sess = await tracker.get_session(session_id)
         except Exception:  # noqa: BLE001
-            pass
-
-    req = TaskRequest(
-        id=task_id,
-        goal=body.goal,
-        context=body.context,
-        priority=body.priority,
-        session_id=body.session_id,
-        mode=resolved_mode,
-    )
-    # Auto-create the session row if the client gave us a new id so the
-    # sessions list picks it up on refresh.
-    if body.session_id:
+            sess = None
+        if sess and sess.get("mode") and not mode:
+            resolved_mode = SessionMode(sess["mode"])
+    if not session_id:
+        # Headless callers that bind to nothing still get a session, so
+        # memory / workspace / history behave exactly as for the UI.
+        session_id = str(uuid.uuid4())
+    if sess is None:
         try:
             await tracker.create_session(
-                body.session_id,
-                body.goal[:60] or "New session",
-                mode=resolved_mode.value,
+                session_id, goal[:60] or "New session", mode=resolved_mode.value,
             )
+            if privacy == "local_only":
+                await tracker.update_session_local_only(session_id, True)
         except Exception:  # noqa: BLE001
             pass
 
-    # ── Natural-language scheduling shortcut ──────────────────────────────
-    # Before kicking off the orchestrator, check if the user is actually
-    # asking for a recurring task ("每天早上 9 點 ...", "every Monday at 8
-    # ..."). The detector runs a cheap regex pre-screen first and only
-    # calls the LLM when the wording matches a time-recurrence pattern, so
-    # normal chat messages pay zero cost. When a schedule is detected we
-    # add it via scheduler.add_schedule() and return a 200 with a
-    # confirmation message — the orchestrator never runs for this turn,
-    # which is what users want: "schedule it, don't do it now".
-    if body.session_id:
+    # ── Unattended runs need a declared tool scope ───────────────────────
+    # Auto-approving an agent that can reach shell/python would hand a
+    # prompt injection the keys, so require_approval=false is refused
+    # unless the task's agent has allowed_tools.
+    origin = ""
+    if require_approval is False:
+        if agent_row is None and sess and (sess.get("agent_id") or "").strip():
+            agent_row = await tracker.get_agent(sess["agent_id"])
         try:
-            from scheduling_intent import detect_scheduling_intent
-            from scheduler import add_schedule
-            intent = await detect_scheduling_intent(body.goal)
-            if intent is not None:
-                row = await add_schedule(
-                    session_id=body.session_id,
-                    cron=intent.cron,
-                    goal=intent.task_goal,
-                )
-                short_id = (row.get("id") or "")[:8]
-                next_at = (row.get("next_run_at") or "").replace("T", " ")[:16]
-                msg = (
-                    f"✓ 已排好：{intent.summary}\n"
-                    f"任務：{intent.task_goal}\n"
-                    f"下次執行：{next_at or '(scheduler 計算中)'} · id: {short_id}\n"
-                    f"取消請說「取消那個排程」"
-                )
-                # Use TaskStatus.COMPLETED so the UI doesn't render this
-                # as an error — it's a successful (very fast) outcome.
-                from models import TaskStatus
-                return RunResponse(
-                    task_id=task_id,
-                    status=TaskStatus.COMPLETED,
-                    message=msg,
-                )
-        except Exception as exc:  # noqa: BLE001
-            # Detector / scheduler crash MUST NOT block the chat. Log
-            # at warning so we notice but fall through to the planner.
-            logger.warning(
-                "scheduling_intent detection failed (falling through to "
-                "planner): %s", exc, exc_info=False,
+            scope = json.loads((agent_row or {}).get("allowed_tools") or "[]")
+        except Exception:  # noqa: BLE001
+            scope = []
+        if not scope:
+            raise HTTPException(
+                status_code=400,
+                detail="require_approval=false needs an agent with a declared "
+                       "tool scope (allowed_tools); this task has none. "
+                       "Unattended runs are only allowed inside a scope.",
             )
+        origin = "api_trusted"
 
-    # Run the orchestrator as a tracked asyncio.Task so /tasks/{id}/cancel
-    # can call .cancel() on it mid-flight. Without this wrapper we'd have
-    # no handle to interrupt the coroutine from another HTTP handler.
-    run_task_obj = asyncio.create_task(orchestrator.run(req))
+    ctx = dict(context or {})
+    if privacy:
+        ctx["privacy"] = privacy
+    req = TaskRequest(
+        id=task_id, goal=goal, context=ctx, priority=priority,
+        session_id=session_id, mode=resolved_mode,
+    )
+
+    # ── Natural-language scheduling shortcut ──────────────────────────────
+    # "每天早上 9 點 ..." / "every Monday at 8 ..." means "schedule it,
+    # don't do it now". Cheap regex pre-screen; the LLM only runs when
+    # the wording matches a recurrence pattern.
+    try:
+        from scheduling_intent import detect_scheduling_intent
+        from scheduler import add_schedule
+        intent = await detect_scheduling_intent(goal)
+        if intent is not None:
+            row = await add_schedule(
+                session_id=session_id, cron=intent.cron, goal=intent.task_goal,
+            )
+            short_id = (row.get("id") or "")[:8]
+            next_at = (row.get("next_run_at") or "").replace("T", " ")[:16]
+            msg = (
+                f"✓ 已排好：{intent.summary}\n"
+                f"任務：{intent.task_goal}\n"
+                f"下次執行：{next_at or '(scheduler 計算中)'} · id: {short_id}\n"
+                f"取消請說「取消那個排程」"
+            )
+            return task_id, session_id, None, msg
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "scheduling_intent detection failed (falling through to planner): %s",
+            exc, exc_info=False,
+        )
+
+    async def _run():
+        from tools._context import reset_triggered_by, set_triggered_by
+        token = set_triggered_by(origin) if origin else None
+        try:
+            return await orchestrator.run(req)
+        finally:
+            if token is not None:
+                reset_triggered_by(token)
+
+    # Tracked so POST /tasks/{id}/cancel can interrupt it mid-flight.
+    run_task_obj = asyncio.create_task(_run())
     _running_tasks[task_id] = run_task_obj
+    run_task_obj.add_done_callback(lambda _t: _running_tasks.pop(task_id, None))
+    return task_id, session_id, run_task_obj, None
+
+
+async def _await_task(task_id: str, run_task_obj: "asyncio.Task") -> tuple[TaskStatus, str]:
+    """Wait for a launched task; a user cancel is reported, not raised."""
     try:
         result = await run_task_obj
     except asyncio.CancelledError:
         logger.info("Task %s was cancelled by user (Stop button)", task_id)
         cancelled_msg = "⏹️ 任務已被使用者中斷"
-        # Best-effort: mark the task failed so the history reflects the
-        # interrupt (swallow errors — DB state isn't essential here).
         try:
             await tracker.update_task_status(task_id, TaskStatus.FAILED, cancelled_msg)
         except Exception:  # noqa: BLE001
             pass
-        return RunResponse(
-            task_id=task_id,
-            status=TaskStatus.FAILED,
-            message=cancelled_msg,
-        )
-    finally:
-        _running_tasks.pop(task_id, None)
+        return TaskStatus.FAILED, cancelled_msg
+    return result.status, result.summary
 
-    return RunResponse(
-        task_id=result.task_id,
-        status=result.status,
-        message=result.summary,
+
+@app.post("/run", response_model=RunResponse, status_code=202)
+async def run_task(body: RunRequest) -> RunResponse:
+    """Original synchronous entry point (web UI): launches and WAITS."""
+    task_id, _sid, run_task_obj, shortcut = await _start_task(
+        goal=body.goal, context=body.context, session_id=body.session_id,
+        mode=body.mode, priority=body.priority, task_id=body.task_id,
     )
+    if shortcut is not None:
+        return RunResponse(task_id=task_id, status=TaskStatus.COMPLETED, message=shortcut)
+    status, message = await _await_task(task_id, run_task_obj)
+    return RunResponse(task_id=task_id, status=status, message=message)
+
+
+@app.post("/tasks", response_model=_TaskAccepted, status_code=202)
+async def create_task(body: _TaskCreate) -> _TaskAccepted:
+    """Canonical task entry: accept now, run in the background.
+
+    Progress: GET /tasks/{id} (poll) or GET /tasks/{id}/events (stream).
+    Approvals: GET /tasks/{id}/approvals, POST /tasks/{id}/approve.
+    Pass wait=true to block until the task finishes.
+    """
+    task_id, session_id, run_task_obj, shortcut = await _start_task(
+        goal=body.intent, context=body.context, session_id=body.session_id,
+        agent_id=body.agent_id, mode=body.mode, priority=body.priority,
+        task_id=body.task_id,
+        privacy=body.privacy.value if body.privacy else None,
+        require_approval=body.require_approval,
+    )
+    if shortcut is not None:
+        return _TaskAccepted(task_id=task_id, session_id=session_id,
+                             status=TaskStatus.COMPLETED, message=shortcut)
+    if body.wait:
+        status, message = await _await_task(task_id, run_task_obj)
+        return _TaskAccepted(task_id=task_id, session_id=session_id,
+                             status=status, message=message)
+    return _TaskAccepted(task_id=task_id, session_id=session_id,
+                         status=TaskStatus.RUNNING, message="accepted")
+
+
+@app.get("/tasks/{task_id}/events")
+async def task_events(task_id: str, since: float = 0.0):
+    """Server-sent events for ONE task: plan stream, subtask progress,
+    tool calls/results, approval requests, artifacts, and finally
+    task.done — after which the stream closes. Replays buffered events
+    newer than `since` so a late subscriber still sees the beginning."""
+    from fastapi.responses import StreamingResponse
+
+    queue: "asyncio.Queue[dict]" = asyncio.Queue()
+
+    async def _listener(ev: dict) -> None:
+        if ev.get("task_id") == task_id:
+            await queue.put(ev)
+
+    token = ws_manager.subscribe(_listener)
+
+    def _sse(ev: dict) -> str:
+        return "data: " + json.dumps(ev, ensure_ascii=False) + "\n\n"
+
+    async def _terminal_row() -> Optional[dict]:
+        if task_id in _running_tasks:
+            return None
+        row = await tracker.get_task(task_id)
+        if row and row.get("status") in _TERMINAL_STATUSES:
+            return row
+        return None
+
+    async def gen():
+        try:
+            # 1) replay
+            for ts, msg in list(ws_manager._buffer):
+                if ts <= since:
+                    continue
+                try:
+                    ev = json.loads(msg)
+                except Exception:  # noqa: BLE001
+                    continue
+                if ev.get("task_id") != task_id:
+                    continue
+                yield "data: " + msg + "\n\n"
+                if ev.get("type") == "task.done":
+                    return
+            # 2) already finished before we subscribed (or the done event
+            #    aged out of the buffer) → synthesize the close.
+            row = await _terminal_row()
+            if row:
+                yield _sse({"type": "task.done", "task_id": task_id,
+                            "status": row["status"], "summary": row.get("summary"),
+                            "replayed": True})
+                return
+            # 3) live
+            while True:
+                try:
+                    ev = await asyncio.wait_for(queue.get(), timeout=15.0)
+                except asyncio.TimeoutError:
+                    yield ": keepalive\n\n"
+                    row = await _terminal_row()
+                    if row:
+                        yield _sse({"type": "task.done", "task_id": task_id,
+                                    "status": row["status"],
+                                    "summary": row.get("summary"), "replayed": True})
+                        return
+                    continue
+                yield _sse(ev)
+                if ev.get("type") == "task.done":
+                    return
+        finally:
+            ws_manager.unsubscribe(token)
+
+    return StreamingResponse(
+        gen(), media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.get("/tasks/{task_id}/approvals")
+async def task_approvals(task_id: str) -> dict:
+    """Pending high-risk tool calls waiting on a human, for this task."""
+    pending = await approval_store.get_pending()
+    return {"approvals": [a.to_dict() for a in pending if a.task_id == task_id]}
+
+
+async def _resolve_task_approvals(task_id: str, approved: bool) -> dict:
+    pending = [a for a in await approval_store.get_pending() if a.task_id == task_id]
+    done = 0
+    for a in pending:
+        if await approval_store.resolve(a.id, approved=approved):
+            done += 1
+    return {"task_id": task_id, "resolved": done,
+            "status": "approved" if approved else "rejected"}
+
+
+@app.post("/tasks/{task_id}/approve")
+async def approve_task(task_id: str) -> dict:
+    """Approve every pending tool call of this task — the headless
+    equivalent of clicking Approve in the web UI."""
+    return await _resolve_task_approvals(task_id, approved=True)
+
+
+@app.post("/tasks/{task_id}/reject")
+async def reject_task(task_id: str) -> dict:
+    return await _resolve_task_approvals(task_id, approved=False)
+
+
+@app.get("/models")
+async def list_models() -> dict:
+    """Which models this runtime will use, and through which engine."""
+    import local_engine
+    cloud = {}
+    for provider in ("claude", "openai", "gemini", "deepseek", "openrouter"):
+        key_attr = "anthropic_api_key" if provider == "claude" else f"{provider}_api_key"
+        cloud[provider] = {
+            "model": getattr(config, f"{provider}_model", "") or "",
+            "configured": bool(getattr(config, key_attr, "") or ""),
+        }
+    return {
+        "engine": local_engine.active_engine(),
+        "base_url": local_engine.base_url(),
+        "planner": getattr(config, "gemma_model", ""),
+        "executor": getattr(config, "qwen_model", ""),
+        "voice": getattr(config, "voice_model", ""),
+        "cloud": cloud,
+    }
+
+
+# Approval requests become events on the same channel as tool events, so
+# a CLI / SSE consumer learns a human is needed without polling.
+tool_registry.on_approval = ws_manager.broadcast
 
 
 @app.post("/tasks/{task_id}/cancel")
@@ -2073,6 +2296,9 @@ async def get_task_status(task_id: str) -> StatusResponse:
         status=TaskStatus(task["status"]),
         subtasks=subtasks,
         summary=task.get("summary"),
+        session_id=task.get("session_id"),
+        created_at=task.get("created_at"),
+        updated_at=task.get("updated_at") or task.get("completed_at"),
     )
 
 
@@ -2121,6 +2347,10 @@ def _agent_public(row: dict) -> dict:
     _docs = row.get("api_docs") or ""
     out["has_api_docs"] = bool(_docs.strip())
     out["api_docs_chars"] = len(_docs)
+    try:
+        out["allowed_tools"] = json.loads(row.get("allowed_tools") or "[]")
+    except Exception:  # noqa: BLE001
+        out["allowed_tools"] = []
     return out
 
 
@@ -2158,6 +2388,7 @@ async def list_agents() -> dict:
 @app.post("/agents")
 async def create_agent(body: CreateAgentRequest) -> dict:
     data = body.model_dump()
+    data["allowed_tools"] = _validate_tool_scope(data.get("allowed_tools") or [])
     if data.get("api_docs"):
         import api_docs as _ad
         data["api_docs"] = _ad.condense(data["api_docs"])
@@ -2201,6 +2432,14 @@ async def update_agent(agent_id: str, body: UpdateAgentRequest) -> dict:
     except Exception:  # noqa: BLE001
         _domains = body.allowed_domains or []
 
+    if body.allowed_tools is None:
+        try:
+            _tool_scope = json.loads(row.get("allowed_tools") or "[]")
+        except Exception:  # noqa: BLE001
+            _tool_scope = []
+    else:
+        _tool_scope = _validate_tool_scope(body.allowed_tools)
+
     if body.api_docs is None:
         _docs = row.get("api_docs") or ""
     else:
@@ -2216,6 +2455,7 @@ async def update_agent(agent_id: str, body: UpdateAgentRequest) -> dict:
         api_credentials=_creds,
         allowed_domains=_domains,
         api_docs=_docs,
+        allowed_tools=_tool_scope,
         created_at=datetime.fromisoformat(row["created_at"]),
     )
     # Clearing the DB binding clears the snapshot too.

@@ -242,6 +242,26 @@ To stop it (e.g. before a `git pull` + restart), use the matching stopper rather
 ./stop.sh --all             # every OpenTeddy instance on this machine
 ```
 
+### Task API (headless runtime)
+
+The web UI is one door among several. Any program can create work the same way — the planner, model routing, tools, verification and memory are identical:
+
+```bash
+# accept now, run in the background
+curl -s localhost:8000/tasks -H 'Content-Type: application/json' \
+  -d '{"intent": "Analyze ~/sales.xlsx and create a chart"}'
+# → {"task_id": "...", "session_id": "...", "status": "running"}
+
+curl -s localhost:8000/tasks/<task_id>            # poll status + subtasks
+curl -N localhost:8000/tasks/<task_id>/events     # SSE: plan, tool calls, artifacts … task.done
+curl -s localhost:8000/tasks/<task_id>/approvals  # high-risk calls waiting on a human
+curl -X POST localhost:8000/tasks/<task_id>/approve   # …or /reject, or /cancel
+```
+
+Request fields: `intent` (required), `session_id` **or** `agent_id` (a session is built from the agent — persona, database, credentials and tool scope come along), `mode`, `privacy: "local_only"` (tightens the session's privacy for this task, never loosens), `wait: true` (block until done), and `require_approval: false` for unattended runs.
+
+**Unattended runs need a tool scope.** An agent may declare `allowed_tools` (see `GET /tools` for names). A scoped agent's executor sees only those tools and the registry refuses everything else — so a prompt injection cannot reach `shell`/`python` to route around the domain allowlist. Only a scoped agent may run with `require_approval: false` (or auto-approve inside a schedule); the destructive-action denylist is enforced regardless. `POST /run` remains as the synchronous form the web UI uses.
+
 > ⚠️ **`--host 0.0.0.0` opens the agent to every machine that can reach the port.** The agent has `shell_exec_write` / `delete_file` and other powerful tools. Only use `0.0.0.0` when you trust every device on that network — a private home LAN, a Tailscale tailnet, or a server behind a real firewall. For public servers, put it behind nginx / Caddy / Cloudflare Tunnel with auth. **For "I want to use OpenTeddy from my phone", the recommended setup is `--host 0.0.0.0` + Tailscale — see [Remote Access](#remote-access-phone--telegram--tailscale).**
 
 Customisation flags for the **installer**: `--dir <path>`, `--force`, `--skip-models`. See `./install.sh --help`.

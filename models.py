@@ -238,6 +238,13 @@ class AgentDefinition(BaseModel):
     # time (see api_docs.py) and injected into prompts, so the model
     # knows WHICH endpoints exist, not just which hosts it may call.
     api_docs: str = ""
+    # Tool scope — the permission boundary for this agent. Empty list =
+    # unrestricted (every tool the mode exposes, the historical
+    # behaviour). Non-empty = the executor exposes ONLY these tools and
+    # the registry refuses everything else, so a prompt injection cannot
+    # reach shell/python to route around the domain allowlist. A scoped
+    # agent is also the precondition for unattended auto-approval.
+    allowed_tools: List[str] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
@@ -255,6 +262,7 @@ class CreateAgentRequest(BaseModel):
     api_credentials: Dict[str, str] = Field(default_factory=dict)
     allowed_domains: List[str] = Field(default_factory=list)
     api_docs: str = ""
+    allowed_tools: List[str] = Field(default_factory=list)
 
 
 class UpdateAgentRequest(BaseModel):
@@ -272,6 +280,7 @@ class UpdateAgentRequest(BaseModel):
     api_credentials: Optional[Dict[str, str]] = None
     allowed_domains: Optional[List[str]] = None
     api_docs: Optional[str] = None
+    allowed_tools: Optional[List[str]] = None
 
 
 class CreateSessionRequest(BaseModel):
@@ -292,6 +301,53 @@ class StatusResponse(BaseModel):
     status: TaskStatus
     subtasks: List[SubTask]
     summary: Optional[str] = None
+    session_id: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+# ── Task API v1 (headless / any-interface entry point) ───────────────────────
+
+class TaskPrivacy(str, Enum):
+    LOCAL_ONLY  = "local_only"    # never dispatch to a cloud model
+    ALLOW_CLOUD = "allow_cloud"   # the session's own setting decides
+
+
+class TaskCreate(BaseModel):
+    """POST /tasks — the one request shape every interface uses.
+
+    `intent` is the natural-language goal. Bind the task to an existing
+    session, or to an agent (a session is created from it), or to
+    neither (a fresh session is created). The call returns as soon as
+    the task is accepted unless `wait` is set.
+    """
+    intent: str
+    context: Dict[str, Any] = Field(default_factory=dict)
+    session_id: Optional[str] = None
+    agent_id: Optional[str] = None
+    mode: Optional[SessionMode] = None
+    privacy: Optional[TaskPrivacy] = Field(
+        default=None,
+        description="local_only tightens the session's privacy for this "
+                    "task; it can never loosen it.",
+    )
+    require_approval: Optional[bool] = Field(
+        default=None,
+        description="False = run unattended: high-risk tools that pass the "
+                    "destructive denylist are auto-approved. Only allowed "
+                    "when the task's agent declares a tool scope "
+                    "(allowed_tools); refused with 400 otherwise.",
+    )
+    wait: bool = Field(default=False, description="Block until the task finishes.")
+    task_id: Optional[str] = None
+    priority: int = Field(default=1, ge=1, le=10)
+
+
+class TaskAccepted(BaseModel):
+    task_id: str
+    session_id: Optional[str] = None
+    status: TaskStatus
+    message: str = ""
 
 
 class SkillListResponse(BaseModel):
@@ -366,6 +422,7 @@ CREATE TABLE IF NOT EXISTS agents (
     api_credentials TEXT NOT NULL DEFAULT '{}',
     allowed_domains TEXT NOT NULL DEFAULT '[]',
     api_docs      TEXT NOT NULL DEFAULT '',
+    allowed_tools TEXT NOT NULL DEFAULT '[]',
     created_at    TEXT NOT NULL,
     updated_at    TEXT NOT NULL
 );

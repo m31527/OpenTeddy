@@ -262,9 +262,16 @@ class ToolRegistry:
         args: Dict[str, Any],
         task_id: str = "unknown",
         session_id: str = "",
+        allowed_tools: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """
         Execute a tool by name.
+
+        allowed_tools is the agent's tool scope (its permission boundary).
+        None/empty = unrestricted. Non-empty = anything outside the list is
+        refused HERE, regardless of what the model was shown — the executor
+        also hides out-of-scope schemas, but a model can still name a tool
+        it wasn't offered, and this is the layer that has to hold.
 
         LOW risk  → call directly.
         HIGH risk → create PendingApproval, wait for human resolution.
@@ -281,6 +288,21 @@ class ToolRegistry:
 
         risk: RiskLevel = tool["risk"]
         fn: Callable = tool["fn"]
+
+        scoped = bool(allowed_tools)
+        if scoped and tool_name not in allowed_tools:
+            logger.warning(
+                "task=%s tool=%s refused: outside the agent's tool scope %r",
+                task_id, tool_name, allowed_tools,
+            )
+            return make_result(
+                False,
+                error=(
+                    f"🚫 '{tool_name}' is outside this agent's allowed tools "
+                    f"({', '.join(allowed_tools)}). Use one of those instead."
+                ),
+                duration_ms=0,
+            )
 
         # ── Telegram-driven safety policy ────────────────────────────────────
         # If the task was initiated from Telegram, the user can't see /
@@ -302,7 +324,18 @@ class ToolRegistry:
         except Exception:  # noqa: BLE001
             origin = ""
 
-        if origin in _AUTO_APPROVE_ORIGINS:
+        # Unattended policy. Telegram / fleet_watcher were always trusted
+        # origins. Two more ways to run with nobody at the approval prompt,
+        # both REQUIRING a declared tool scope — auto-approving an agent
+        # that can still reach shell/python would hand a prompt injection
+        # the keys:
+        #   * "api_trusted" — POST /tasks with require_approval=false
+        #   * "schedule"    — a cron job whose agent is scoped
+        unattended = (
+            origin in _AUTO_APPROVE_ORIGINS
+            or (origin in ("api_trusted", "schedule") and scoped)
+        )
+        if unattended:
             deny_reason = check_destructive_denylist(tool_name, args)
             if deny_reason:
                 logger.warning(
@@ -349,6 +382,22 @@ class ToolRegistry:
                 "High-risk tool '%s' queued for approval (id=%s, task=%s)",
                 tool_name, approval_id, task_id,
             )
+            # Tell whoever is listening (web UI, CLI, SSE) that a human is
+            # needed. Until this event existed the only way to learn of a
+            # pending approval was to poll GET /approvals.
+            _notify = getattr(self, "on_approval", None)
+            if _notify:
+                try:
+                    await _notify({
+                        "event": "approval_request",
+                        "task_id": task_id,
+                        "approval_id": approval_id,
+                        "tool": tool_name,
+                        "args": args,
+                        "risk": risk,
+                    })
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug("on_approval listener raised: %s", exc)
             # Read the auto-approve setting fresh on each call so toggling
             # it via Settings UI takes effect immediately (no agent
             # restart required). 0 = original behaviour (wait 5 min then

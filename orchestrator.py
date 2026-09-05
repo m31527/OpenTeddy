@@ -795,7 +795,11 @@ class Orchestrator:
                 sess = await self.tracker.get_session(req.session_id)
                 if sess:
                     session_ws = sess.get("workspace_dir") or None
-                    session_local_only = bool(sess.get("local_only"))
+                    # Task-level privacy can only TIGHTEN the session's
+                    # setting (POST /tasks privacy=local_only) — never loosen.
+                    session_local_only = bool(sess.get("local_only")) or (
+                        (req.context or {}).get("privacy") == "local_only"
+                    )
                     session_mode = (sess.get("mode") or "code").lower()
                     # ── User-defined agent persona ────────────────────────
                     # Sessions created from an agent template carry its id;
@@ -882,6 +886,18 @@ class Orchestrator:
                                         "domains": _doms,
                                         "docs": _docs,
                                     }
+                                # Tool scope → the executor exposes only
+                                # these schemas and the registry refuses
+                                # the rest. This is the permission
+                                # boundary that makes the domain allowlist
+                                # hold (no shell/python to route around it)
+                                # and the precondition for unattended runs.
+                                try:
+                                    _scope = json.loads(agent.get("allowed_tools") or "[]")
+                                except Exception:  # noqa: BLE001
+                                    _scope = []
+                                if _scope:
+                                    req.context["allowed_tools"] = [str(x) for x in _scope]
                         except Exception:  # noqa: BLE001
                             pass
                     # ── Connected-database awareness ─────────────────────
@@ -929,6 +945,11 @@ class Orchestrator:
         # Persist the task
         await self.tracker.create_task(req)
         await self.tracker.update_task_status(req.id, TaskStatus.RUNNING)
+        # Task-level lifecycle events. Everything below emits per-subtask
+        # and per-tool events; a headless client also needs the outer
+        # brackets — "it started" and, decisively, "it finished, with this
+        # status" — so an event stream knows when to close.
+        await self._emit_task_event("task.started", req, status="running")
 
         # ── 0a. Chat-mode short-circuit (highest-priority fast path) ──
         # When the user has explicitly picked Chat mode for the session,
@@ -1182,6 +1203,11 @@ class Orchestrator:
 
             overall_status = self._derive_status(subtasks)
             await self.tracker.update_task_status(req.id, overall_status, summary)
+            await self._emit_task_event(
+                "task.done", req,
+                status=getattr(overall_status, "value", str(overall_status)),
+                summary=summary,
+            )
 
             # 5. Persist this task's outcome to long-term memory
             if self.memory is not None:
@@ -1240,9 +1266,23 @@ class Orchestrator:
             await self.tracker.update_task_status(
                 req.id, TaskStatus.FAILED, str(exc)
             )
+            await self._emit_task_event("task.done", req, status="failed", summary=str(exc))
             raise
 
     # ── Private helpers ───────────────────────────────────────────────────────
+
+    async def _emit_task_event(self, kind: str, req: TaskRequest, **extra: Any) -> None:
+        """Broadcast a task-level event (task.started / task.done) on the
+        same channel as tool events. Best-effort: a UI hiccup must never
+        fail the task."""
+        push = getattr(self.executor, "_push_event", None)
+        if not push:
+            return
+        try:
+            await push({"type": kind, "task_id": req.id,
+                        "session_id": req.session_id, **extra})
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("task event %s failed: %s", kind, exc)
 
     async def _plan(self, req: TaskRequest) -> List[SubTask]:
         """Ask Gemma to decompose the goal into SubTasks.

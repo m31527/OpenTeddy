@@ -798,8 +798,14 @@ class Executor:
         # and quote real sources. The other tools (shell, file, db, etc.)
         # stay hidden so chat can't accidentally write files or run
         # commands while answering a casual question.
+        # Agent tool scope (permission boundary). The registry refuses
+        # out-of-scope calls too; hiding the schemas here is what stops the
+        # model planning around tools it will never be allowed to run.
+        _scope = [str(x) for x in ((context or {}).get("allowed_tools") or [])] or None
         if mode == "chat":
             tools = self.registry.get_schemas_by_names(["web_search"])
+        elif _scope:
+            tools = self.registry.get_schemas_by_names(_scope)
         else:
             tools = self.registry.get_schemas()
         objective_failure_seen = False
@@ -1204,6 +1210,7 @@ class Executor:
                     try:
                         r = await self.registry.execute(
                             fn.get("name", ""), a, task_id=task_id,
+                            allowed_tools=_scope,
                         )
                     except asyncio.CancelledError:
                         raise
@@ -1362,7 +1369,8 @@ class Executor:
                         tool_result = parallel_pre[call_idx]
                     else:
                         tool_result = await self.registry.execute(
-                            tool_name, args, task_id=task_id
+                            tool_name, args, task_id=task_id,
+                            allowed_tools=_scope,
                         )
                 except asyncio.CancelledError:
                     # Orchestrator cancelled us (usually subtask timeout).
