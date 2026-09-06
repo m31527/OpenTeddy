@@ -68,6 +68,17 @@ async def read_schedule_digest(hours: int = 24) -> Dict[str, Any]:
             "last_run_at": r.get("last_run_at"),
             "status": r.get("last_status"),
         }
+        if r.get("notify_when"):
+            item["notify_when"] = r.get("notify_when")
+        # A gate that fired is by definition worth attention; a quiet
+        # verdict is reported with its reason so "nothing to report"
+        # is visibly a decision, not an absence.
+        if r.get("last_alert") == "alert":
+            item["alert"] = r.get("last_alert_reason") or "通知條件成立"
+            needs_attention.append({**item, "problem": item["alert"]})
+            continue
+        if r.get("last_alert") == "quiet":
+            item["quiet"] = r.get("last_alert_reason") or "條件未成立，一切正常"
         if r.get("last_status") == "failure" or r.get("stale"):
             item["problem"] = (
                 r.get("last_error")
@@ -95,10 +106,11 @@ async def read_schedule_digest(hours: int = 24) -> Dict[str, Any]:
             "reported": reported,
             "instruction": (
                 "Report needs_attention FIRST and never omit it — a job "
-                "that failed or went silent is the most important item "
-                "here. Then summarise the reported results. Quote the "
-                "numbers each job produced; do not re-derive or estimate "
-                "them."
+                "that failed, went silent, or whose notify condition fired "
+                "is the most important item here. Then summarise the "
+                "reported results; a job marked quiet was checked and found "
+                "normal — say so briefly. Quote the numbers each job "
+                "produced; do not re-derive or estimate them."
             ),
         },
         duration_ms=_ms(start),

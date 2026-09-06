@@ -13,6 +13,7 @@ somewhere to be approved.
     openteddy task list | task status <id> [--follow] | task cancel <id>
     openteddy skill list | skill run <name> --input '{"x": 1}'
     openteddy agent list | agent scope <name> db_query http_get
+    openteddy schedule list | run <id> | on|off <id> | notify <id> "偏差超過 15%"
     openteddy tools | models | health
     openteddy service install [--host 0.0.0.0] | status | logs | restart | uninstall
     openteddy update            # git pull → deps → service restart → health
@@ -371,6 +372,56 @@ def cmd_agent(rt: Runtime, a: argparse.Namespace) -> int:
     return 2
 
 
+def cmd_schedule(rt: Runtime, a: argparse.Namespace) -> int:
+    def _rows() -> List[Dict[str, Any]]:
+        res = rt.req("GET", "/schedules")          # {"success", "data": [...]}
+        return (res.get("data") or res.get("schedules") or []) if isinstance(res, dict) else (res or [])
+
+    def _resolve(ref: str) -> str:
+        hits = [r for r in _rows() if str(r.get("id", "")).startswith(ref)]
+        if len(hits) != 1:
+            die(f"schedule id '{ref}' is {'ambiguous' if hits else 'unknown'}")
+        return hits[0]["id"]
+    if a.schedule_cmd == "list":
+        rows = _rows()
+        if rt.json_out:
+            rt.out(rows)
+            return 0
+        if not rows:
+            print("(no schedules — say one: openteddy run \"每天早上 8 點…\" --agent X)")
+            return 0
+        print(f"{'ID':8}  {'ON':2} {'CRON':12} {'LAST':16} {'GATE':6} GOAL / CONDITION")
+        for r in rows:
+            gate = {"alert": "🔔", "quiet": "·"}.get(r.get("last_alert") or "", "-")
+            last = (r.get("last_run_at") or "")[:16]
+            st = "✓" if r.get("last_status") == "success" else ("✗" if r.get("last_status") else " ")
+            print(f"{r['id'][:8]:8}  {'on' if r.get('enabled') else 'off':2} {r.get('cron', ''):12} "
+                  f"{last:16} {gate:6} {st} {(r.get('goal') or '')[:60]}")
+            if r.get("notify_when"):
+                print(f"{'':8}  {'':2} {'':12} {'':16} {'':6}   ↳ notify when: {r['notify_when'][:70]}"
+                      + (f"  (last: {r.get('last_alert_reason', '')[:50]})" if r.get("last_alert_reason") else ""))
+        return 0
+    sid = _resolve(a.id)
+    if a.schedule_cmd == "run":
+        res = rt.req("POST", f"/schedules/{sid}/run-now")
+        rt.out(res, f"✓ run-now requested for {sid[:8]}")
+        return 0
+    if a.schedule_cmd in ("on", "off"):
+        res = rt.req("PATCH", f"/schedules/{sid}", json={"enabled": a.schedule_cmd == "on"})
+        rt.out(res, f"✓ {sid[:8]} {'enabled' if a.schedule_cmd == 'on' else 'disabled'}")
+        return 0
+    if a.schedule_cmd == "notify":
+        cond = " ".join(a.condition).strip()
+        res = rt.req("PATCH", f"/schedules/{sid}", json={"notify_when": cond})
+        rt.out(res, f"✓ {sid[:8]} notify when: {cond or '(every run)'}")
+        return 0
+    if a.schedule_cmd == "delete":
+        res = rt.req("DELETE", f"/schedules/{sid}")
+        rt.out(res, f"✓ deleted {sid[:8]}")
+        return 0
+    return 2
+
+
 def cmd_tools(rt: Runtime, a: argparse.Namespace) -> int:
     tools = rt.req("GET", "/tools").get("tools", [])
     if rt.json_out:
@@ -683,6 +734,15 @@ def build_parser() -> argparse.ArgumentParser:
     sc = ags.add_parser("scope", help="show or set allowed_tools (the permission boundary)")
     sc.add_argument("agent"); sc.add_argument("tools", nargs="*"); sc.add_argument("--clear", action="store_true")
     ag.set_defaults(fn=cmd_agent)
+
+    sc_ = sub.add_parser("schedule", help="list / run / toggle schedules and their notify conditions")
+    scs = sc_.add_subparsers(dest="schedule_cmd", required=True)
+    scs.add_parser("list")
+    for name in ("run", "on", "off", "delete"):
+        scs.add_parser(name).add_argument("id")
+    sn = scs.add_parser("notify", help="set the condition under which this schedule notifies you")
+    sn.add_argument("id"); sn.add_argument("condition", nargs="*", help="empty = notify every run")
+    sc_.set_defaults(fn=cmd_schedule)
 
     sub.add_parser("tools", help="list tools and their risk level").set_defaults(fn=cmd_tools)
     sub.add_parser("models", help="which models/engine the runtime uses").set_defaults(fn=cmd_models)

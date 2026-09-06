@@ -181,6 +181,11 @@ class Tracker:
             "  created_at                  TEXT NOT NULL,"
             "  updated_at                  TEXT NOT NULL"
             ")",
+            # "Only call me when it matters": a per-schedule condition, and
+            # what the gate decided on the last run (alert / quiet).
+            "ALTER TABLE scheduled_tasks ADD COLUMN notify_when TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE scheduled_tasks ADD COLUMN last_alert TEXT",
+            "ALTER TABLE scheduled_tasks ADD COLUMN last_alert_reason TEXT",
         ]
         for sql in migrations:
             try:
@@ -676,6 +681,7 @@ class Tracker:
         cron: str,
         goal: str,
         max_failures: int = 3,
+        notify_when: str = "",
     ) -> None:
         """Persist a new scheduled task. Caller (scheduler.py) is responsible
         for then registering it with APScheduler — this method only handles
@@ -684,9 +690,10 @@ class Tracker:
         await self.db.execute(
             "INSERT INTO scheduled_tasks "
             "(id, session_id, cron, goal, enabled, max_consecutive_failures, "
-            " consecutive_failures, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, 1, ?, 0, ?, ?)",
-            (schedule_id, session_id, cron, goal, max_failures, now, now),
+            " consecutive_failures, notify_when, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, 1, ?, 0, ?, ?, ?)",
+            (schedule_id, session_id, cron, goal, max_failures,
+             notify_when or "", now, now),
         )
         await self.db.commit()
 
@@ -727,7 +734,7 @@ class Tracker:
         cur = await self.db.execute(
             "SELECT st.id, st.session_id, st.cron, st.goal, st.last_run_at, "
             "       st.last_status, st.last_error, st.consecutive_failures, "
-            "       st.next_run_at, "
+            "       st.next_run_at, st.notify_when, st.last_alert, st.last_alert_reason, "
             "       s.title AS session_title, s.mode AS session_mode, "
             "       t.summary AS result, t.status AS task_status "
             "FROM scheduled_tasks st "
@@ -776,6 +783,7 @@ class Tracker:
         cron: Optional[str] = None,
         goal: Optional[str] = None,
         enabled: Optional[bool] = None,
+        notify_when: Optional[str] = None,
     ) -> None:
         """Mutate one or more fields on an existing schedule. Caller
         is responsible for re-registering with APScheduler if cron
@@ -792,6 +800,9 @@ class Tracker:
         if enabled is not None:
             sets.append("enabled=?")
             params.append(1 if enabled else 0)
+        if notify_when is not None:
+            sets.append("notify_when=?")
+            params.append(notify_when.strip())
         if not sets:
             return
         sets.append("updated_at=?")
@@ -820,6 +831,8 @@ class Tracker:
         task_id: Optional[str] = None,
         error: Optional[str] = None,
         next_run_at: Optional[str] = None,
+        alert: Optional[str] = None,          # 'alert' | 'quiet' | None (no condition)
+        alert_reason: Optional[str] = None,
     ) -> dict:
         """Update lifecycle fields after a triggered run finishes.
 
@@ -835,18 +848,21 @@ class Tracker:
                 "UPDATE scheduled_tasks SET "
                 "  last_run_at=?, last_status='success', last_error=NULL, "
                 "  last_task_id=?, consecutive_failures=0, "
+                "  last_alert=?, last_alert_reason=?, "
                 "  next_run_at=?, updated_at=? "
                 "WHERE id=?",
-                (now, task_id, next_run_at, now, schedule_id),
+                (now, task_id, alert, alert_reason, next_run_at, now, schedule_id),
             )
         else:
             await self.db.execute(
                 "UPDATE scheduled_tasks SET "
                 "  last_run_at=?, last_status='failure', last_error=?, "
                 "  last_task_id=?, consecutive_failures=consecutive_failures+1, "
+                "  last_alert=?, last_alert_reason=?, "
                 "  next_run_at=?, updated_at=? "
                 "WHERE id=?",
-                (now, (error or "")[:1000], task_id, next_run_at, now, schedule_id),
+                (now, (error or "")[:1000], task_id, alert, alert_reason,
+                 next_run_at, now, schedule_id),
             )
         await self.db.commit()
         return await self.get_scheduled_task(schedule_id) or {}

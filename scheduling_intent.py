@@ -63,6 +63,9 @@ class SchedulingIntent:
     task_goal: str      # what the agent will run when the schedule fires
     summary: str        # short human-readable timing description
     confidence: float   # 0-1, 0.7 default threshold
+    # "Only call me when it matters": a condition under which the owner
+    # wants to be notified ("偏差超過 15%", "有異常"). Empty = every run.
+    notify_when: str = ""
 
 
 # ── Stage 1: regex pre-filter ────────────────────────────────────────────────
@@ -208,8 +211,15 @@ Reply with ONLY a JSON object (no markdown fences, no explanation):
 an actionable instruction in the user's original language>",
   "summary":     "<short human-readable timing, in user's language. \
 e.g. '每天 09:00' or 'every Monday at 08:00'>",
+  "notify_when": "<ONLY if the user limits WHEN to be told — e.g. \
+'超過 15% 才通知我' → '較前 7 日均值偏差超過 15%', '有問題再叫我' → \
+'有異常或失敗'. Empty string when the user wants every result>",
   "confidence":  <float 0.0 to 1.0>
 }
+
+When notify_when is set, task_goal must still include computing whatever the \
+condition needs (e.g. the comparison against the previous days) — the \
+condition is evaluated on the task's result.
 
 Set confidence high (>0.8) when both the time AND the action are clear.
 Set low (<0.5) when the time is fuzzy or the action is missing.
@@ -292,6 +302,7 @@ async def llm_extract(text: str) -> Optional[SchedulingIntent]:
         task_goal=task_goal,
         summary=(data.get("summary") or "").strip() or cron,
         confidence=float(data.get("confidence") or 0.0),
+        notify_when=(data.get("notify_when") or "").strip(),
     )
 
 

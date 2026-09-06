@@ -304,6 +304,7 @@ openteddy task approve|reject|cancel <id>
 
 openteddy skill list | skill run <name> --input '{"path": "sales.xlsx"}'
 openteddy agent list | agent scope <name> db_query http_get   # set the permission boundary
+openteddy schedule list | run <id> | on|off <id> | notify <id> "偏差超過 15%" | delete <id>
 openteddy tools | models | health
 ```
 
@@ -811,6 +812,28 @@ Unattended schedules follow the same policy as the API: a schedule whose
 agent has a tool scope auto-approves high-risk tools after the
 destructive denylist; an unscoped agent's schedule still waits for a
 human. Scheduled runs are capped at 10 minutes.
+
+### Only call me when it matters (`notify_when`)
+
+A schedule that reports every morning is a feed; one that speaks up only
+when something is off is an assistant. Give a schedule a **notify
+condition** — in the sentence that creates it, or afterwards:
+
+```bash
+openteddy run "每天早上 8 點查昨日營收，跟前 7 天均值比，偏差超過 15% 才通知我" --agent EasyBuy
+openteddy schedule notify <id> "有異常或失敗"       # set / change the condition
+openteddy schedule list                              # 🔔 = last run alerted · "·" = checked, quiet
+```
+
+How the gate decides, cheapest first and fail-open: a failed run always
+notifies; no condition means every run notifies (the old behaviour); the
+task itself is asked to end its report with `ALERT: yes|no — reason`, and
+that line is trusted when present (no extra model call); otherwise the
+executor model reads goal + condition + result and answers; if the judge
+itself fails, you get notified with the reason — an extra ping costs a
+glance, a swallowed alert can cost a quarter. Quiet runs are still
+recorded: the digest shows "checked, normal — 偏差 3%" as a decision, not
+an absence, and Telegram gets a 🔔/🚨 message only for alerts.
 
 ### Voice fast path (experimental)
 

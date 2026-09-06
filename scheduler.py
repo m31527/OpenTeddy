@@ -141,6 +141,7 @@ async def stop() -> None:
 
 async def add_schedule(
     session_id: str, cron: str, goal: str, max_failures: int = 3,
+    notify_when: str = "",
 ) -> Dict[str, Any]:
     """Persist a new schedule + register it with APScheduler. Returns the
     full row so the caller (API endpoint or Telegram handler) can echo
@@ -158,6 +159,7 @@ async def add_schedule(
         cron=cron,
         goal=goal,
         max_failures=max_failures,
+        notify_when=notify_when or "",
     )
     row = await _tracker.get_scheduled_task(schedule_id)
     if row:
@@ -319,10 +321,17 @@ async def _execute_scheduled_run(schedule_id: str) -> None:
 
     session_id = row["session_id"]
     goal = row["goal"]
+    notify_when = (row.get("notify_when") or "").strip()
     logger.info(
-        "Scheduled run firing: schedule=%s session=%s goal=%r",
-        schedule_id, session_id, goal[:80],
+        "Scheduled run firing: schedule=%s session=%s goal=%r notify_when=%r",
+        schedule_id, session_id, goal[:80], notify_when[:60],
     )
+    if notify_when:
+        # The task itself ends its report with `ALERT: yes|no — reason`,
+        # so the common case needs no second model call to decide
+        # whether to notify. See notify_gate.py.
+        from notify_gate import goal_with_verdict_request
+        goal = goal_with_verdict_request(goal, notify_when)
 
     # Build a TaskRequest exactly like POST /run does, marked with
     # triggered_by=schedule so tool_registry's auto-approve / denylist
@@ -364,6 +373,21 @@ async def _execute_scheduled_run(schedule_id: str) -> None:
         logger.exception("Schedule %s orchestrator raised: %s", schedule_id, exc)
     finally:
         reset_triggered_by(origin_token)
+    if not success:
+        # The orchestrator only records its own exceptions; a wait_for
+        # timeout cancels it from outside, and the task row would stay
+        # "running" forever — every follower then waits on a task that is
+        # gone. Record the failure here and close the event stream.
+        try:
+            from models import TaskStatus
+            await _tracker.update_task_status(task_id, TaskStatus.FAILED, error_str or "failed")
+            import main as _main_module
+            await _main_module.ws_manager.broadcast({
+                "type": "task.done", "task_id": task_id, "session_id": session_id,
+                "status": "failed", "summary": error_str or "failed",
+            })
+        except Exception:  # noqa: BLE001
+            pass
 
     elapsed_s = time.monotonic() - started
 
@@ -374,20 +398,59 @@ async def _execute_scheduled_run(schedule_id: str) -> None:
         if job and job.next_run_time:
             next_run_at = job.next_run_time.isoformat()
 
+    # "Only call me when it matters": decide before recording so the
+    # digest can show what the gate concluded, then push only alerts.
+    gate: Optional[Dict[str, Any]] = None
+    if notify_when:
+        from notify_gate import evaluate as _gate_eval
+        gate = await _gate_eval(
+            row["goal"], notify_when,
+            (getattr(result, "summary", "") or "") if result is not None else "",
+            failed=not success,
+        )
+        logger.info(
+            "Schedule %s gate: notify=%s (%s) — %s",
+            schedule_id, gate["notify"], gate.get("source"), gate.get("reason", "")[:120],
+        )
+
     updated_row = await _tracker.record_scheduled_run(
         schedule_id=schedule_id,
         status="success" if success else "failure",
         task_id=task_id,
         error=error_str,
         next_run_at=next_run_at,
+        alert=(None if gate is None else ("alert" if gate["notify"] else "quiet")),
+        alert_reason=(None if gate is None else gate.get("reason")),
     )
 
-    # Push result to the bound Telegram chat (if any). Best-effort: a
-    # delivery failure mustn't propagate.
+    # Let the UI / CLI / digest know what happened (best-effort).
     try:
-        await _maybe_push_to_telegram(updated_row, result, error_str, elapsed_s)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("Scheduled-run Telegram delivery failed: %s", exc)
+        import main as _main_module
+        await _main_module.ws_manager.broadcast({
+            "type": "schedule.result", "schedule_id": schedule_id,
+            "session_id": session_id, "task_id": task_id,
+            "status": "success" if success else "failure",
+            "alert": (None if gate is None else ("alert" if gate["notify"] else "quiet")),
+            "reason": (gate or {}).get("reason"),
+        })
+    except Exception:  # noqa: BLE001
+        pass
+
+    # Push result to the bound Telegram chat (if any). Best-effort: a
+    # delivery failure mustn't propagate. A quiet verdict pushes nothing —
+    # that is the whole point of the condition.
+    if gate is not None and not gate["notify"]:
+        logger.info("Schedule %s: condition not met — recorded quietly, no push", schedule_id)
+    else:
+        prefix = ""
+        if gate is not None:
+            sev = {"high": "🚨", "warning": "🔔"}.get(str(gate.get("severity")), "🔔")
+            prefix = f"{sev} {gate.get('reason', '條件成立')}\n\n"
+        try:
+            await _maybe_push_to_telegram(updated_row, result, error_str, elapsed_s,
+                                          alert_prefix=prefix)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Scheduled-run Telegram delivery failed: %s", exc)
 
     # Circuit breaker: disable + alert after N consecutive failures so
     # the schedule doesn't keep firing into the void.
@@ -413,6 +476,7 @@ async def _maybe_push_to_telegram(
     result: Any,
     error_str: Optional[str],
     elapsed_s: float,
+    alert_prefix: str = "",
 ) -> None:
     """If the schedule's session is bound to a Telegram chat, push the
     result + artifacts there. Reuses telegram_bridge's formatters so
@@ -450,7 +514,7 @@ async def _maybe_push_to_telegram(
     # Success path — same formatter as Telegram-driven runs, prefixed
     # with a "⏰ Scheduled run" marker so the user can tell where it
     # came from at a glance.
-    body = _format_result_for_telegram(result, session_id, elapsed_s)
+    body = alert_prefix + _format_result_for_telegram(result, session_id, elapsed_s)
     body = "⏰ Scheduled run\n\n" + body
 
     # Append artifact list if any

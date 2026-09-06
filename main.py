@@ -1955,15 +1955,18 @@ async def _start_task(
         from scheduler import add_schedule
         intent = await detect_scheduling_intent(goal)
         if intent is not None:
+            _cond = getattr(intent, "notify_when", "") or ""
             row = await add_schedule(
                 session_id=session_id, cron=intent.cron, goal=intent.task_goal,
+                notify_when=_cond,
             )
             short_id = (row.get("id") or "")[:8]
             next_at = (row.get("next_run_at") or "").replace("T", " ")[:16]
             msg = (
                 f"✓ 已排好：{intent.summary}\n"
                 f"任務：{intent.task_goal}\n"
-                f"下次執行：{next_at or '(scheduler 計算中)'} · id: {short_id}\n"
+                + (f"通知條件：{_cond}（其餘時候安靜記錄，早報可查）\n" if _cond else "")
+                + f"下次執行：{next_at or '(scheduler 計算中)'} · id: {short_id}\n"
                 f"取消請說「取消那個排程」"
             )
             return task_id, session_id, None, msg
@@ -3530,12 +3533,15 @@ class _ScheduleCreateBody(BaseModel):
     cron: str                   # 5-field crontab: "30 9 * * *"
     goal: str
     max_failures: Optional[int] = 3
+    # "Only call me when it matters" — see notify_gate.py. Empty = every run.
+    notify_when: str = ""
 
 
 class _ScheduleUpdateBody(BaseModel):
     cron: Optional[str] = None
     goal: Optional[str] = None
     enabled: Optional[bool] = None
+    notify_when: Optional[str] = None
 
 
 @app.post("/schedules")
@@ -3552,6 +3558,7 @@ async def create_schedule(body: _ScheduleCreateBody) -> dict:
             cron=body.cron.strip(),
             goal=body.goal,
             max_failures=int(body.max_failures or 3),
+            notify_when=body.notify_when or "",
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -3610,6 +3617,7 @@ async def update_schedule(schedule_id: str, body: _ScheduleUpdateBody) -> dict:
         cron=body.cron.strip() if body.cron is not None else None,
         goal=body.goal,
         enabled=body.enabled,
+        notify_when=body.notify_when,
     )
 
     # Re-register / unregister with APScheduler based on the new state.

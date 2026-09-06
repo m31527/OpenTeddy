@@ -915,8 +915,10 @@ async def _run_goal_for_chat(chat_id: str, goal_text: str) -> None:
         from scheduler import add_schedule
         intent = await detect_scheduling_intent(goal_text)
         if intent is not None:
+            _cond = getattr(intent, "notify_when", "") or ""
             row = await add_schedule(
                 session_id=session_id, cron=intent.cron, goal=intent.task_goal,
+                notify_when=_cond,
             )
             short_id = (row.get("id") or "")[:8]
             next_at = (row.get("next_run_at") or "").replace("T", " ")[:16]
@@ -924,7 +926,8 @@ async def _run_goal_for_chat(chat_id: str, goal_text: str) -> None:
                 chat_id,
                 f"⏰ 已排好：{intent.summary}\n"
                 f"任務：{intent.task_goal}\n"
-                f"下次執行：{next_at or '(scheduler 計算中)'} · id: `{short_id}`\n"
+                + (f"通知條件：{_cond}（其餘時候安靜記錄）\n" if _cond else "")
+                + f"下次執行：{next_at or '(scheduler 計算中)'} · id: `{short_id}`\n"
                 f"取消請說「取消那個排程」或 `/cron cancel {short_id}`",
             )
             _running_chats.pop(chat_id, None)
