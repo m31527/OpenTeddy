@@ -135,11 +135,18 @@ class Runtime:
                 print(f"  → {ev.get('tool')}  {_short(ev.get('args', {}))}")
                 continue
             if kind == "tool_result":
-                ok = ev.get("success", True)
+                ok = ev.get("success")
+                mark = "✓" if ok else ("✗" if ok is False else "•")
                 dur = ev.get("duration_ms")
                 tail = f"  {dur}ms" if dur is not None else ""
-                err = "" if ok else f"  {_short(ev.get('error', ''), 120)}"
-                print(f"  {'✓' if ok else '✗'} {ev.get('tool')}{tail}{err}")
+                # Show the first line of what the tool returned, or the
+                # error — a bare ✓ hides whether db_query got 0 or 900 rows.
+                if ok is False:
+                    detail = f"  {_short(ev.get('error') or '', 160)}"
+                else:
+                    preview = str(ev.get("output") or "").strip().splitlines()
+                    detail = f"  ↳ {preview[0][:120]}" if preview else ""
+                print(f"  {mark} {ev.get('tool')}{tail}{detail}")
                 continue
             if kind == "artifact":
                 path = ev.get("path") or ev.get("name") or ""
@@ -160,6 +167,20 @@ class Runtime:
                 summary = (ev.get("summary") or "").strip()
                 if summary:
                     print(summary)
+                if status != "completed":
+                    # The summary is the model's account of what went wrong;
+                    # the subtask error fields hold the actual exception
+                    # (an Ollama 500, a timeout, a refused tool). Show both.
+                    try:
+                        row = self.req("GET", f"/tasks/{task_id}")
+                        errs = [(st.get("order", 0) + 1, st.get("error"))
+                                for st in row.get("subtasks") or [] if st.get("error")]
+                        if errs:
+                            print("\nActual errors:")
+                            for order, err in errs:
+                                print(f"  subtask {order}: {_short(err, 400)}")
+                    except SystemExit:
+                        pass
                 if artifacts:
                     print("\nArtifacts:")
                     for p in dict.fromkeys(artifacts):
