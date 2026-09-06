@@ -13,6 +13,7 @@ Memory integration:
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -22,6 +23,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 import httpx
 
 from config import config
+import local_engine
 from escalation import EscalationAgent
 from executor import Executor
 from models import AgentRole, SubTask, TaskRequest, TaskResult, TaskStatus
@@ -1635,6 +1637,7 @@ class Orchestrator:
                 st.id, subtask_timeout, effective_sub_timeout,
             )
 
+        prev_judged_hash: Optional[str] = None
         for attempt in range(max_local_retries):
             try:
                 # Deadline that CREDITS BACK time the subtask spent
@@ -1764,9 +1767,33 @@ class Orchestrator:
 
                 deliverable = await self._verify_deliverable(st, artifacts)
                 if deliverable:
-                    judge_text, judge_ok = deliverable
+                    judge_text, judge_ok, judged_path = deliverable
                     st.result = (st.result or "") + f"\n\n{judge_text}"
                     if not judge_ok:
+                        cur_hash = self._file_hash(judged_path)
+                        if cur_hash and cur_hash == prev_judged_hash:
+                            # The retry produced a byte-identical file: the
+                            # model has nothing different to give and the
+                            # judge is disputing the same artifact it already
+                            # saw. Another round only burns minutes (one run
+                            # spent 10 min on three copies of the same
+                            # query + report). Accept, with the judge's note
+                            # attached so the reader can weigh it.
+                            logger.warning(
+                                "Subtask %s: judge FAILED an artifact identical to "
+                                "the previous attempt — accepting with warning "
+                                "instead of retrying.", st.id,
+                            )
+                            st.result += (
+                                "\n\n[deliverable-judge] retry produced an identical "
+                                "artifact — accepted with the judge's warning attached"
+                            )
+                            st.status = TaskStatus.COMPLETED
+                            st.error = None
+                            st.confidence = max(float(st.confidence or 0.0), 0.6)
+                            await self.tracker.update_subtask(st)
+                            return st
+                        prev_judged_hash = cur_hash
                         logger.info(
                             "Subtask %s deliverable judge FAILED — "
                             "retrying with feedback.", st.id,
@@ -1832,13 +1859,16 @@ class Orchestrator:
         "lists what the analysis WOULD compute.\n\n"
         "Reply STRICTLY with a JSON object — no markdown fences, no "
         "preamble — in this exact shape:\n"
+        "A report whose figures are zero or empty is still a REAL artifact when it "
+        "presents actual query results honestly — judge the FORM of the deliverable, "
+        "not the size of the numbers.\n"
         '  {"verdict": "PASS" | "FAIL", "reason": "<<= 30 words>"}\n'
         "Nothing else."
     )
 
     async def _verify_deliverable(
         self, st: SubTask, artifacts: List[Dict[str, Any]],
-    ) -> Optional[Tuple[str, bool]]:
+    ) -> Optional[Tuple[str, bool, str]]:
         """Ask Qwen if the largest produced deliverable artifact actually
         matches the subtask goal. Returns ``(reason, ok)`` or ``None`` if
         there was nothing to verify (no artifacts, none deliverable-shaped,
@@ -1899,36 +1929,34 @@ class Orchestrator:
             f"------\n{content}\n------"
         )
         try:
+            # Through local_engine so the judge's rules travel as a
+            # role=system message. This call used to post a top-level
+            # "system" field to /api/chat, which Ollama silently ignores —
+            # the judge never saw its instructions, answered in prose,
+            # and the keyword fallback then condemned every real report
+            # because the prose contained the word "report".
+            payload = local_engine.build_payload(
+                model=config.qwen_model,
+                messages=[{"role": "user", "content": user_msg}],
+                system=self._DELIVERABLE_JUDGE_PROMPT,
+                tools=None,
+                stream=False,
+                temperature=0.1,
+                num_predict=200,
+                num_ctx=int(getattr(config, "qwen_num_ctx", 16384)),
+                keep_alive=getattr(config, "ollama_keep_alive", "24h"),
+            )
+            if not local_engine.is_vllm():
+                # Structured-output mode — forces valid JSON so small
+                # thinking models can't wrap the verdict in commentary.
+                payload["format"] = "json"
+            # 30s cap: the judge needs ~50 output tokens; past 30s something
+            # else is wrong and skipping is better than stalling the plan.
             resp = await self._http.post(
-                f"{config.qwen_base_url}/api/chat",
-                json={
-                    "model":    config.qwen_model,
-                    "messages": [{"role": "user", "content": user_msg}],
-                    "system":   self._DELIVERABLE_JUDGE_PROMPT,
-                    "stream":   False,
-                    # Ollama's structured-output mode — forces the
-                    # response.message.content to be valid JSON. Without
-                    # this small thinking models love to wrap the
-                    # verdict in essay-style commentary that's too
-                    # ambiguous to parse reliably.
-                    "format":   "json",
-                    "options":  {
-                        "temperature": 0.1,
-                        "num_predict": 200,
-                        "num_ctx":     int(getattr(config, "qwen_num_ctx", 16384)),
-                    },
-                    "keep_alive": getattr(config, "ollama_keep_alive", "24h"),
-                },
-                # 30s cap. The judge call only needs ~50 tokens of output
-                # ("PASS" / "FAIL" + 30-word reason). On a healthy big
-                # model that's <10s; if it blows past 30s something is
-                # wrong (model reload, cold start, unrelated job hogging
-                # GPU) and we're better off skipping verification than
-                # blocking the whole plan for a minute per step.
-                timeout=30,
+                local_engine.chat_endpoint(), json=payload, timeout=30,
             )
             resp.raise_for_status()
-            msg = resp.json().get("message") or {}
+            msg = local_engine.normalize_response(resp.json()).get("message") or {}
             verdict_raw = (msg.get("content") or msg.get("thinking") or "").strip()
         except Exception as exc:  # noqa: BLE001
             logger.warning("Deliverable verifier crashed: %s — skipping.", exc)
@@ -1954,12 +1982,23 @@ class Orchestrator:
             # raw text. Better lenient than false-positive on a flaky
             # judge that just happens to disagree with our format.
             lower = verdict_raw.lower()
-            fail_keywords = ("non-functional", "skeleton", "placeholder",
-                              "describes", "report", "outline", "no actual",
-                              "not implemented", "pseudocode", "no real")
+            # Only the strongest signals. "report" / "describes" /
+            # "outline" used to be fail words — and condemned every
+            # genuine report the moment the judge said "this is a report
+            # of…". For a document-shaped goal we don't guess from words
+            # at all: an unparseable verdict is treated as "can't tell".
+            doc_goal = re.search(
+                r"report|報告|summary|摘要|markdown|html|chart|圖表|dashboard|文件|分析",
+                (st.description or "").lower(),
+            )
+            fail_keywords = ("placeholder", "skeleton", "lorem ipsum",
+                             "not implemented", "pseudocode", "todo:",
+                             "no actual", "no real")
             pass_keywords = ("complete", "functional", "fully implemented",
-                              "working")
-            if any(k in lower for k in fail_keywords):
+                             "working", "matches the goal", "real data")
+            if doc_goal:
+                ok = None
+            elif any(k in lower for k in fail_keywords):
                 ok, reason = False, "verdict text suggests not a real artifact"
             elif any(k in lower for k in pass_keywords):
                 ok, reason = True, "verdict text suggests artifact is real"
@@ -1972,7 +2011,15 @@ class Orchestrator:
             "Deliverable verifier: %s (file=%s, reason=%s)",
             "PASS" if ok else "FAIL", os.path.basename(path), reason[:120],
         )
-        return (f"[deliverable-judge] {os.path.basename(path)}: {reason}", ok)
+        return (f"[deliverable-judge] {os.path.basename(path)}: {reason}", ok, path)
+
+    @staticmethod
+    def _file_hash(path: str) -> Optional[str]:
+        try:
+            with open(path, "rb") as fh:
+                return hashlib.sha256(fh.read()).hexdigest()
+        except Exception:  # noqa: BLE001
+            return None
 
     async def _verify_subtask(self, st: SubTask) -> Optional[Tuple[str, bool]]:
         """根據子任務類型執行驗證指令。
