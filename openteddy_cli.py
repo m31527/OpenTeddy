@@ -14,7 +14,8 @@ somewhere to be approved.
     openteddy skill list | skill run <name> --input '{"x": 1}'
     openteddy agent list | agent scope <name> db_query http_get
     openteddy tools | models | health
-    openteddy service install [--host 0.0.0.0] | status | logs | uninstall
+    openteddy service install [--host 0.0.0.0] | status | logs | restart | uninstall
+    openteddy update            # git pull → deps → service restart → health
 
 Connects to $OPENTEDDY_URL (default http://127.0.0.1:8000) or --url.
 """
@@ -531,6 +532,8 @@ def cmd_service(rt: Runtime, a: argparse.Namespace) -> int:
         except Exception:  # noqa: BLE001
             print(f"runtime: DOWN @ {rt.url}")
         return 0
+    if a.service_cmd in ("restart", "start", "stop"):
+        return _service_control(rt, a.service_cmd, system=a.system)
     if a.service_cmd == "logs":
         if sysname == "Darwin":
             log = os.path.join(REPO_DIR, "logs", "runtime.log")
@@ -538,6 +541,84 @@ def cmd_service(rt: Runtime, a: argparse.Namespace) -> int:
         scope = ["sudo", "journalctl"] if a.system else ["journalctl", "--user"]
         os.execvp(scope[0], scope + ["-u", "openteddy", "-n", "80", "-f"])
     return 2
+
+
+def _wait_healthy(rt: Runtime, seconds: int = 30) -> bool:
+    for _ in range(seconds * 2):
+        try:
+            h = rt.c.get("/health", timeout=2.0)
+            if h.status_code == 200:
+                print(f"✓ runtime up  v{h.json().get('version', '?')}  @ {rt.url}")
+                return True
+        except Exception:  # noqa: BLE001
+            pass
+        time.sleep(0.5)
+    print(f"✗ runtime not answering at {rt.url} after {seconds}s — openteddy service logs")
+    return False
+
+
+def _service_control(rt: Runtime, action: str, system: bool = False) -> int:
+    """restart / start / stop the installed service, then confirm health.
+    The service runs run.sh --no-reload, so every git pull needs this."""
+    sysname = platform.system()
+    if sysname == "Darwin":
+        plist_path = os.path.expanduser(f"~/Library/LaunchAgents/{LAUNCHD_LABEL}.plist")
+        if not os.path.exists(plist_path):
+            print("service not installed — openteddy service install, or ./run.sh")
+            return 1
+        target = f"gui/{os.getuid()}"
+        if action == "stop":
+            _sh(["launchctl", "bootout", target, plist_path], check=False)
+            print("✓ stopped")
+            return 0
+        if action == "start":
+            _sh(["launchctl", "bootstrap", target, plist_path], check=False)
+        else:
+            r = subprocess.run(["launchctl", "kickstart", "-k", f"{target}/{LAUNCHD_LABEL}"],
+                               capture_output=True, text=True)
+            if r.returncode != 0:  # not loaded yet → load it
+                _sh(["launchctl", "bootstrap", target, plist_path], check=False)
+        return 0 if _wait_healthy(rt) else 1
+    if sysname == "Linux" and shutil.which("systemctl"):
+        scope = ["sudo", "systemctl"] if system else ["systemctl", "--user"]
+        probe = subprocess.run(scope + ["cat", "openteddy"], capture_output=True, text=True)
+        if probe.returncode != 0:
+            print("service not installed — openteddy service install, or ./run.sh")
+            return 1
+        _sh(scope + [action, "openteddy"], check=False)
+        if action == "stop":
+            print("✓ stopped")
+            return 0
+        return 0 if _wait_healthy(rt) else 1
+    die(f"not supported on {sysname}")
+    return 2
+
+
+def cmd_update(rt: Runtime, a: argparse.Namespace) -> int:
+    """git pull → deps if needed → restart the service → health."""
+    before = subprocess.run(["git", "-C", REPO_DIR, "rev-parse", "HEAD"],
+                            capture_output=True, text=True).stdout.strip()
+    r = subprocess.run(["git", "-C", REPO_DIR, "pull", "--ff-only"], text=True)
+    if r.returncode != 0:
+        die("git pull failed (local changes? run git status in the repo)")
+    after = subprocess.run(["git", "-C", REPO_DIR, "rev-parse", "HEAD"],
+                           capture_output=True, text=True).stdout.strip()
+    if before == after:
+        print("✓ already up to date")
+        if not a.restart:
+            return 0
+    else:
+        changed = subprocess.run(["git", "-C", REPO_DIR, "diff", "--name-only", before, after],
+                                 capture_output=True, text=True).stdout.split()
+        print(f"✓ updated {before[:7]} → {after[:7]}  ({len(changed)} files)")
+        if "requirements.txt" in changed:
+            pip = os.path.join(REPO_DIR, ".venv", "bin", "pip")
+            if os.path.exists(pip):
+                print("  requirements.txt changed → installing")
+                subprocess.run([pip, "install", "-q", "-r",
+                                os.path.join(REPO_DIR, "requirements.txt")], text=True)
+    print("↻ restarting service")
+    return _service_control(rt, "restart", system=a.system)
 
 
 # ── argparse ───────────────────────────────────────────────────────────────────
@@ -586,6 +667,11 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("models", help="which models/engine the runtime uses").set_defaults(fn=cmd_models)
     sub.add_parser("health", help="is the runtime up").set_defaults(fn=cmd_health)
 
+    up = sub.add_parser("update", help="git pull, install deps if needed, restart the service")
+    up.add_argument("--system", action="store_true", help="the service was installed with --system")
+    up.add_argument("--restart", action="store_true", help="restart even if already up to date")
+    up.set_defaults(fn=cmd_update)
+
     sv = sub.add_parser("service", help="run the runtime as an always-on background service")
     svs = sv.add_subparsers(dest="service_cmd", required=True)
     si = svs.add_parser("install")
@@ -593,7 +679,7 @@ def build_parser() -> argparse.ArgumentParser:
     si.add_argument("--port", type=int, default=8000)
     si.add_argument("--system", action="store_true", help="Linux: system-wide unit via sudo (starts at boot)")
     si.add_argument("--dry-run", action="store_true", help="print the unit file, change nothing")
-    for name in ("uninstall", "status", "logs"):
+    for name in ("uninstall", "status", "logs", "restart", "start", "stop"):
         x = svs.add_parser(name); x.add_argument("--system", action="store_true")
     sv.set_defaults(fn=cmd_service)
     return p

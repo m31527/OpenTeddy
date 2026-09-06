@@ -288,10 +288,18 @@ Instead of keeping a terminal open, install the runtime as a background service 
 
 ```bash
 openteddy service install --host 0.0.0.0    # macOS: launchd agent · Linux: systemd user unit
-openteddy service status | logs | uninstall
+openteddy service status | logs | restart | stop | start | uninstall
 ```
 
 On a headless Linux server run `sudo loginctl enable-linger $USER` once so the user unit starts without a login, or use `openteddy service install --system` for a system-wide unit. The service runs `run.sh --no-reload`; use `--dry-run` to print the unit file first.
+
+**Upgrading:** the service does not hot-reload, so after every pull it needs a restart. One command does the whole thing:
+
+```bash
+openteddy update        # git pull --ff-only → pip install if requirements changed → service restart → health
+```
+
+(Installed with `--system`? `openteddy update --system`.)
 
 > ⚠️ **`--host 0.0.0.0` opens the agent to every machine that can reach the port.** The agent has `shell_exec_write` / `delete_file` and other powerful tools. Only use `0.0.0.0` when you trust every device on that network — a private home LAN, a Tailscale tailnet, or a server behind a real firewall. For public servers, put it behind nginx / Caddy / Cloudflare Tunnel with auth. **For "I want to use OpenTeddy from my phone", the recommended setup is `--host 0.0.0.0` + Tailscale — see [Remote Access](#remote-access-phone--telegram--tailscale).**
 
