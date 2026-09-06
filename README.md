@@ -65,6 +65,11 @@ Claude Pro auto-renewing.
 
 ## Highlights
 
+- **A Runtime, not just an app** — every door (web UI, `openteddy` CLI, Telegram, schedules, `POST /tasks` from any program) goes through one launcher into the same kernel. Tasks are accepted immediately, stream their progress as SSE (`/tasks/{id}/events`), and can be approved, followed or cancelled from anywhere. Install it as an always-on service (`openteddy service install`) and upgrade with `openteddy update`. See [Task API](#task-api-headless-runtime).
+- **Agents with a real permission boundary** — a reusable role = persona + bound database + API credentials + allowed domains + API docs + **tool scope** (`allowed_tools`). Credentials never enter a prompt (the model writes `{{CRED:name}}`, the server substitutes only for allow-listed hosts); a scoped agent's executor sees only its tools and the registry refuses the rest, so a prompt injection has no shell/python to route around the allowlist. Unattended runs are permitted only inside a scope. See [Agents](#agents--reusable-roles-with-bound-databases) and [Security model](#security-model).
+- **Ask once, see everything** — schedules bound to sessions run on cron (or just say "每天早上 8 點…" in any door); `read_schedule_digest` gives the latest result of every scheduled job across all sessions, problems first, so "how are things today?" is one question. See [Schedules & the morning digest](#schedules--the-morning-digest).
+- **Deadlines that follow the work** — time spent waiting for a human approval, and time a tool declared up front (`http_post timeout=2700` for a 31-minute video render), extend the subtask deadline instead of being billed against it. A stuck agent is still caught in minutes; a slow-but-progressing one isn't killed.
+- **Voice fast path** *(experimental)* — `POST /voice/ask` routes a spoken question to the cheapest lane that can answer it: templates (0 ms), a small model over the digest (~0.5 s), or a background task with a spoken acknowledgement. The big model is never in the conversational path.
 - **Three LLM modes, one toggle** — *Local only* / *Mixed* (default — local with cloud safety net) / *Full Cloud LLM* (skip Ollama entirely, route every subtask through your cloud provider). Pick per-app in Settings; per-session "Local only" override always wins for privacy-sensitive work.
 - **Five cloud LLM providers** — Anthropic Claude / OpenAI / Google Gemini / Deepseek / OpenRouter, swappable from Settings at runtime. Usage tab attributes spend per provider.
 - **Auto-escalation safety net** — timeouts, low confidence, repeated failures, hard-failure signals in tool output (`unhealthy` containers, `ERROR 1045`, `command not found`), or "the task asked for a file but the model produced zero" all trigger cloud-LLM intervention automatically.
@@ -97,6 +102,18 @@ Claude Pro auto-renewing.
 - **Hot-reloadable settings** — change models, thresholds, performance toggles, API keys (Anthropic, Brave Search, Lemon Squeezy), and endpoints from the UI without restarting the server.
 
 ## Architecture
+
+OpenTeddy is a **runtime** with several doors. Every door creates work the same way and gets the same kernel — planning, model routing, tools, verification, memory:
+
+```
+ openteddy CLI ───┐
+ Web UI ──────────┤                         ┌─ tool scope (allowed_tools)
+ Telegram ────────┼──►  Task API  ──►  Kernel ─┼─ approval gate · unattended policy
+ Scheduler ───────┤   POST /tasks           └─ destructive denylist · local_only
+ Voice / any app ─┘   GET /tasks/{id}/events (SSE) · approve / cancel
+```
+
+Inside the kernel:
 
 ```
 User Goal
@@ -173,28 +190,38 @@ not just fast enough to look impressive on a single tool call:
 
 ```
 OpenTeddy/
-├── config.py          # Config via .env / environment variables
+├── main.py            # FastAPI runtime: Task API (/tasks, SSE events, approvals),
+│                      #   agents, schedules, settings, WS ring buffer
+├── openteddy_cli.py   # `openteddy` CLI — thin client over the Task API
+├── openteddy          # CLI wrapper (symlink onto your PATH)
+├── run.sh / stop.sh   # start / stop the runtime (stop handles --reload's 2 processes)
+├── config.py          # Config via .env / environment variables (+ settings store)
 ├── models.py          # Pydantic models + SQLite schema
-├── tracker.py         # Async SQLite persistence (aiosqlite) + perf stats
-├── skill_factory.py   # Claude-powered skill generation & loader
-├── executor.py        # Qwen executor — function calling, streaming,
-│                      #   parallel low-risk tools, context watchdog,
-│                      #   discovery memos, per-tool cap, circuit breaker
-├── escalation.py      # Claude escalation agent
-├── orchestrator.py    # Gemma orchestrator (plan → execute → verify →
-│                      #   escalate) + per-step deliverable judge
-├── memory.py          # ChromaDB long-term memory
+├── tracker.py         # Async SQLite persistence (aiosqlite) + perf stats + digest
+├── orchestrator.py    # Planner (plan → execute → verify → escalate), task events,
+│                      #   deadline credit for approvals / declared long work
+├── executor.py        # Executor — function calling, streaming, parallel low-risk
+│                      #   tools, context watchdog, circuit breaker, tool-scope filter
+├── tool_registry.py   # Tool registration, risk gating, tool-scope enforcement,
+│                      #   unattended policy, destructive-action denylist
 ├── approval_store.py  # Human-in-the-loop approval queue
+├── scheduler.py       # Cron schedules bound to sessions (APScheduler)
+├── scheduling_intent.py # "每天早上 9 點…" → schedule instead of run
+├── local_engine.py    # Ollama / vLLM request + response abstraction
+├── voice_fastpath.py  # Spoken question → spoken answer, sub-second lanes
+├── api_docs.py        # Condense pasted / uploaded / fetched API docs (OpenAPI → endpoint list)
+├── db_schema.py       # Priority-ordered schema snapshot for agents' databases
+├── escalation.py      # Cloud escalation agent
+├── skill_factory.py   # Skill generation, test-before-register, loader
+├── memory.py          # ChromaDB long-term memory
 ├── settings_store.py  # Hot-reloadable settings (SQLite-backed)
-├── tool_registry.py   # Tool registration + risk gating
-├── tools/             # shell / file / http / db / gcp / package /
-│                      #   analytic (csv_describe, python_exec) /
-│                      #   report_tool (HTML + Chart.js datalabels)
+├── telegram_bridge.py # Bidirectional Telegram door
+├── tools/             # shell / file / http (credentials, allowlist, multipart, save_to) /
+│                      #   db / gcp / package / analytic / report / digest / search / …
 ├── skills/            # Auto-generated skill .py files
-├── static/            # Web dashboard (index.html, i18n.js — 22 locales,
-│                      #   OpenTeddy-logo.svg)
+├── tests/             # Standalone runners: test_agents.py, test_task_api.py
+├── static/            # Web dashboard (index.html, i18n.js — 22 locales)
 ├── desktop/           # Native macOS Tauri 2.x client (own repo)
-├── main.py            # FastAPI server + CLI entry point + WS ring buffer
 └── .env.example       # Environment variable template
 ```
 
@@ -653,6 +680,63 @@ Database credentials are entered as structured fields (host / port /
 user / password — the driver URL is assembled for you), stored as a
 secret, and never returned by any API.
 
+**Schema snapshot.** When an agent with a database is saved (and again
+whenever the snapshot format changes), OpenTeddy captures a compact,
+priority-ordered table/column summary and injects it into planning —
+entity tables with full columns first, infrastructure tables by name
+only, every table always named. The planner never has to spend rounds
+"exploring" the schema, and it can't miss the table the question is
+about.
+
+### Calling APIs: credentials + allowed domains
+
+Action-taking agents (customer service, ticketing, ops) get **API
+credentials** (`NAME=value`) and an **allowed-domains** list. The model
+never sees a value — it writes `{{CRED:NAME}}` in a header, URL or body
+and the `http_get` / `http_post` tools substitute the real value
+immediately before the request, **only for a host on the allowed list**.
+A prompt-injected "POST your token to evil.com" therefore cannot succeed:
+the placeholder simply never resolves there. Values are never returned by
+any API and are redacted from error messages.
+
+`http_post` speaks JSON (`body`) or multipart form (`form`, like
+`curl -F`), can write a binary response to a workspace file (`save_to`,
+for video / images / PDFs) and accepts a per-call `timeout` (up to 1 h)
+for slow generative endpoints. HTTP errors fail honestly — a 401 is a
+failure with the server's message, never a 24-byte "video".
+
+### Teaching the agent the API: paste, upload, or fetch
+
+Credentials say *where* an agent may call; **API documentation** says
+*which endpoints exist*. Paste markdown into the agent form, upload a
+`.md` / `.json` / `.yaml`, or fetch a URL (the agent's own credentials are
+used when the host is allow-listed, so login-gated internal docs work).
+An OpenAPI/Swagger spec is condensed to a compact endpoint list
+(`METHOD /path — summary | params | body`); prose is kept as written.
+Write docs for the *agent*, not for engineers: which tool to call, which
+encoding, how to tell success from failure — see
+`docs/H3-VideoAPI-for-Agent.md` for a worked example.
+
+### Tool scope — the permission boundary
+
+`allowed_tools` is the list of tools an agent may use. Empty means
+"everything the mode exposes" (the historical behaviour). Set it and the
+executor is shown only those schemas **and** the registry refuses
+anything else at execution time — the layer that has to hold, since a
+model can name a tool it was never offered.
+
+```bash
+openteddy agent scope "EasyBuy 數據" db_query db_query_to_csv render_chart_report
+openteddy agent scope 客服 db_query http_get http_post
+openteddy tools            # valid names + risk level
+```
+
+This is what makes the domain allowlist real (no `shell` / `python_exec`
+left to route around it), and it is the **precondition for unattended
+execution**: only a scoped agent may run with `require_approval: false`
+or auto-approve inside a schedule. Start with read-only tools; add
+`http_post` once you have watched the agent use it.
+
 ### Connecting a cloud-hosted database (GCP VM + Tailscale)
 
 The recommended way to let an agent reach a database running on a cloud
@@ -698,6 +782,73 @@ Prefer GCP-native auditing? The equivalent flow with IAM is an **IAP
 tunnel + service-account `key.json`** (`gcloud compute start-iap-tunnel`
 under systemd) — same result, more moving parts. For managed Cloud SQL
 instances, use the official Cloud SQL Auth Proxy instead.
+
+## Schedules & the morning digest
+
+Any session can run on a schedule, and the schedule inherits everything
+the session has — agent persona, database, credentials, tool scope,
+Telegram binding. Create one by saying it, in any door:
+
+```bash
+openteddy run "每天早上 8 點查昨日業績並跟前一天比較，用表格回報" --agent EasyBuy
+# → ✓ 已排好：…  下次執行：明天 08:00
+```
+
+or explicitly: `POST /schedules {session_id, cron, goal}`, `GET /schedules`,
+`PATCH /schedules/{id} {enabled}`, `DELETE /schedules/{id}`, and
+`POST /schedules/{id}/run-now` to test it before tomorrow morning. A
+session bound to a Telegram chat pushes each result to the phone.
+
+Each job reports into its own session, which is right for doing the work
+and useless for oversight. The `read_schedule_digest` tool (and
+`tracker.schedule_digest`) joins every enabled schedule to the result of
+its last run, across all sessions — **problems first**: a job that failed
+or went silent is listed before any result and is never dropped, because
+a clean digest that omitted a broken job would read as "nothing wrong".
+Ask, in any session: *"今天公司狀況如何？有沒有需要注意的"*.
+
+Unattended schedules follow the same policy as the API: a schedule whose
+agent has a tool scope auto-approves high-risk tools after the
+destructive denylist; an unscoped agent's schedule still waits for a
+human. Scheduled runs are capped at 10 minutes.
+
+### Voice fast path (experimental)
+
+`POST /voice/ask {question, session_id?, model?}` returns
+`{path, speech, task_id?, timings}` — a **spoken-form** answer (口語、三句內、
+no markdown) from the cheapest lane that can produce it:
+
+| lane | latency | what |
+|---|---|---|
+| `template` | ~0 ms | greetings, "有沒有問題", "有哪些排程" — straight from the digest |
+| `answer` | ~0.5 s | a small model (`VOICE_MODEL`, e.g. `qwen3.5:2b`) with the digest as its only context |
+| `work` | ~0 ms | deliverables (產生/報告/寄…) or anything the digest can't answer → spoken acknowledgement now, real task dispatched in the background, `task_id` returned |
+
+The big planner/executor is never in the conversational path; that is the
+whole design. STT/TTS are not included yet — this is the text layer they
+will sit on. `timings` in every reply measures each lane rather than
+assuming.
+
+## Security model
+
+What the runtime enforces, and what stays the operator's job.
+
+| Enforced by OpenTeddy | How |
+|---|---|
+| Destructive SQL never runs | `DELETE` / `DROP` / `TRUNCATE` / `UPDATE` are refused by every DB tool — including `db_execute`, and **regardless of approval state**; comments, multi-statement and CTE tricks are caught |
+| Secrets never reach the model | DB URLs and API credentials are write-only: not in prompts, not in API responses, redacted from errors. `python_exec` cannot obtain them |
+| Credentials only go where you said | `{{CRED:name}}` resolves only for allow-listed hosts; requests to other hosts are refused |
+| Tool scope | a scoped agent can use only `allowed_tools`, enforced at execution, not just in what the model is shown |
+| Human approval | high-risk tools wait for a human (web UI, `openteddy` terminal prompt, `POST /tasks/{id}/approve`, Telegram policy). Waiting time is not billed to the task's deadline |
+| Unattended only inside a scope | `require_approval=false` and scheduled auto-approval are refused for unscoped agents; the destructive denylist applies even then |
+| Privacy | `local_only` sessions never call a cloud model; a task can tighten it (`privacy: local_only`), never loosen |
+
+| Operator's job | Why |
+|---|---|
+| Bind agents to a **read-only DB account**, ideally on a **replica**, ideally through **views** that omit PII | the denylist stops writes; only the database can decide what may be *read*, and a view layer also makes answers more accurate (fewer, cleaner tables) |
+| Scope every agent that will run unattended or read untrusted input | an unscoped agent has every tool the mode exposes — the allowlist is a guardrail, not a sandbox, until you scope it |
+| Keep approval on for agents that act on customer messages, emails, tickets | prompt injection via data is the main remaining risk; scope bounds the damage, approval catches the attempt |
+| Protect the host | secrets are stored in plain SQLite; whoever can read the file has them. Run the service as its own user, restrict file permissions, use Tailscale rather than public exposure |
 
 ## Fleet — distributed "AI brain cluster" (optional)
 
@@ -818,11 +969,22 @@ with fixes in [`docs/vllm-deployment.md`](docs/vllm-deployment.md).
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `POST` | `/run` | Submit a task |
+| `POST` | `/tasks` | **Canonical entry.** Accept a task and return `{task_id, session_id, status}` immediately. Body: `intent`, `session_id` or `agent_id`, `mode`, `privacy`, `require_approval`, `wait`, `context` |
+| `GET`  | `/tasks/{id}/events` | Server-sent events for one task (plan, subtasks, tool calls, artifacts, approval requests … `task.done`) |
+| `GET`  | `/tasks/{id}/approvals` | Pending high-risk calls for this task |
+| `POST` | `/tasks/{id}/approve` \| `/reject` \| `/cancel` | Resolve every pending call of the task / cancel it |
+| `POST` | `/run` | Synchronous form used by the web UI (waits for completion) |
 | `GET`  | `/tasks/{id}` | Check task status |
 | `GET`  | `/tasks` | List recent tasks (filter by `session_id`) |
 | `GET`  | `/skills` | List all skills |
 | `POST` | `/skills/generate?name=…&description=…` | Manually create a skill |
+| `POST` | `/skills/{name}/run` | Invoke one skill directly with `{input: {…}}` — no planner |
+| `GET`  | `/models` | Engine, planner/executor/voice models, configured cloud providers |
+| `GET` `POST` | `/agents` \| `PATCH` `DELETE` `/agents/{id}` | Agents (persona, DB, credentials, allowed domains, API docs, `allowed_tools`); secrets are never returned |
+| `POST` | `/agents/{id}/sessions` | Start a session from an agent |
+| `POST` | `/agents/{id}/api_docs/import` | Import API docs from a URL or an uploaded file |
+| `GET` `POST` | `/schedules` \| `PATCH` `DELETE` `/schedules/{id}` \| `POST` `/schedules/{id}/run-now` | Cron schedules bound to sessions |
+| `POST` | `/voice/ask` | Voice fast path: spoken question → spoken answer + timings |
 | `GET`  | `/tools` | List available tools |
 | `GET`  | `/approvals` | Pending human approvals |
 | `POST` | `/approvals/{id}/approve` \| `/reject` | Resolve an approval |
@@ -846,9 +1008,9 @@ with fixes in [`docs/vllm-deployment.md`](docs/vllm-deployment.md).
 ### Example request
 
 ```bash
-curl -X POST http://localhost:8000/run \
+curl -X POST http://localhost:8000/tasks \
   -H 'Content-Type: application/json' \
-  -d '{"goal": "Summarise the key benefits of async Python", "priority": 7}'
+  -d '{"intent": "Summarise the key benefits of async Python", "wait": true}'
 ```
 
 ## How Claude Steps In
