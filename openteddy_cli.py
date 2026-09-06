@@ -193,13 +193,21 @@ class Runtime:
     # ── helpers ────────────────────────────────────────────────────────────
 
     def resolve_agent(self, ref: str) -> Dict[str, Any]:
+        """Match an agent by id, id prefix, exact name, or — because real
+        names look like "EasyBuy 數據 (UAT)" and nobody wants to quote
+        that — a unique case-insensitive fragment of the name."""
         agents = self.req("GET", "/agents").get("agents", [])
-        hits = [a for a in agents if a.get("id") == ref or a.get("id", "").startswith(ref)
-                or a.get("name") == ref]
+        needle = ref.strip().lower()
+        exact = [a for a in agents if a.get("id") == ref or a.get("id", "").startswith(ref)
+                 or a.get("name", "").strip().lower() == needle]
+        hits = exact or [a for a in agents if needle in a.get("name", "").lower()]
         if not hits:
-            die(f"No agent matches '{ref}'. Known: {', '.join(a['name'] for a in agents) or '(none)'}")
+            die(f"No agent matches '{ref}'. Known: "
+                + (", ".join(a['name'] for a in agents) or "(none)")
+                + "\n  (any unique part of the name works, e.g. --agent EasyBuy)")
         if len(hits) > 1:
-            die(f"'{ref}' is ambiguous: " + ", ".join(f"{a['name']} ({a['id'][:8]})" for a in hits))
+            die(f"'{ref}' is ambiguous: " + ", ".join(f"{a['name']} ({a['id'][:8]})" for a in hits)
+                + "\n  (add more of the name, or use the id prefix)")
         return hits[0]
 
     def resolve_task(self, ref: str) -> str:
