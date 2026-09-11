@@ -6,15 +6,79 @@
 
 # OpenTeddy
 
-**讓本機 LLM 真正能交付工作的平台。**
+**在你機器上把事情做完的 AI agent —— 而且重複做的事會越做越熟。**
 
-本機模型自己跑不太動。OpenTeddy 在它外面包一層 — 強化過的 agent loop、會自動長出來的技能庫，以及恰到好處的商業模型補位 — 把它變成真的能完成任務的代理人。
+用 Ollama 在本機執行。只有真的卡住時才升級到雲端模型。重複的工作會變成可重用的技能。
+
+<sub>本機 AI agent · 自主完成工作 · 自我成長的技能 · 混合式升級</sub>
 
 🌐 **官網：** [openteddy.net](https://openteddy.net/) &nbsp;·&nbsp; 📦 **原始碼：** [github.com/m31527/OpenTeddy](https://github.com/m31527/OpenTeddy)
 
 </div>
 
 ---
+
+## 你的第一個完成的任務
+
+三個指令。終點是一份做好的產出，不是「裝好了」。
+
+```bash
+curl -fsSL https://openteddy.net/install | bash        # Python 3.10+ · 建議裝 Ollama（會拉兩個小模型）
+cd ~/OpenTeddy && ./run.sh --open                       # 儀表板在 http://localhost:8000
+./openteddy run "分析 ~/OpenTeddy/examples/sales_sample.csv：每月營收趨勢、前三名產品、一張圖表，存成 HTML"
+```
+
+終端機會顯示計畫、每一次工具呼叫和結果；報告會落在該 session 的
+`reports/` 資料夾，儀表板上會出現 📎 下載晶片。`examples/sales_sample.csv`
+隨 repo 附上，所以在接你自己的資料之前就能先跑通。想用瀏覽器？把同一句話
+貼進儀表板就行。
+
+這一步**不需要任何雲端金鑰**。之後加一把，OpenTeddy 才會開始在卡住時升級、
+並把重複工作長成技能 —— 見「選你的路」。
+
+## 三個值得在意的理由
+
+| | |
+|---|---|
+| **本地掌控** | 規劃與執行都在你的硬體上跑。`local_only` 的 session 絕不呼叫雲端 API —— 你的資料、你的模型、你的機器。 |
+| **更低的持續成本** | 預設路徑每個 token 都是 $0。只有某一步在本地真的失敗才會叫雲端模型，Usage 頁會告訴你同樣的工作在 GPT-4 上要花多少。 |
+| **可重用的技能** | 重複做的事會被寫成純 Python 技能，下一次完全不用推理。技能程式碼由你設定的雲端供應商生成，註冊前會先測試。 |
+
+## 選你的路
+
+| 路徑 | 需要什麼 | 哪些東西會離開你的機器 | 得到什麼 |
+|---|---|---|---|
+| **純本地試用** | Python 3.10+、[Ollama](https://ollama.ai)、預設 2B 模型約需 8 GB RAM（16 GB 較舒適）。`OPENTEDDY_LLM_MODE=local` 或 Settings → *Local only*。 | **什麼都不會。** | 完整的 agent loop、工具、記憶、儀表板、CLI、排程、Telegram。沒有雲端升級、沒有技能生成。 |
+| **混合模式**（預設） | 上述 + **一把**雲端金鑰（Anthropic / OpenAI / Gemini / Deepseek / OpenRouter），貼在 Settings → Cloud LLM Provider。 | 只有本地硬失敗後升級的那些子任務，以及技能生成的提示。`local_only` session 仍然什麼都不送。 | + 自動升級安全網，+ 自我成長的技能。 |
+| **開發者 / 手動安裝** | git、venv、`.env` | 同上 | 見下方「快速開始」、Task API、CLI（英文 README）。 |
+| **桌面 App（macOS）** | 官網的 `.dmg` | 同上 | 引導精靈幫你裝 Ollama、依硬體等級拉模型。 |
+
+## 三個證明流程
+
+每一個都是真的任務、真的產出。建議照順序試。
+
+**1. 從資料出報告** —— 分析模式
+
+```bash
+./openteddy run "分析 ~/OpenTeddy/examples/sales_sample.csv：每月營收趨勢、前三名產品、一張圖表，存成 HTML"
+```
+`csv_describe` → `python_exec` → `render_chart_report` → `reports/<名稱>.html`，含 Chart.js 圖表與 markdown 摘要。deliverable judge 會確認檔案真的是報告，不是「描述報告的文字」。
+
+**2. 一個寫程式的任務** —— code 模式
+
+```bash
+./openteddy run "寫一個把 CSV 轉成 JSON 的 Python CLI（支援 --pretty），加上 pytest 測試，並執行測試" --mode code
+```
+檔案寫進 session 工作區、測試在 shell 裡跑、摘要會引用測試輸出。高風險指令會在你的終端機停下來問 `y/N`。
+
+**3. 重複的工作變成技能** —— 混合模式
+
+把出報告的任務對不同檔案跑三次。OpenTeddy 會發現重複的模式（ChromaDB 相似度，預設 3 次、0.75），用你的雲端供應商合成技能、先測試、再註冊：
+
+```bash
+./openteddy skill list                                   # 新技能以 TESTING 出現，用過幾次升為 ACTIVE
+./openteddy skill run <名稱> --input '{"path": "~/data/q3.csv"}'   # 不經規劃、不推理，直接跑技能
+```
 
 ## 為什麼存在這個專案
 
@@ -60,13 +124,13 @@
 
 ### 1. 事前準備
 
-- Python 3.11+
+- Python 3.10+
 - [Ollama](https://ollama.ai)：
   ```bash
-  ollama pull gemma3:4b
-  ollama pull qwen2.5:3b
+  ollama pull gemma4:e2b
+  ollama pull qwen3.5:2b
   ```
-- 一把 Anthropic API key（用於升級與產生技能）
+- （可選）一把 Anthropic / OpenAI / Gemini / Deepseek / OpenRouter 金鑰 —— 只用於升級與技能生成，之後在 Settings → Cloud LLM Provider 填也可以
 
 ### 2. 安裝
 
@@ -82,7 +146,9 @@ pip install -r requirements.txt
 
 ```bash
 cp .env.example .env
-# 編輯 .env，至少填入 ANTHROPIC_API_KEY
+# 純本地：不用再填任何東西。OPENTEDDY_LLM_MODE=local 可保證完全不呼叫雲端。
+# 混合模式（預設）：加「一把」雲端金鑰，例如 ANTHROPIC_API_KEY=…，或之後在
+#                   Settings → Cloud LLM Provider 貼上。只用於升級與技能生成。
 ```
 
 ### 4. 啟動
