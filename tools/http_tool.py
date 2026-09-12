@@ -213,6 +213,17 @@ async def http_post(
         # Credentials can appear in form fields too.
         _missing: set = set()
         form = _substitute(form, _creds, _missing)
+    # Money is the other thing a wrong tool call can't take back. Hard
+    # caps on ad-platform calls, enforced here regardless of approval —
+    # see spend_guard.py.
+    try:
+        from spend_guard import check_spend as _check_spend
+        _deny = _check_spend(url, body, form)
+    except Exception as exc:  # noqa: BLE001
+        _deny = f"🚫 Spend guard unavailable ({type(exc).__name__}) — refusing to be safe."
+    if _deny:
+        logger.warning("http_post refused by spend guard: %s", _deny)
+        return make_result(False, error=_deny, duration_ms=_ms(start))
     # Cap is 1 hour, not 15 minutes: a measured 15-second H3 video took
     # 31m26s to generate. A 900s ceiling silently clamped an explicit
     # timeout=2700 back down and killed the request two thirds of the
@@ -266,6 +277,14 @@ async def http_post(
             # gets told a video was generated when nothing was. Fail
             # loudly with the server's actual message instead.
             return make_result(False, error=fail, duration_ms=_ms(start))
+
+        # Only a call the platform accepted counts toward the per-day
+        # budget-change limit.
+        try:
+            from spend_guard import note_spend_call as _note_spend
+            _note_spend(url, body, form)
+        except Exception:  # noqa: BLE001
+            pass
 
         if save_to:
             saved = _save_response(resp, save_to)

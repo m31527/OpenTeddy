@@ -918,6 +918,39 @@ whole design. STT/TTS are not included yet — this is the text layer they
 will sit on. `timings` in every reply measures each lane rather than
 assuming.
 
+## Worked example: an e-commerce growth loop (Shopify + Meta Ads)
+
+Three agents, one ledger, three schedules — set up in one command, spending nothing:
+
+```bash
+export SHOPIFY_STORE=yourstore.myshopify.com SHOPIFY_ADMIN_TOKEN=shpat_…   # read_orders, read_reports
+export META_AD_ACCOUNT_ID=act_… META_ACCESS_TOKEN=EAAB…                    # ads_read (+ ads_management later)
+export CPA_TARGET=300
+.venv/bin/python scripts/setup_ads_agents.py           # idempotent; --dry-run shows the plan
+```
+
+| agent | when | does | notifies when |
+|---|---|---|---|
+| 📊 分析師 | 07:30 | reads yesterday's Shopify orders (with UTM attribution) and Meta insights per campaign, appends them to a SQLite **ledger**, writes the daily report | a campaign's CPA > 1.5× target, ROAS drops > 20 % vs the 7-day mean, or a data pull fails |
+| 🎨 素材 | 08:00 | turns the best-performing angles into ad copy, a Shopify blog **draft**, optionally an H3 video | every run (drafts need a human) |
+| 💸 投手 | 09:00 | rule-based action proposals — pause / +20 % budget / launch a drafted creative — written to the ledger's `actions` table | there is something to approve |
+
+Decisions come from rules over the ledger (CPA, ROAS, impressions), not from the model's intuition; the model writes, explains and proposes. Agent-ready API docs live in `docs/agents/` (`shopify-for-agent.md`, `meta-ads-for-agent.md`) — written for the agent, not for engineers: which tool, which encoding, how to tell success from failure. Phase 2 (the buyer executes approved proposals) is a scope change away; phase 3 (bounded autonomy) is only sensible after the **spend guard** caps are set and a few weeks of proposals have earned trust.
+
+### Spend guard
+
+Money is the other thing a wrong tool call can't take back, so `spend_guard.py` puts hard rules on every `http_post` to an ad-platform host — **regardless of approval state**, like the destructive-SQL denylist:
+
+| call | result |
+|---|---|
+| `status=PAUSED` | always allowed — the safe direction |
+| `status=ACTIVE` | refused unless `OPENTEDDY_AD_ALLOW_ACTIVATE=true`; agents create/edit paused, a human activates in Ads Manager |
+| create campaign / ad set / ad | only with `status=PAUSED` |
+| `daily_budget` / `lifetime_budget` / `bid_amount` | only ≤ `OPENTEDDY_AD_MAX_DAILY_BUDGET` / `…_LIFETIME_BUDGET` (minor units, e.g. cents) — **both default to 0, refusing every budget change until you set them** — and at most `OPENTEDDY_AD_MAX_BUDGET_CHANGES_PER_DAY` (3) successful changes per UTC day |
+| ad creatives | allowed — they don't spend |
+
+Anything beyond the caps is done by a person in the platform's own UI, on purpose.
+
 ## Security model
 
 What the runtime enforces, and what stays the operator's job.

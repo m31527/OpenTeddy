@@ -136,6 +136,26 @@ class Config:
         or os.getenv("QWEN_MODEL", "qwen3.5:2b")
     )
 
+    # ── Ad-spend guard (spend_guard.py) ──────────────────────────────────
+    # Hard caps on ad-platform calls that spend money, enforced on every
+    # http_post regardless of approval. Amounts are in the platform's
+    # minor units (Meta: cents). 0 = budget changes refused until the
+    # operator sets a cap on purpose.
+    ad_max_daily_budget: int = field(
+        default_factory=lambda: int(os.getenv("OPENTEDDY_AD_MAX_DAILY_BUDGET", "0") or 0)
+    )
+    ad_max_lifetime_budget: int = field(
+        default_factory=lambda: int(os.getenv("OPENTEDDY_AD_MAX_LIFETIME_BUDGET", "0") or 0)
+    )
+    ad_max_budget_changes_per_day: int = field(
+        default_factory=lambda: int(os.getenv("OPENTEDDY_AD_MAX_BUDGET_CHANGES_PER_DAY", "3") or 3)
+    )
+    # Agents create/edit PAUSED; a human activates in Ads Manager.
+    ad_allow_activate: bool = field(
+        default_factory=lambda: os.getenv("OPENTEDDY_AD_ALLOW_ACTIVATE", "false").strip().lower()
+        in ("1", "true", "yes")
+    )
+
     # Ollama `keep_alive` — how long Ollama keeps a loaded model in VRAM
     # after the last request. Default 5 min unloads aggressively, which
     # forces a 5-15 s cold reload every time the user pauses for coffee.
