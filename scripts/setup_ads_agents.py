@@ -15,7 +15,13 @@ ad-platform POST is bounded by spend_guard.py anyway. Phase 0/1 only.
 Usage (on the machine running OpenTeddy):
 
     export SHOPIFY_STORE=yourstore.myshopify.com
-    export SHOPIFY_ADMIN_TOKEN=shpat_…          # read_orders, read_reports, (write_content for drafts)
+    # Dev Dashboard app (the only kind a store can create since 2026): the
+    # client id/secret pair — OpenTeddy mints and refreshes the 24-hour
+    # token itself (shopify_auth.py). Scopes: read_orders, read_reports,
+    # read_products, write_content (drafts).
+    export SHOPIFY_CLIENT_ID=…
+    export SHOPIFY_CLIENT_SECRET=…
+    #   (legacy admin-created custom app instead? SHOPIFY_ADMIN_TOKEN=shpat_… works too)
     export META_AD_ACCOUNT_ID=act_1234567890
     export META_ACCESS_TOKEN=EAAB…              # ads_read (+ ads_management later)
     export CPA_TARGET=300                       # in your store currency, for the analyst's alert rule
@@ -124,11 +130,15 @@ def main() -> int:
 
     store = os.environ.get("SHOPIFY_STORE", "").strip().replace("https://", "").rstrip("/")
     shop_tok = os.environ.get("SHOPIFY_ADMIN_TOKEN", "").strip()
+    shop_cid = os.environ.get("SHOPIFY_CLIENT_ID", "").strip()
+    shop_sec = os.environ.get("SHOPIFY_CLIENT_SECRET", "").strip()
     act = os.environ.get("META_AD_ACCOUNT_ID", "").strip()
     meta_tok = os.environ.get("META_ACCESS_TOKEN", "").strip()
     cpa_target = os.environ.get("CPA_TARGET", "300").strip()
-    missing = [k for k, v in (("SHOPIFY_STORE", store), ("SHOPIFY_ADMIN_TOKEN", shop_tok),
+    missing = [k for k, v in (("SHOPIFY_STORE", store),
                               ("META_AD_ACCOUNT_ID", act), ("META_ACCESS_TOKEN", meta_tok)) if not v]
+    if not shop_tok and not (shop_cid and shop_sec):
+        missing.append("SHOPIFY_CLIENT_ID + SHOPIFY_CLIENT_SECRET (or SHOPIFY_ADMIN_TOKEN)")
     if missing and not a.dry_run:
         die("missing env: " + ", ".join(missing) + "  (see --help)")
     if act and not act.startswith("act_"):
@@ -157,8 +167,13 @@ def main() -> int:
             with open(p, encoding="utf-8") as fh:
                 h3_doc = "\n\n" + fh.read()
 
-    creds_common = {"shopify_store": store, "shopify_token": shop_tok,
-                    "meta_ad_account": act, "meta_token": meta_tok}
+    creds_common = {"shopify_store": store, "meta_ad_account": act, "meta_token": meta_tok}
+    if shop_tok:
+        creds_common["shopify_token"] = shop_tok
+    else:
+        # http_tool derives {{CRED:shopify_token}} from this pair at call time.
+        creds_common["shopify_client_id"] = shop_cid
+        creds_common["shopify_client_secret"] = shop_sec
     domains_common = [store, "graph.facebook.com"] if store else ["graph.facebook.com"]
 
     agents = [
@@ -199,7 +214,8 @@ def main() -> int:
         },
     ]
 
-    print(f"runtime  {URL}\nledger   {ledger_abs}\nstore    {store or '(dry-run)'}\naccount  {act or '(dry-run)'}\n")
+    auth_mode = "static token" if shop_tok else ("client credentials (auto-refresh)" if shop_cid else "(dry-run)")
+    print(f"runtime  {URL}\nledger   {ledger_abs}\nstore    {store or '(dry-run)'}  auth: {auth_mode}\naccount  {act or '(dry-run)'}\n")
     if a.dry_run:
         for ag in agents:
             print(f"— {ag['name']} ({ag['mode']})\n   tools: {', '.join(ag['allowed_tools'])}\n"

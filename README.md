@@ -923,11 +923,14 @@ assuming.
 Three agents, one ledger, three schedules — set up in one command, spending nothing:
 
 ```bash
-export SHOPIFY_STORE=yourstore.myshopify.com SHOPIFY_ADMIN_TOKEN=shpat_…   # read_orders, read_reports
-export META_AD_ACCOUNT_ID=act_… META_ACCESS_TOKEN=EAAB…                    # ads_read (+ ads_management later)
+export SHOPIFY_STORE=yourstore.myshopify.com
+export SHOPIFY_CLIENT_ID=… SHOPIFY_CLIENT_SECRET=…        # Dev Dashboard app: read_orders, read_reports, read_products, write_content
+export META_AD_ACCOUNT_ID=act_… META_ACCESS_TOKEN=EAAB…    # ads_read (+ ads_management later)
 export CPA_TARGET=300
 .venv/bin/python scripts/setup_ads_agents.py           # idempotent; --dry-run shows the plan
 ```
+
+Shopify apps created in the Dev Dashboard (the only kind a store can create since 2026) have no permanent token — a client id/secret pair is exchanged for a token that expires every 24 hours. OpenTeddy does that exchange itself (`shopify_auth.py`, cached, refreshed before expiry), so the agent keeps writing `{{CRED:shopify_token}}` and never sees the secret or the token. A legacy admin-created app's permanent `SHOPIFY_ADMIN_TOKEN=shpat_…` still works.
 
 | agent | when | does | notifies when |
 |---|---|---|---|

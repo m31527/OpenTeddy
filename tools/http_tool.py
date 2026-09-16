@@ -112,6 +112,18 @@ async def _apply_policy(
     if not creds and not allowed:
         return None, url, headers or {}, body, {}
 
+    # Derived credentials. A Dev Dashboard Shopify app has no permanent
+    # token — only a client id/secret pair exchanged for a token that
+    # expires daily. Mint (and cache) it here so agents keep writing
+    # {{CRED:shopify_token}} and never learn the secret or the token.
+    _derive_err = ""
+    if creds.get("shopify_client_id") and not (creds.get("shopify_token") or "").strip():
+        try:
+            from shopify_auth import derive_shopify_token
+            creds = await derive_shopify_token(creds)
+        except Exception as exc:  # noqa: BLE001
+            _derive_err = f"{type(exc).__name__}: {exc}"
+
     if allowed and not _host_allowed(url, allowed):
         return (
             f"🚫 Blocked: this agent may only call {', '.join(allowed)} — "
@@ -134,6 +146,14 @@ async def _apply_policy(
                 "resolved: this agent has no allowed-domains list, so "
                 "credentials are never sent. Add the target host to the "
                 "agent's allowed domains first.",
+                url, headers or {}, body, {},
+            )
+        if "shopify_token" in missing and _derive_err:
+            return (
+                f"🚫 Shopify token could not be minted from the client "
+                f"credentials ({_derive_err}). Check the client id/secret, "
+                f"that the app is installed on the store, and that app and "
+                f"store are in the same organization.",
                 url, headers or {}, body, {},
             )
         return (
