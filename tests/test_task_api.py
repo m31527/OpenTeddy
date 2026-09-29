@@ -27,6 +27,8 @@ from config import config  # noqa: E402
 
 _TMP = tempfile.mkdtemp(prefix="openteddy-taskapi-")
 config.db_path = os.path.join(_TMP, "tracker.db")
+config.decision_mode = "off"        # keep Laya (optional, ~GBs) out of the API tests
+config.decision_preload = False
 
 from tool_registry import ToolRegistry, make_result  # noqa: E402
 from approval_store import ApprovalStore  # noqa: E402

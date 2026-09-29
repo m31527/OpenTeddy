@@ -107,6 +107,19 @@ def _resolve_default_workspace() -> str:
     return os.path.join(_PROJECT_ROOT, "agent-workspace")
 
 
+def _json_env(name: str, default):
+    """Parse a JSON object from an env var; malformed → default."""
+    raw = os.getenv(name, "")
+    if not raw.strip():
+        return default
+    try:
+        import json as _json
+        v = _json.loads(raw)
+        return v if isinstance(v, type(default)) else default
+    except Exception:  # noqa: BLE001
+        return default
+
+
 @dataclass
 class Config:
     # ── Model endpoints ──────────────────────────────────────────────────────
@@ -150,6 +163,33 @@ class Config:
     ad_max_budget_changes_per_day: int = field(
         default_factory=lambda: int(os.getenv("OPENTEDDY_AD_MAX_BUDGET_CHANGES_PER_DAY", "3") or 3)
     )
+    # ── Decision engine (decide.py) ─────────────────────────────────────
+    # Typed decisions (judge / notify gate / schedule intent / voice route)
+    # go rule → Laya → fallback. Mode: off | shadow | active. Shadow is the
+    # default: Laya runs and is logged next to the real verdict but never
+    # decides — promote a kind to active only after logged agreement and a
+    # fitted temperature say it is safe.
+    decision_mode: str = field(
+        default_factory=lambda: os.getenv("OPENTEDDY_DECISION_MODE", "shadow").strip().lower()
+    )
+    decision_active_kinds: list = field(
+        default_factory=lambda: [k.strip() for k in os.getenv("OPENTEDDY_DECISION_ACTIVE_KINDS", "").split(",") if k.strip()]
+    )
+    decision_off_kinds: list = field(
+        default_factory=lambda: [k.strip() for k in os.getenv("OPENTEDDY_DECISION_OFF_KINDS", "").split(",") if k.strip()]
+    )
+    decision_min_confidence: float = field(
+        default_factory=lambda: float(os.getenv("OPENTEDDY_DECISION_MIN_CONFIDENCE", "0.85") or 0.85)
+    )
+    # Per-kind temperature for calibration, JSON: {"judge.deliverable": 1.6}
+    decision_temperatures: dict = field(
+        default_factory=lambda: _json_env("OPENTEDDY_DECISION_TEMPERATURES", {})
+    )
+    decision_device: str = field(default_factory=lambda: os.getenv("OPENTEDDY_DECISION_DEVICE", ""))
+    decision_preload: bool = field(
+        default_factory=lambda: os.getenv("OPENTEDDY_DECISION_PRELOAD", "true").strip().lower() in ("1", "true", "yes")
+    )
+
     # Agents create/edit PAUSED; a human activates in Ads Manager.
     ad_allow_activate: bool = field(
         default_factory=lambda: os.getenv("OPENTEDDY_AD_ALLOW_ACTIVATE", "false").strip().lower()

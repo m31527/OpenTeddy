@@ -11,6 +11,11 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 logging.disable(logging.WARNING)
 
 import notify_gate as G
+import decide as _decide
+from config import config as _cfg
+_cfg.decision_mode = "off"          # these tests pin the fallback paths; Laya stays out
+async def _nolog(rec): pass
+_decide.set_log_sink(_nolog)
 
 
 class _Resp:

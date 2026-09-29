@@ -13,6 +13,11 @@ logging.disable(logging.WARNING)
 from config import config
 from models import SubTask
 from orchestrator import Orchestrator
+import decide as _decide
+from config import config as _cfg
+_cfg.decision_mode = "off"          # these tests pin the fallback paths; Laya stays out
+async def _nolog(rec): pass
+_decide.set_log_sink(_nolog)
 
 
 class _Resp:

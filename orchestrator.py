@@ -1928,88 +1928,89 @@ class Orchestrator:
             f"FILE CONTENT (first {len(content)} chars):\n"
             f"------\n{content}\n------"
         )
-        try:
-            # Through local_engine so the judge's rules travel as a
-            # role=system message. This call used to post a top-level
-            # "system" field to /api/chat, which Ollama silently ignores —
-            # the judge never saw its instructions, answered in prose,
-            # and the keyword fallback then condemned every real report
-            # because the prose contained the word "report".
-            payload = local_engine.build_payload(
-                model=config.qwen_model,
-                messages=[{"role": "user", "content": user_msg}],
-                system=self._DELIVERABLE_JUDGE_PROMPT,
-                tools=None,
-                stream=False,
-                temperature=0.1,
-                num_predict=200,
-                num_ctx=int(getattr(config, "qwen_num_ctx", 16384)),
-                keep_alive=getattr(config, "ollama_keep_alive", "24h"),
-            )
-            if not local_engine.is_vllm():
-                # Structured-output mode — forces valid JSON so small
-                # thinking models can't wrap the verdict in commentary.
-                payload["format"] = "json"
-            # 30s cap: the judge needs ~50 output tokens; past 30s something
-            # else is wrong and skipping is better than stalling the plan.
-            resp = await self._http.post(
-                local_engine.chat_endpoint(), json=payload, timeout=30,
-            )
-            resp.raise_for_status()
-            msg = local_engine.normalize_response(resp.json()).get("message") or {}
-            verdict_raw = (msg.get("content") or msg.get("thinking") or "").strip()
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("Deliverable verifier crashed: %s — skipping.", exc)
-            return None
+        async def _llm() -> Tuple[Optional[bool], str]:
+            """The original executor-model judge. (None, reason) = couldn't tell."""
+            try:
+                # Through local_engine so the judge's rules travel as a
+                # role=system message (a top-level "system" field is
+                # silently ignored by Ollama's /api/chat).
+                payload = local_engine.build_payload(
+                    model=config.qwen_model,
+                    messages=[{"role": "user", "content": user_msg}],
+                    system=self._DELIVERABLE_JUDGE_PROMPT,
+                    tools=None,
+                    stream=False,
+                    temperature=0.1,
+                    num_predict=200,
+                    num_ctx=int(getattr(config, "qwen_num_ctx", 16384)),
+                    keep_alive=getattr(config, "ollama_keep_alive", "24h"),
+                )
+                if not local_engine.is_vllm():
+                    payload["format"] = "json"
+                # 30s cap: the judge needs ~50 output tokens; past 30s
+                # something else is wrong and skipping beats stalling.
+                resp = await self._http.post(
+                    local_engine.chat_endpoint(), json=payload, timeout=30,
+                )
+                resp.raise_for_status()
+                msg = local_engine.normalize_response(resp.json()).get("message") or {}
+                verdict_raw = (msg.get("content") or msg.get("thinking") or "").strip()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Deliverable verifier crashed: %s — skipping.", exc)
+                return None, ""
 
-        # Parse the JSON response. Be defensive — Ollama's `format: json`
-        # is reliable but not bulletproof, and some thinking models still
-        # leak prose around the JSON object.
-        ok: Optional[bool] = None
-        reason = verdict_raw[:200]
-        try:
-            # Try to extract the first {...} block in case the model
-            # decided to add commentary outside it anyway.
-            match = re.search(r"\{[\s\S]*\}", verdict_raw)
-            data = json.loads(match.group(0)) if match else json.loads(verdict_raw)
-            v = str(data.get("verdict", "")).strip().upper()
-            if v == "PASS":
-                ok, reason = True,  data.get("reason") or "OK"
-            elif v == "FAIL":
-                ok, reason = False, data.get("reason") or "Did not match goal"
-        except Exception:  # noqa: BLE001
-            # JSON parse failed — fall back to keyword heuristics on
-            # raw text. Better lenient than false-positive on a flaky
-            # judge that just happens to disagree with our format.
-            lower = verdict_raw.lower()
-            # Only the strongest signals. "report" / "describes" /
-            # "outline" used to be fail words — and condemned every
-            # genuine report the moment the judge said "this is a report
-            # of…". For a document-shaped goal we don't guess from words
-            # at all: an unparseable verdict is treated as "can't tell".
-            doc_goal = re.search(
-                r"report|報告|summary|摘要|markdown|html|chart|圖表|dashboard|文件|分析",
-                (st.description or "").lower(),
-            )
-            fail_keywords = ("placeholder", "skeleton", "lorem ipsum",
-                             "not implemented", "pseudocode", "todo:",
-                             "no actual", "no real")
-            pass_keywords = ("complete", "functional", "fully implemented",
-                             "working", "matches the goal", "real data")
-            if doc_goal:
-                ok = None
-            elif any(k in lower for k in fail_keywords):
-                ok, reason = False, "verdict text suggests not a real artifact"
-            elif any(k in lower for k in pass_keywords):
-                ok, reason = True, "verdict text suggests artifact is real"
+            ok_: Optional[bool] = None
+            reason_ = verdict_raw[:200]
+            try:
+                match = re.search(r"\{[\s\S]*\}", verdict_raw)
+                data = json.loads(match.group(0)) if match else json.loads(verdict_raw)
+                v = str(data.get("verdict", "")).strip().upper()
+                if v == "PASS":
+                    ok_, reason_ = True, data.get("reason") or "OK"
+                elif v == "FAIL":
+                    ok_, reason_ = False, data.get("reason") or "Did not match goal"
+            except Exception:  # noqa: BLE001
+                # Only the strongest signals; for a document-shaped goal
+                # an unparseable verdict is "can't tell", never FAIL.
+                lower = verdict_raw.lower()
+                doc_goal = re.search(
+                    r"report|報告|summary|摘要|markdown|html|chart|圖表|dashboard|文件|分析",
+                    (st.description or "").lower(),
+                )
+                fail_keywords = ("placeholder", "skeleton", "lorem ipsum",
+                                 "not implemented", "pseudocode", "todo:",
+                                 "no actual", "no real")
+                pass_keywords = ("complete", "functional", "fully implemented",
+                                 "working", "matches the goal", "real data")
+                if doc_goal:
+                    ok_ = None
+                elif any(k in lower for k in fail_keywords):
+                    ok_, reason_ = False, "verdict text suggests not a real artifact"
+                elif any(k in lower for k in pass_keywords):
+                    ok_, reason_ = True, "verdict text suggests artifact is real"
+            return ok_, reason_
 
+        # Decision engine: rule → Laya → the model judge above. In shadow
+        # mode Laya's verdict is logged next to the model's; once the kind
+        # is promoted, a confident Laya answer skips the model call.
+        import decide as _decide
+        _state = (f"GOAL: {st.description}\nFILE: {os.path.basename(path)}\n"
+                  f"CONTENT:\n{content[:2500]}")
+        _dec = await _decide.yes_no(
+            _decide.KIND_JUDGE, _state,
+            "Is this file a real, finished deliverable that matches the goal "
+            "(not a placeholder, skeleton, or a description of one)? A report "
+            "whose figures are zero but presented honestly is still real.",
+            fallback=_llm, task_id=st.parent_task_id,
+        )
+        ok, reason = _dec.answer, (_dec.reason or "")
         if ok is None:
             # Genuinely couldn't tell — be lenient, treat as PASS so we
             # don't false-positive trip on a flaky judge.
             return None
         logger.info(
-            "Deliverable verifier: %s (file=%s, reason=%s)",
-            "PASS" if ok else "FAIL", os.path.basename(path), reason[:120],
+            "Deliverable verifier: %s via %s (file=%s, reason=%s)",
+            "PASS" if ok else "FAIL", _dec.provider, os.path.basename(path), reason[:120],
         )
         return (f"[deliverable-judge] {os.path.basename(path)}: {reason}", ok, path)
 

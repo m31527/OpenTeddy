@@ -548,6 +548,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:  # type: ignore[type-arg]
     # call returns its single token).
     asyncio.create_task(_warmup_ollama_models(), name="ollama_warmup")
 
+    # Decision engine: warm Laya (first run downloads ~1.5 GB) so the
+    # first real decision doesn't wait on it. Never blocks startup; a
+    # decision made before it's ready simply takes the fallback.
+    try:
+        import decide as _decide
+        if getattr(config, "decision_preload", True) and _decide.mode_for("*") != "off":
+            asyncio.create_task(_decide.preload(), name="laya_preload")
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("decision engine preload skipped: %s", exc)
+
     # Auto-build the cyber-skills index if it's missing — a one-off ~12
     # min download via the GitHub API. Streams progress through ws_manager
     # so the chat UI can render a toast instead of leaving the user
@@ -3502,6 +3512,58 @@ class _VoiceAskBody(BaseModel):
     # Optional override so a client can compare small models for latency
     # without touching config.
     model: Optional[str] = None
+
+
+class _DecisionOutcomeBody(BaseModel):
+    outcome: str
+
+
+@app.get("/decisions/stats")
+async def decisions_stats(hours: int = 168) -> dict:
+    """Evidence for promoting a decision kind from shadow to active:
+    per-kind volume, provider mix, Laya agreement with the real verdict,
+    how often it was confident, latencies. See decide.py."""
+    import decide as _decide
+    stats = await tracker.decision_stats(hours=hours)
+    stats["engine"] = _decide.provider_status()
+    return stats
+
+
+class _DecisionProbeBody(BaseModel):
+    state: str
+    instructions: str
+    dtype: str = "noul"                 # noul | choice
+    criteria: Optional[dict] = None     # for choice: {label: description}
+    kind: str = "probe.adhoc"
+
+
+@app.post("/decisions/probe")
+async def decisions_probe(body: _DecisionProbeBody) -> dict:
+    """Ask Laya directly, without deciding anything — an operator's way to
+    see what the decision model would say about their own data, and a
+    latency check inside the running process. Logged like any probe."""
+    import decide as _decide
+    if body.dtype == "choice":
+        if not body.criteria:
+            raise HTTPException(status_code=400, detail="choice needs criteria {label: description}")
+        p = await _decide.probe_choice(body.kind, body.state, body.instructions, body.criteria)
+    else:
+        p = await _decide.probe_yes_no(body.kind, body.state, body.instructions)
+    return {"kind": p.kind, "dtype": p.dtype, "answer": p.answer, "confidence": p.confidence,
+            "raw_confidence": p.raw_confidence, "probabilities": p.probabilities,
+            "latency_ms": p.latency_ms, "model": p.model, "input_tokens": p.input_tokens,
+            "error": p.error or None, "mode": p.mode, "engine": _decide.provider_status()["status"]}
+
+
+@app.post("/decisions/{decision_id}/outcome")
+async def decision_outcome(decision_id: str, body: _DecisionOutcomeBody) -> dict:
+    """Attach ground truth to a logged decision (e.g. the owner marked an
+    alert as noise, a judge verdict was overturned). This is the label
+    set a kind is fine-tuned on."""
+    ok = await tracker.record_decision_outcome(decision_id, body.outcome.strip()[:64])
+    if not ok:
+        raise HTTPException(status_code=404, detail="decision not found")
+    return {"id": decision_id, "outcome": body.outcome}
 
 
 @app.post("/voice/ask")

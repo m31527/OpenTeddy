@@ -274,13 +274,33 @@ async def ask(
         rows = digest_rows
     digest_ms = _ms(td)
 
+    # Decision engine (shadow): which lane would Laya pick? Logged next to
+    # the lane actually taken. Fire-and-forget so voice latency is untouched.
+    import decide as _decide
+    _probe_task = asyncio.create_task(_decide.probe_choice(
+        _decide.KIND_VOICE, q, "這句話屬於哪一類？",
+        {"template": "打招呼、問有沒有問題或需要注意的、問有哪些排程",
+         "answer": "問排程結果裡已經有答案的事（數字、狀況、某項怎麼了）",
+         "work": "要求去查、去做、產生、分析、寄送新的東西"},
+    ))
+
+    def _shadow(path: str, provider: str) -> None:
+        async def _f() -> None:
+            try:
+                await _decide.log_probe(await _probe_task, path, provider=provider)
+            except Exception:  # noqa: BLE001
+                pass
+        asyncio.create_task(_f())
+
     tpl = _template(q, rows)
     if tpl:
+        _shadow("template", "rule")
         return {"path": "template", "speech": tpl,
                 "timings": {"digest_ms": digest_ms, "total_ms": _ms(t0)}}
 
     if _DELIVERABLE.search(q):
         info = await (dispatch or _default_dispatch)(q, session_id)
+        _shadow("work", "rule")
         return {"path": "work", "speech": _WORK_ACK, **info,
                 "timings": {"digest_ms": digest_ms, "total_ms": _ms(t0),
                             "work_tag": "deliverable"}}
@@ -301,6 +321,7 @@ async def ask(
             # "model not found" — a config problem, not a transient one;
             # say so instead of inviting the user to keep retrying.
             speech = f"語音模型 {model} 還沒安裝，請在設定裡指定 VOICE_MODEL。"
+        _shadow("unavailable", "fallback")
         return {"path": "unavailable",
                 "speech": speech,
                 "error": f"{type(exc).__name__}: {exc}",
@@ -327,7 +348,9 @@ async def ask(
         info = await (dispatch or _default_dispatch)(q, session_id)
         timings["total_ms"] = _ms(t0)
         timings["work_tag"] = "tag" if m else ("nodata" if nodata else "ack")
+        _shadow("work", "fallback")
         return {"path": "work", "speech": ack, **info, "timings": timings}
 
     timings["total_ms"] = _ms(t0)
+    _shadow("answer", "fallback")
     return {"path": "answer", "speech": _spoken(raw), "timings": timings}

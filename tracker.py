@@ -186,6 +186,18 @@ class Tracker:
             "ALTER TABLE scheduled_tasks ADD COLUMN notify_when TEXT NOT NULL DEFAULT ''",
             "ALTER TABLE scheduled_tasks ADD COLUMN last_alert TEXT",
             "ALTER TABLE scheduled_tasks ADD COLUMN last_alert_reason TEXT",
+            # Decision engine log (decide.py): every typed decision, what
+            # Laya said next to what actually decided, so a kind can be
+            # promoted from shadow to active on evidence.
+            "CREATE TABLE IF NOT EXISTS decisions ("
+            "  id TEXT PRIMARY KEY, ts TEXT NOT NULL, kind TEXT NOT NULL, dtype TEXT NOT NULL,"
+            "  mode TEXT NOT NULL, answer TEXT, confidence REAL, provider TEXT NOT NULL,"
+            "  reason TEXT, latency_ms INTEGER, laya_answer TEXT, laya_confidence REAL,"
+            "  laya_raw_confidence REAL, laya_latency_ms INTEGER, laya_model TEXT, laya_error TEXT,"
+            "  fallback_answer TEXT, fallback_latency_ms INTEGER, agree INTEGER,"
+            "  task_id TEXT NOT NULL DEFAULT '', outcome TEXT"
+            ")",
+            "CREATE INDEX IF NOT EXISTS ix_decisions_kind_ts ON decisions(kind, ts)",
         ]
         for sql in migrations:
             try:
@@ -709,6 +721,84 @@ class Tracker:
             d = dict(zip(cols, row))
         d["enabled"] = bool(d.get("enabled", 0))
         return d
+
+    # ── Decision engine log ──────────────────────────────────────────────
+
+    async def log_decision(self, rec: Dict[str, Any]) -> None:
+        cols = ["id", "ts", "kind", "dtype", "mode", "answer", "confidence", "provider", "reason",
+                "latency_ms", "laya_answer", "laya_confidence", "laya_raw_confidence",
+                "laya_latency_ms", "laya_model", "laya_error", "fallback_answer",
+                "fallback_latency_ms", "agree", "task_id"]
+        row = dict(rec)
+        row.setdefault("ts", datetime.utcnow().isoformat())
+        await self.db.execute(
+            f"INSERT OR REPLACE INTO decisions ({', '.join(cols)}) VALUES ({', '.join('?' * len(cols))})",
+            tuple(row.get(c) for c in cols),
+        )
+        await self.db.commit()
+
+    async def record_decision_outcome(self, decision_id: str, outcome: str) -> bool:
+        """Attach ground truth later (human overrode, judge overturned…)."""
+        async with self.db.execute(
+            "UPDATE decisions SET outcome=? WHERE id=?", (outcome, decision_id),
+        ) as cur:
+            await self.db.commit()
+            return (cur.rowcount or 0) > 0
+
+    async def decision_stats(self, hours: int = 168) -> Dict[str, Any]:
+        """Per-kind evidence for promoting a kind from shadow to active:
+        volume, provider mix, Laya agreement with the real verdict, how
+        often Laya was confident enough to have decided, latencies."""
+        cutoff = (datetime.utcnow() - timedelta(hours=hours)).isoformat()
+        async with self.db.execute(
+            "SELECT * FROM decisions WHERE ts >= ? ORDER BY ts", (cutoff,),
+        ) as cur:
+            rows = [dict(r) for r in await cur.fetchall()]
+        kinds: Dict[str, Dict[str, Any]] = {}
+
+        def _p50(vals: List[int]) -> Optional[int]:
+            vals = sorted(v for v in vals if v is not None)
+            return vals[len(vals) // 2] if vals else None
+
+        for r in rows:
+            k = kinds.setdefault(r["kind"], {
+                "n": 0, "providers": {}, "laya_ran": 0, "laya_errors": 0,
+                "compared": 0, "agreed": 0, "confident": 0, "confident_agreed": 0,
+                "_laya_ms": [], "_fb_ms": [], "_conf": [], "outcomes": {},
+            })
+            k["n"] += 1
+            k["providers"][r["provider"]] = k["providers"].get(r["provider"], 0) + 1
+            if r.get("laya_error"):
+                k["laya_errors"] += 1
+            if r.get("laya_answer") is not None:
+                k["laya_ran"] += 1
+                k["_laya_ms"].append(r.get("laya_latency_ms"))
+                k["_conf"].append(r.get("laya_confidence") or 0.0)
+                if r.get("agree") is not None:
+                    k["compared"] += 1
+                    k["agreed"] += int(r["agree"])
+                    if (r.get("laya_confidence") or 0) >= 0.85:
+                        k["confident"] += 1
+                        k["confident_agreed"] += int(r["agree"])
+            if r.get("fallback_latency_ms") is not None:
+                k["_fb_ms"].append(r["fallback_latency_ms"])
+            if r.get("outcome"):
+                k["outcomes"][r["outcome"]] = k["outcomes"].get(r["outcome"], 0) + 1
+        out: Dict[str, Any] = {"hours": hours, "total": len(rows), "kinds": {}}
+        for name, k in kinds.items():
+            out["kinds"][name] = {
+                "n": k["n"], "providers": k["providers"],
+                "laya_ran": k["laya_ran"], "laya_errors": k["laya_errors"],
+                "agreement": (round(k["agreed"] / k["compared"], 3) if k["compared"] else None),
+                "compared": k["compared"],
+                "confident_share": (round(k["confident"] / k["compared"], 3) if k["compared"] else None),
+                "confident_agreement": (round(k["confident_agreed"] / k["confident"], 3) if k["confident"] else None),
+                "laya_p50_ms": _p50(k["_laya_ms"]),
+                "fallback_p50_ms": _p50(k["_fb_ms"]),
+                "avg_laya_confidence": (round(sum(k["_conf"]) / len(k["_conf"]), 3) if k["_conf"] else None),
+                "outcomes": k["outcomes"],
+            }
+        return out
 
     async def schedule_digest(self, hours: int = 24) -> List[dict]:
         """Latest run of every enabled schedule, across ALL sessions.

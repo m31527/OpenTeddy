@@ -954,6 +954,27 @@ Money is the other thing a wrong tool call can't take back, so `spend_guard.py` 
 
 Anything beyond the caps is done by a person in the platform's own UI, on purpose.
 
+## Decision engine — how much intelligence is this decision worth?
+
+Several places in the runtime make a small, *typed* decision: is the produced file a real deliverable? should this scheduled result notify the owner? is this message asking to schedule something rather than do it now? which lane should a spoken question take? Each used to cost a full LLM call (seconds on a 35B model) or a regex. `decide.py` routes every such decision through one ladder and records what happened:
+
+```
+rule      a deterministic verdict the caller already has (the task's own ALERT line) — always wins
+laya      Laya, a 421M non-autoregressive decision model (Apache-2.0, optional: pip install laya)
+          ~15–60 ms per decision with a probability attached, nothing to parse, nothing to hallucinate
+fallback  the existing path (LLM call / regex)
+```
+
+**Per-kind modes** — `off` / `shadow` / `active`, via `OPENTEDDY_DECISION_MODE` and `OPENTEDDY_DECISION_ACTIVE_KINDS`. **Shadow is the default**: Laya runs concurrently and is logged *next to* the real verdict but never decides. That is deliberate: zero-shot, Laya is near chance on decisions it was not trained for — the built-in benchmark (`scripts/decision_bench.py --labelled`) shows the deliverable judge at 0.58–0.67 and the notify gate at 0.50–0.71 depending on checkpoint, against 0.5–0.58 majority baselines. Shadow mode turns real traffic into the two things that change that: an agreement rate per kind, and a labelled set to fine-tune on.
+
+```bash
+openteddy decisions                     # per kind: N, agreement with the real verdict, confident share, latencies
+.venv/bin/python scripts/decision_bench.py --replay   # same from the decisions table + fitted temperature per kind
+curl -X POST localhost:8000/decisions/<id>/outcome -d '{"outcome":"false_alarm"}'   # attach ground truth
+```
+
+Promote a kind only on evidence: high agreement *within the confident share* on enough N, with the fitted temperature pasted into `OPENTEDDY_DECISION_TEMPERATURES` (raw Laya confidence is over-confident; a threshold means nothing before calibration). Even when active, a low-confidence answer falls back, and the hard rules — destructive-SQL denylist, spend guard, tool scope — never touch a model at all. A decision never waits on Laya loading: if it is still downloading, the fallback decides and the log says so.
+
 ## Security model
 
 What the runtime enforces, and what stays the operator's job.

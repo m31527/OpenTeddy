@@ -46,7 +46,7 @@ import json
 import logging
 import re
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Dict, Any, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -333,7 +333,31 @@ async def detect_scheduling_intent(
     """
     if not regex_might_be_schedule(text):
         return None
-    intent = await llm_extract(text)
+    # Decision engine: is this really a schedule request? The regex is a
+    # cheap net with false positives, and each one costs an LLM call. In
+    # shadow mode Laya's verdict is logged next to the LLM's; once
+    # promoted, a confident "no" skips the LLM entirely.
+    import decide as _decide
+    holder: Dict[str, Any] = {}
+
+    async def _llm() -> Tuple[Optional[bool], str]:
+        it = await llm_extract(text)
+        holder["intent"] = it
+        if it is None:
+            return False, "llm: not a schedule"
+        return it.confidence >= confidence_threshold, f"llm: conf={it.confidence:.2f}"
+
+    dec = await _decide.yes_no(
+        _decide.KIND_SCHEDULE, text,
+        "使用者是在要求「之後定期或定時執行」某件事（建立排程），而不是要求現在就做？",
+        fallback=_llm,
+    )
+    if dec.provider == "laya":
+        if not dec.answer:
+            return None
+        intent = await llm_extract(text)      # still need cron + goal extracted
+    else:
+        intent = holder.get("intent")
     if intent is None:
         return None
     if intent.confidence < confidence_threshold:

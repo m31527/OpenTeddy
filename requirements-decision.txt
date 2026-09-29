@@ -1,0 +1,2 @@
+# Optional: decision engine (decide.py). ~1.5 GB of weights on first run.
+laya>=0.3

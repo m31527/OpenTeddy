@@ -27,7 +27,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 import httpx
 
@@ -72,7 +72,11 @@ async def evaluate(
     failed: bool = False,
     model: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Return {notify, reason, severity, source}. Never raises."""
+    """Return {notify, reason, severity, source}. Never raises.
+
+    Goes through the decision engine (decide.py): the task's own ALERT
+    line is the rule; the executor-model judgement is the fallback; Laya
+    runs in shadow (logged) or, once promoted, decides when confident."""
     if failed:
         return {"notify": True, "reason": "任務失敗", "severity": "high", "source": "rule"}
     condition = (condition or "").strip()
@@ -81,46 +85,64 @@ async def evaluate(
                 "severity": "info", "source": "rule"}
 
     own = verdict_from_text(result_text)
-    if own is not None:
-        return own
+    extra: Dict[str, Any] = {}
 
-    model = model or getattr(config, "notify_gate_model", "") or config.qwen_model
-    user = (
-        f"任務目標：{goal}\n通知條件：{condition}\n\n任務結果：\n"
-        + (result_text or "（沒有結果）")[:6000]
-    )
-    try:
-        payload = local_engine.build_payload(
-            model=model,
-            messages=[{"role": "user", "content": user}],
-            system=_SYSTEM,
-            tools=None, stream=False, temperature=0.1, num_predict=160,
-            num_ctx=8192, keep_alive=getattr(config, "ollama_keep_alive", "24h"),
+    async def _llm() -> Tuple[Optional[bool], str]:
+        """The original model judgement; sets extra[severity/source]."""
+        mdl = model or getattr(config, "notify_gate_model", "") or config.qwen_model
+        user = (
+            f"任務目標：{goal}\n通知條件：{condition}\n\n任務結果：\n"
+            + (result_text or "（沒有結果）")[:6000]
         )
-        if not local_engine.is_vllm():
-            payload["format"] = "json"
-            payload["think"] = False
-        async with httpx.AsyncClient(timeout=httpx.Timeout(90.0, connect=5.0)) as c:
-            resp = await c.post(local_engine.chat_endpoint(), json=payload)
-            if resp.status_code == 400 and "think" in resp.text.lower():
-                payload.pop("think", None)
+        try:
+            payload = local_engine.build_payload(
+                model=mdl,
+                messages=[{"role": "user", "content": user}],
+                system=_SYSTEM,
+                tools=None, stream=False, temperature=0.1, num_predict=160,
+                num_ctx=8192, keep_alive=getattr(config, "ollama_keep_alive", "24h"),
+            )
+            if not local_engine.is_vllm():
+                payload["format"] = "json"
+                payload["think"] = False
+            async with httpx.AsyncClient(timeout=httpx.Timeout(90.0, connect=5.0)) as c:
                 resp = await c.post(local_engine.chat_endpoint(), json=payload)
-            resp.raise_for_status()
-            msg = local_engine.normalize_response(resp.json()).get("message") or {}
-        raw = (msg.get("content") or "").strip()
-        m = re.search(r"\{[\s\S]*\}", raw)
-        data = json.loads(m.group(0) if m else raw)
-        notify = bool(data.get("notify"))
-        return {
-            "notify": notify,
-            "reason": str(data.get("reason") or ("條件成立" if notify else "正常"))[:300],
-            "severity": str(data.get("severity") or ("warning" if notify else "info")),
-            "source": "model",
-        }
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("notify gate could not judge (%s: %s) — notifying", type(exc).__name__, exc)
-        return {"notify": True, "reason": f"無法判斷條件（{type(exc).__name__}），保守通知",
-                "severity": "warning", "source": "fallback"}
+                if resp.status_code == 400 and "think" in resp.text.lower():
+                    payload.pop("think", None)
+                    resp = await c.post(local_engine.chat_endpoint(), json=payload)
+                resp.raise_for_status()
+                msg = local_engine.normalize_response(resp.json()).get("message") or {}
+            raw = (msg.get("content") or "").strip()
+            m = re.search(r"\{[\s\S]*\}", raw)
+            data = json.loads(m.group(0) if m else raw)
+            notify = bool(data.get("notify"))
+            extra["severity"] = str(data.get("severity") or ("warning" if notify else "info"))
+            extra["source"] = "model"
+            return notify, str(data.get("reason") or ("條件成立" if notify else "正常"))[:300]
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("notify gate could not judge (%s: %s) — notifying",
+                           type(exc).__name__, exc)
+            extra["severity"], extra["source"] = "warning", "fallback"
+            return True, f"無法判斷條件（{type(exc).__name__}），保守通知"
+
+    import decide as _decide
+    state = (f"任務目標：{goal}\n通知條件：{condition}\n\n任務結果：\n"
+             + (result_text or "（沒有結果）")[:3000])
+    dec = await _decide.yes_no(
+        _decide.KIND_NOTIFY, state,
+        "依通知條件，這份結果需要通知負責人嗎？（異常、失敗、資料缺失也算需要）",
+        rule=((own["notify"], own["reason"]) if own else None),
+        fallback=_llm,
+    )
+    if dec.provider == "rule" and own is not None:
+        return own
+    if dec.provider == "laya":
+        return {"notify": bool(dec.answer), "reason": dec.reason,
+                "severity": "warning" if dec.answer else "info", "source": "laya"}
+    notify = bool(dec.answer) if dec.answer is not None else True
+    return {"notify": notify, "reason": dec.reason or ("條件成立" if notify else "正常"),
+            "severity": extra.get("severity", "warning" if notify else "info"),
+            "source": extra.get("source", "model")}
 
 
 def goal_with_verdict_request(goal: str, condition: str) -> str:

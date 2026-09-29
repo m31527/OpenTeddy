@@ -14,6 +14,7 @@ somewhere to be approved.
     openteddy skill list | skill run <name> --input '{"x": 1}'
     openteddy agent list | agent scope <name> db_query http_get
     openteddy schedule list | run <id> | on|off <id> | notify <id> "偏差超過 15%"
+    openteddy decisions [--hours 168]   # Laya shadow agreement per decision kind
     openteddy tools | models | health
     openteddy service install [--host 0.0.0.0] | status | logs | restart | uninstall
     openteddy update            # git pull → deps → service restart → health
@@ -422,6 +423,34 @@ def cmd_schedule(rt: Runtime, a: argparse.Namespace) -> int:
     return 2
 
 
+def cmd_decisions(rt: Runtime, a: argparse.Namespace) -> int:
+    st = rt.req("GET", "/decisions/stats", params={"hours": a.hours})
+    if rt.json_out:
+        rt.out(st)
+        return 0
+    eng = st.get("engine") or {}
+    print(f"engine   laya {eng.get('status')}  mode={eng.get('mode')}  "
+          f"active={','.join(eng.get('active_kinds') or []) or '-'}  "
+          f"min_conf={eng.get('min_confidence')}  temps={eng.get('temperatures') or '{}'}")
+    print(f"window   last {st.get('hours')}h · {st.get('total')} decisions\n")
+    kinds = st.get("kinds") or {}
+    if not kinds:
+        print("(no decisions logged yet — they appear as the judge / notify gate / "
+              "schedule detector / voice route run)")
+        return 0
+    print(f"{'KIND':20} {'N':>4} {'LAYA':>5} {'AGREE':>6} {'CONF%':>6} {'C-AGR':>6} {'L p50':>6} {'FB p50':>7}  PROVIDERS")
+    for name, k in sorted(kinds.items()):
+        f = lambda v, pct=True: ("-" if v is None else (f"{v*100:.0f}%" if pct else str(v)))
+        prov = ",".join(f"{p}:{c_}" for p, c_ in sorted((k.get("providers") or {}).items()))
+        print(f"{name:20} {k['n']:>4} {k['laya_ran']:>5} {f(k.get('agreement')):>6} "
+              f"{f(k.get('confident_share')):>6} {f(k.get('confident_agreement')):>6} "
+              f"{f(k.get('laya_p50_ms'), False):>6} {f(k.get('fallback_p50_ms'), False):>7}  {prov}")
+    print("\nAGREE = Laya vs the real verdict · CONF% = share where Laya ≥ min_conf · "
+          "C-AGR = agreement within that confident share\n"
+          "Promote a kind (OPENTEDDY_DECISION_ACTIVE_KINDS) only when C-AGR is high on enough N.")
+    return 0
+
+
 def cmd_tools(rt: Runtime, a: argparse.Namespace) -> int:
     tools = rt.req("GET", "/tools").get("tools", [])
     if rt.json_out:
@@ -743,6 +772,10 @@ def build_parser() -> argparse.ArgumentParser:
     sn = scs.add_parser("notify", help="set the condition under which this schedule notifies you")
     sn.add_argument("id"); sn.add_argument("condition", nargs="*", help="empty = notify every run")
     sc_.set_defaults(fn=cmd_schedule)
+
+    dc = sub.add_parser("decisions", help="decision engine: Laya vs real verdicts, per kind")
+    dc.add_argument("--hours", type=int, default=168)
+    dc.set_defaults(fn=cmd_decisions)
 
     sub.add_parser("tools", help="list tools and their risk level").set_defaults(fn=cmd_tools)
     sub.add_parser("models", help="which models/engine the runtime uses").set_defaults(fn=cmd_models)
