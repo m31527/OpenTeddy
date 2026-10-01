@@ -163,6 +163,15 @@ class Config:
     ad_max_budget_changes_per_day: int = field(
         default_factory=lambda: int(os.getenv("OPENTEDDY_AD_MAX_BUDGET_CHANGES_PER_DAY", "3") or 3)
     )
+    # Reasoning models (qwen3*, gemma4*, deepseek-r1, gpt-oss…) think before
+    # answering by default on Ollama. On a bandwidth-bound box that is
+    # thousands of hidden tokens per call — a 27B planner spent minutes
+    # "thinking" about what day it was. Off by default for the planner and
+    # executor; OLLAMA_THINK=true restores the model default.
+    ollama_think: bool = field(
+        default_factory=lambda: os.getenv("OLLAMA_THINK", "false").strip().lower() in ("1", "true", "yes")
+    )
+
     # ── Decision engine (decide.py) ─────────────────────────────────────
     # Typed decisions (judge / notify gate / schedule intent / voice route)
     # go rule → Laya → fallback. Mode: off | shadow | active. Shadow is the

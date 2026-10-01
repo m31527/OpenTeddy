@@ -102,6 +102,25 @@ def usage_provider_label() -> str:
 # ── Request building ──────────────────────────────────────────────────────────
 
 
+_THINKING_FAMILIES = ("qwen3", "gemma4", "deepseek-r1", "gpt-oss", "magistral", "qwq")
+
+
+def is_thinking_model(name: str) -> bool:
+    """Models whose Ollama build exposes the `think` switch. Sending
+    `think` to a model without it is a 400, so the switch is only added
+    for known families."""
+    n = (name or "").lower()
+    return any(n.startswith(f) or f"/{f}" in n for f in _THINKING_FAMILIES)
+
+
+def think_setting(model: str) -> Optional[bool]:
+    """None = leave the model's default; False = switch thinking off."""
+    from config import config
+    if getattr(config, "ollama_think", False):
+        return None
+    return False if is_thinking_model(model) else None
+
+
 def build_payload(
     *,
     model: str,
@@ -166,6 +185,9 @@ def build_payload(
     }
     if tools:
         payload["tools"] = tools
+    th = think_setting(model)
+    if th is not None:
+        payload["think"] = th
     return payload
 
 

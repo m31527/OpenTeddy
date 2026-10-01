@@ -340,6 +340,14 @@ async def _execute_scheduled_run(schedule_id: str) -> None:
     from models import TaskRequest, SessionMode
     from tools._context import set_triggered_by, reset_triggered_by
     task_id = str(uuid.uuid4())
+    # Run in the SESSION's mode. This was hard-coded to CODE, so an
+    # analytic agent's daily report ran as a code task — and the
+    # analytic prompt / tool exposure never applied to schedules.
+    try:
+        _sess = await _tracker.get_session(session_id)
+        _mode = SessionMode((_sess or {}).get("mode") or "code")
+    except Exception:  # noqa: BLE001
+        _mode = SessionMode.CODE
     req = TaskRequest(
         id=task_id,
         goal=goal,
@@ -349,7 +357,7 @@ async def _execute_scheduled_run(schedule_id: str) -> None:
         },
         priority=1,
         session_id=session_id,
-        mode=SessionMode.CODE,
+        mode=_mode,
     )
 
     origin_token = set_triggered_by("schedule")

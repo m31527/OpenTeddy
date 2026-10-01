@@ -1878,6 +1878,7 @@ async def _start_task(
     task_id: Optional[str] = None,
     privacy: Optional[str] = None,
     require_approval: Optional[bool] = None,
+    auto_lane: bool = False,
 ) -> tuple[str, Optional[str], Optional["asyncio.Task"], Optional[str]]:
     """Validate, bind, and launch a task WITHOUT waiting for it.
 
@@ -1951,6 +1952,19 @@ async def _start_task(
     ctx = dict(context or {})
     if privacy:
         ctx["privacy"] = privacy
+    # Lane. An explicit `mode` pins this task; `auto_lane` lets a
+    # conversational message take the chat lane (one call) even in a
+    # code/analytic session — the fix for "今天星期幾" running a 4-stage
+    # pipeline. The flag is explicit so a default TaskRequest never
+    # overrides the session's mode by accident.
+    if mode is not None:
+        ctx["mode_override"] = True
+    elif auto_lane:
+        from lane import pick_mode
+        _picked = await pick_mode(goal, resolved_mode.value)
+        if _picked != resolved_mode.value:
+            resolved_mode = SessionMode(_picked)
+            ctx["mode_override"] = True
     req = TaskRequest(
         id=task_id, goal=goal, context=ctx, priority=priority,
         session_id=session_id, mode=resolved_mode,
@@ -2061,6 +2075,7 @@ async def create_task(body: _TaskCreate) -> _TaskAccepted:
         task_id=body.task_id,
         privacy=body.privacy.value if body.privacy else None,
         require_approval=body.require_approval,
+        auto_lane=body.auto_lane,
     )
     if shortcut is not None:
         return _TaskAccepted(task_id=task_id, session_id=session_id,

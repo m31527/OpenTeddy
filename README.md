@@ -954,6 +954,12 @@ Money is the other thing a wrong tool call can't take back, so `spend_guard.py` 
 
 Anything beyond the caps is done by a person in the platform's own UI, on purpose.
 
+## Two latency fixes worth knowing about
+
+**Thinking is off for the planner and executor.** Reasoning models (`qwen3*`, `gemma4*`, `deepseek-r1`, `gpt-oss`…) think before answering by default on Ollama — thousands of hidden tokens per call, which on a bandwidth-bound box is minutes: a 27B planner spent 579 s working out what day it was. OpenTeddy now sends `think: false` to those families for planning and execution (0 hidden tokens, same answer). `OLLAMA_THINK=true` restores the model default if a task genuinely benefits from deliberation. Models without the switch are never sent it.
+
+**Conversational messages take the chat lane.** A Telegram session is a code-mode session, so every message used to run plan → subtasks → execute → summarise. `lane.py` routes a short, question- or greeting-shaped message with no sign of work ("今天星期幾", "are you there?") to the chat lane — one model call — regardless of the session's mode; anything that looks like work keeps the session's mode. Ties go to work (misrouting work to chat would answer in words instead of doing it). Telegram does this automatically; `POST /tasks` with `"auto_lane": true` does the same; an explicit `mode` always wins. Every lane decision is also logged in shadow by the decision engine (`lane.auto`) so the heuristic can be replaced on evidence.
+
 ## Decision engine — how much intelligence is this decision worth?
 
 Several places in the runtime make a small, *typed* decision: is the produced file a real deliverable? should this scheduled result notify the owner? is this message asking to schedule something rather than do it now? which lane should a spoken question take? Each used to cost a full LLM call (seconds on a 35B model) or a regex. `decide.py` routes every such decision through one ladder and records what happened:

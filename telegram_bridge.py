@@ -953,6 +953,10 @@ async def _run_goal_for_chat(chat_id: str, goal_text: str) -> None:
     # is cheap — just a Pydantic model instance.)
     try:
         from models import TaskRequest, SessionMode
+        # Lane: a conversational message takes the chat lane (one call)
+        # instead of the session's code-mode pipeline. See lane.py.
+        from lane import pick_mode
+        _lane = await pick_mode(goal_text, "code")
         req = TaskRequest(
             id=str(uuid.uuid4()),
             goal=goal_text,
@@ -961,10 +965,11 @@ async def _run_goal_for_chat(chat_id: str, goal_text: str) -> None:
             context={
                 "triggered_by":      "telegram",
                 "telegram_chat_id":  chat_id,
+                "mode_override":     _lane == "chat",
             },
             priority=1,
             session_id=session_id,
-            mode=SessionMode.CODE,
+            mode=SessionMode(_lane),
         )
     except Exception as exc:  # noqa: BLE001
         logger.exception("Telegram bridge: failed to build TaskRequest")

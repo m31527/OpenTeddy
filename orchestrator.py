@@ -918,6 +918,12 @@ class Orchestrator:
             except Exception:  # noqa: BLE001
                 pass
         set_session_workspace(session_ws)
+        # A caller may pin the lane for THIS task (Telegram auto-lane, POST
+        # /tasks mode=…). The session row stays the default; the override
+        # is explicit via context so a default-constructed TaskRequest
+        # (mode=CODE) never masquerades as a request to leave chat mode.
+        if (req.context or {}).get("mode_override") and getattr(req, "mode", None):
+            session_mode = str(getattr(req.mode, "value", req.mode)).lower()
         set_session_local_only(session_local_only)
 
         # Bind session_id to the per-task ContextVar that tool
@@ -2978,8 +2984,13 @@ class Orchestrator:
             # so orchestrator's plan + fast-chat / classifier calls all
             # benefit from the long retention setting without touching
             # Ollama's daemon config.
-            "keep_alive": getattr(config, "ollama_keep_alive", "24h"),
+"keep_alive": getattr(config, "ollama_keep_alive", "24h"),
         }
+        # Planning does not need a reasoning pass; on a 27B planner it was
+        # minutes of hidden tokens. Switch applies to thinking families only.
+        _th = local_engine.think_setting(config.gemma_model)
+        if _th is not None:
+            payload["think"] = _th
         try:
             if stream_on:
                 # /api/generate streams as NDJSON, each line:

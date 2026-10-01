@@ -339,6 +339,12 @@ class TaskCreate(BaseModel):
                     "(allowed_tools); refused with 400 otherwise.",
     )
     wait: bool = Field(default=False, description="Block until the task finishes.")
+    auto_lane: bool = Field(
+        default=False,
+        description="Let a conversational message take the chat lane (one "
+                    "call) even in a code/analytic session. Ignored when "
+                    "`mode` is given.",
+    )
     task_id: Optional[str] = None
     priority: int = Field(default=1, ge=1, le=10)
 
