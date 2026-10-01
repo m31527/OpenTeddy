@@ -997,6 +997,19 @@ class Orchestrator:
                     },
                 )
             except Exception as exc:  # noqa: BLE001
+                if (req.context or {}).get("mode_override"):
+                    # This message was routed to the chat lane because it
+                    # is conversational ("Hi"). Falling through to
+                    # plan → execute would turn one failed call into the
+                    # full pipeline on the same model — minutes more
+                    # waiting for the same timeout. Fail fast, say why.
+                    msg = f"⚠️ 模型沒有回應：{exc}"
+                    try:
+                        await self.tracker.update_task_status(req.id, TaskStatus.FAILED, msg)
+                    except Exception:  # noqa: BLE001
+                        pass
+                    await self._emit_task_event("task.done", req, status="failed", summary=msg)
+                    return TaskResult(task_id=req.id, status=TaskStatus.FAILED, summary=msg)
                 # If the streamlined path blows up for any reason (the
                 # _orchestrator_complete LLM call failed, network blip,
                 # model unloaded mid-call), fall through to the full
@@ -2397,13 +2410,14 @@ class Orchestrator:
             task_id=req.id,
             task_description=f"[fast-chat] {req.goal[:100]}",
         )
-        if not answer or not answer.strip():
-            # Defensive: empty response shouldn't happen but let the
-            # full flow handle it rather than returning blank.
-            logger.warning(
-                "Fast-path returned empty answer — falling back to full flow"
-            )
-            raise RuntimeError("fast-path empty response")
+        if not answer or not answer.strip() or answer.strip() == "[]":
+            # "[]" is _gemma_complete's on-error sentinel (a timeout, a
+            # refused request). It passed the old emptiness check and
+            # reached the user verbatim as the answer to "Hi" after a
+            # 180 s wait. Treat it as the failure it is, and say why.
+            why = getattr(self, "_last_gemma_error", "") or "empty response"
+            logger.warning("Fast-path produced no answer (%s)", why)
+            raise RuntimeError(f"planner model gave no answer — {why}")
 
         # Synthetic subtask record. Confidence carries the classifier's
         # confidence so the Usage tab perf stats can distinguish fast-
@@ -3077,7 +3091,12 @@ class Orchestrator:
 
             return response_text
         except Exception as exc:  # noqa: BLE001
-            logger.error("Gemma call failed: %s", exc)
+            # httpx timeouts stringify to "" — keep the type, or the one
+            # log line that explains a three-minute silence says nothing.
+            self._last_gemma_error = f"{type(exc).__name__}: {exc}".rstrip(": ")
+            logger.error("Gemma call failed: %s (model=%s, stream=%s, endpoint=%s/api/generate)",
+                         self._last_gemma_error, config.gemma_model, stream_on,
+                         config.gemma_base_url)
             return "[]"
 
     @staticmethod

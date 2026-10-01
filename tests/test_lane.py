@@ -66,7 +66,39 @@ def test_think() -> None:
     print("  ✓ think switch: off for thinking families, never sent to others, OLLAMA_THINK=true restores default")
 
 
+def test_fast_chat_sentinel() -> None:
+    """_gemma_complete returns "[]" on error; the chat lane must treat it
+    as a failure (with the reason), never as the answer."""
+    import types
+    from models import TaskRequest
+    from orchestrator import Orchestrator
+
+    async def complete_sentinel(*a, **k): return "[]"
+    async def complete_ok(*a, **k): return "今天是星期四。"
+    fake = types.SimpleNamespace(memory=None, _last_gemma_error="ReadTimeout",
+                                 _orchestrator_complete=complete_sentinel,
+                                 tracker=types.SimpleNamespace())
+    req = TaskRequest(goal="Hi", session_id="s")
+
+    async def run():
+        try:
+            await Orchestrator._fast_chat_response(fake, req, "chat", {"confidence": 0.9})
+            raise AssertionError("sentinel was accepted as an answer")
+        except RuntimeError as exc:
+            assert "ReadTimeout" in str(exc) and "no answer" in str(exc), exc
+        # a real answer still goes through to the tracker write (which we stub)
+        calls = []
+        async def _rec(*a, **k): calls.append(a)
+        fake.tracker = types.SimpleNamespace(create_subtask=_rec, update_subtask=_rec, update_task_status=_rec)
+        fake._orchestrator_complete = complete_ok
+        r = await Orchestrator._fast_chat_response(fake, req, "chat", {"confidence": 0.9})
+        assert r.summary.strip() == "今天是星期四。" and len(calls) == 3, (r, calls)
+    asyncio.run(run())
+    print("  ✓ fast chat: '[]' sentinel raises with the planner's error; a real answer passes")
+
+
 if __name__ == "__main__":
     test_lane()
     test_think()
+    test_fast_chat_sentinel()
     print("\nALL LANE TESTS PASS")
