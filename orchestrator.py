@@ -1831,6 +1831,12 @@ class Orchestrator:
                 await self.tracker.update_subtask(st)
                 return st
 
+            if getattr(self, "_ollama_busy", False):
+                # Ollama's queue is full. Each retry would add another
+                # request that never drains; stop here and let the
+                # failure surface with the operator message.
+                logger.warning("Subtask %s: Ollama queue full — not retrying.", st.id)
+                break
             logger.info(
                 "Subtask %s local attempt %d/%d failed (conf=%.2f), retrying...",
                 st.id, attempt + 1, max_local_retries, confidence,
@@ -3089,11 +3095,31 @@ class Orchestrator:
                 except Exception:  # noqa: BLE001
                     pass
 
+            # A successful call means the queue drained (the operator
+            # restarted Ollama) — retries are allowed again.
+            self._ollama_busy = False
             return response_text
         except Exception as exc:  # noqa: BLE001
             # httpx timeouts stringify to "" — keep the type, or the one
             # log line that explains a three-minute silence says nothing.
             self._last_gemma_error = f"{type(exc).__name__}: {exc}".rstrip(": ")
+            # Ollama's queue-full 503 ("server busy, please try again.
+            # maximum pending requests exceeded") is not transient: the
+            # queue is full of requests that never drained (a model load
+            # that hung), and every retry adds one more. Name the fix.
+            _body = ""
+            try:
+                _body = (getattr(getattr(exc, "response", None), "text", "") or "")[:200]
+            except Exception:  # noqa: BLE001
+                pass
+            if "pending requests exceeded" in _body or "server busy" in _body:
+                self._last_gemma_error = (
+                    "Ollama 佇列已滿（server busy — maximum pending requests "
+                    "exceeded）。這不會自己好：請在伺服器執行 "
+                    "`sudo systemctl restart ollama`，並確認規劃器模型載得進去"
+                    "（`ollama ps`）。"
+                )
+                self._ollama_busy = True
             logger.error("Gemma call failed: %s (model=%s, stream=%s, endpoint=%s/api/generate)",
                          self._last_gemma_error, config.gemma_model, stream_on,
                          config.gemma_base_url)
