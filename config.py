@@ -140,14 +140,11 @@ class Config:
     )
 
     # Voice fast path — the SMALL model that answers spoken questions
-    # (voice_fastpath.py). Kept separate from the planner/executor choice
-    # on purpose: the voice lane trades depth for a sub-second reply, and
-    # a 2-4B model is the right tool even when the executor is 27B+.
-    # Defaults to the executor model so an untouched install still works.
-    voice_model: str = field(
-        default_factory=lambda: os.getenv("VOICE_MODEL", "")
-        or os.getenv("QWEN_MODEL", "qwen3.5:2b")
-    )
+    # (voice_fastpath.py). Empty = reuse the planner model, which is
+    # already resident. It used to fall back to the QWEN_MODEL env var,
+    # which on a DGX pointed at a stale 35B model — and boot pre-warmed it,
+    # putting a third large model into memory next to planner + executor.
+    voice_model: str = field(default_factory=lambda: os.getenv("VOICE_MODEL", "").strip())
 
     # ── Ad-spend guard (spend_guard.py) ──────────────────────────────────
     # Hard caps on ad-platform calls that spend money, enforced on every

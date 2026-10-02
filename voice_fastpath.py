@@ -146,7 +146,9 @@ async def _call_small_model(
         stream=False,
         temperature=0.2,
         num_predict=_NUM_PREDICT,
-        num_ctx=_NUM_CTX,
+        # Must equal what the planner sends for the same model: Ollama
+        # reloads a model when num_ctx changes between requests.
+        num_ctx=int(getattr(config, "gemma_num_ctx", 16384)) if model == config.gemma_model else _NUM_CTX,
         keep_alive=getattr(config, "ollama_keep_alive", "24h"),
     )
     if not local_engine.is_vllm():
@@ -305,7 +307,7 @@ async def ask(
                 "timings": {"digest_ms": digest_ms, "total_ms": _ms(t0),
                             "work_tag": "deliverable"}}
 
-    model = model or getattr(config, "voice_model", "") or config.qwen_model
+    model = model or getattr(config, "voice_model", "") or config.gemma_model
     system = _SYSTEM.format(context=_build_context(rows))
     tl = time.monotonic()
     try:

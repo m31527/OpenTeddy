@@ -100,7 +100,10 @@ async def evaluate(
                 messages=[{"role": "user", "content": user}],
                 system=_SYSTEM,
                 tools=None, stream=False, temperature=0.1, num_predict=160,
-                num_ctx=8192, keep_alive=getattr(config, "ollama_keep_alive", "24h"),
+                # Same num_ctx as the executor: it's the same model, and Ollama
+                # reloads a model (17 GB) whenever num_ctx changes per request.
+                num_ctx=int(getattr(config, "qwen_num_ctx", 16384)),
+                keep_alive=getattr(config, "ollama_keep_alive", "24h"),
             )
             if not local_engine.is_vllm():
                 payload["format"] = "json"

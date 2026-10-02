@@ -356,8 +356,8 @@ async def _warmup_ollama_models() -> None:
         models_to_warm.append(("orchestrator", g_model))
     if q_model and q_model != g_model:
         models_to_warm.append(("executor", q_model))
-    # The voice lane has a ~1.5 s budget; a cold load alone is 5-30 s.
-    # It must be resident from boot, not loaded on the first question.
+    # A separate voice model is warmed only when one is explicitly set;
+    # by default the voice lane reuses the (already warm) planner model.
     v_model = (getattr(config, "voice_model", "") or "").strip()
     if v_model and v_model not in (g_model, q_model):
         models_to_warm.append(("voice", v_model))
@@ -2208,7 +2208,7 @@ async def list_models() -> dict:
         "base_url": local_engine.base_url(),
         "planner": getattr(config, "gemma_model", ""),
         "executor": getattr(config, "qwen_model", ""),
-        "voice": getattr(config, "voice_model", ""),
+        "voice": (getattr(config, "voice_model", "") or "") or f"{getattr(config, 'gemma_model', '')} (planner)",
         "cloud": cloud,
     }
 
