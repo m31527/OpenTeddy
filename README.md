@@ -374,7 +374,7 @@ openteddy schedule list | run <id> | on|off <id> | notify <id> "偏差超過 15%
 openteddy tools | models | health
 ```
 
-Point it at another machine with `--url http://<host>:8000` or `OPENTEDDY_URL`. `--json` on any command gives machine-readable output.
+Cheat sheet (繁體中文): [docs/cli.md](docs/cli.md). Point it at another machine with `--url http://<host>:8000` or `OPENTEDDY_URL`. `--json` on any command gives machine-readable output.
 
 ### Always-on service
 

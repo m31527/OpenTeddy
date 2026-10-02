@@ -36,6 +36,8 @@ cd ~/OpenTeddy && ./run.sh --open                       # 儀表板在 http://lo
 這一步**不需要任何雲端金鑰**。之後加一把，OpenTeddy 才會開始在卡住時升級、
 並把重複工作長成技能 —— 見「選你的路」。
 
+> 終端機指令速查：[docs/cli.md](docs/cli.md)
+
 ## 三個值得在意的理由
 
 | | |
