@@ -2932,13 +2932,19 @@ class Orchestrator:
         cloud issue doesn't brick planning entirely — the user can see
         the warning in logs and fix it without losing the task.
         """
-        from config import is_cloud_mode
-        if not is_cloud_mode():
+        from config import is_cloud_mode, orchestrator_on_cloud
+        if not orchestrator_on_cloud():
             return await self._gemma_complete(
                 prompt, system, task_id=task_id, task_description=task_description,
             )
 
         provider = self.escalation.provider
+        # Mixed mode with a cloud orchestrator: the operator may pick a
+        # different (faster / cheaper) model than the escalation model on
+        # the same provider. Cloud mode keeps the provider's own model.
+        model_override = None
+        if not is_cloud_mode():
+            model_override = (getattr(config, "orchestrator_cloud_model", "") or "").strip() or None
         import time as _time
         start = _time.monotonic()
         try:
@@ -2946,6 +2952,7 @@ class Orchestrator:
                 user_message=prompt,
                 system=system or _PLAN_SYSTEM_BASE,
                 max_tokens=int(getattr(config, "gemma_max_tokens", 4096) or 4096),
+                model=model_override,
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning(
@@ -2964,7 +2971,7 @@ class Orchestrator:
         try:
             await self.tracker.record_usage(
                 task_id=task_id,
-                model=provider.model_name,
+                model=model_override or provider.model_name,
                 model_provider=provider.provider_name,
                 tokens_in=resp.usage.input_tokens,
                 tokens_out=resp.usage.output_tokens,

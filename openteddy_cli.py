@@ -10,6 +10,7 @@ operation real: with the web UI closed, a high-risk tool call still has
 somewhere to be approved.
 
     openteddy run "Analyze ~/sales.xlsx and create a chart"
+    openteddy run "fix the failing test in tests/test_api.py" --dir .   # inside a project
     openteddy task list | task status <id> [--follow] | task cancel <id>
     openteddy skill list | skill run <name> --input '{"x": 1}'
     openteddy agent list | agent scope <name> db_query http_get
@@ -258,6 +259,15 @@ def cmd_run(rt: Runtime, a: argparse.Namespace) -> int:
         body["privacy"] = "local_only"
     if a.unattended:
         body["require_approval"] = False
+    if a.dir:
+        path = os.path.realpath(os.path.expanduser(a.dir))
+        if not os.path.isdir(path):
+            die(f"--dir: not a directory: {path}")
+        host = (httpx.URL(rt.url).host or "").lower()
+        if host not in ("127.0.0.1", "localhost", "::1"):
+            print(f"  ! runtime is on {host}: the path must exist THERE — {path}")
+        body["workspace_dir"] = path
+        body.setdefault("mode", "code")
     acc = rt.req("POST", "/tasks", json=body)
     if rt.json_out or a.no_follow:
         rt.out(acc, f"✓ Task accepted  {acc['task_id']}  (session {acc.get('session_id', '')[:8]})\n"
@@ -735,6 +745,7 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--agent", help="agent name or id to run as")
     r.add_argument("--session", help="existing session id")
     r.add_argument("--mode", choices=["chat", "code", "analytic"])
+    r.add_argument("--dir", help="work inside this project directory (e.g. --dir .); starts a code-mode session pinned to it")
     r.add_argument("--local-only", action="store_true", help="never use a cloud model for this task")
     r.add_argument("--unattended", action="store_true",
                    help="run without approval prompts (needs a scoped agent)")

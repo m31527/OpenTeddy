@@ -1879,6 +1879,7 @@ async def _start_task(
     privacy: Optional[str] = None,
     require_approval: Optional[bool] = None,
     auto_lane: bool = False,
+    workspace_dir: Optional[str] = None,
 ) -> tuple[str, Optional[str], Optional["asyncio.Task"], Optional[str]]:
     """Validate, bind, and launch a task WITHOUT waiting for it.
 
@@ -1890,6 +1891,31 @@ async def _start_task(
     if block_msg:
         raise HTTPException(status_code=400, detail=block_msg)
     task_id = task_id or str(uuid.uuid4())
+
+    # ── Project directory: run inside an existing checkout ───────────────
+    # `openteddy run "…" --dir .` — the session's workspace is pinned to
+    # the project so shell / file tools operate on it directly.
+    ws_dir: Optional[str] = None
+    if workspace_dir:
+        if session_id:
+            raise HTTPException(status_code=400,
+                                detail="workspace_dir starts a new session; don't combine it with session_id")
+        ws_dir = os.path.realpath(os.path.expanduser(workspace_dir.strip()))
+        if not os.path.isdir(ws_dir):
+            raise HTTPException(
+                status_code=400,
+                detail=f"workspace_dir not found on the runtime's machine: {ws_dir}. "
+                       f"The path must exist where OpenTeddy runs (not just where the CLI runs).",
+            )
+        try:
+            from tools.shell_tool import _is_openteddy_source_path
+            if _is_openteddy_source_path(ws_dir):
+                raise HTTPException(status_code=400,
+                                    detail="workspace_dir points inside OpenTeddy's own source tree — refused.")
+        except HTTPException:
+            raise
+        except Exception:  # noqa: BLE001
+            pass
 
     # ── Agent binding: a task aimed at an agent gets a session built
     # from it (persona, DB, credentials, scope all come along).
@@ -1921,10 +1947,13 @@ async def _start_task(
     if sess is None:
         try:
             await tracker.create_session(
-                session_id, goal[:60] or "New session", mode=resolved_mode.value,
+                session_id, (f"📁 {os.path.basename(ws_dir)} · " if ws_dir else "") + (goal[:60] or "New session"),
+                mode=resolved_mode.value,
             )
             if privacy == "local_only":
                 await tracker.update_session_local_only(session_id, True)
+            if ws_dir:
+                await tracker.update_session_workspace(session_id, ws_dir)
         except Exception:  # noqa: BLE001
             pass
 
@@ -2076,6 +2105,7 @@ async def create_task(body: _TaskCreate) -> _TaskAccepted:
         privacy=body.privacy.value if body.privacy else None,
         require_approval=body.require_approval,
         auto_lane=body.auto_lane,
+        workspace_dir=body.workspace_dir,
     )
     if shortcut is not None:
         return _TaskAccepted(task_id=task_id, session_id=session_id,
@@ -2206,7 +2236,13 @@ async def list_models() -> dict:
     return {
         "engine": local_engine.active_engine(),
         "base_url": local_engine.base_url(),
-        "planner": getattr(config, "gemma_model", ""),
+        "planner": (
+            f"{getattr(config, 'orchestrator_cloud_model', '') or 'provider model'} "
+            f"(cloud · {getattr(config, 'llm_provider', 'anthropic')})"
+            if getattr(config, "llm_mode", "mixed") == "mixed"
+            and getattr(config, "orchestrator_backend", "local") == "cloud"
+            else getattr(config, "gemma_model", "")
+        ),
         "executor": getattr(config, "qwen_model", ""),
         "voice": (getattr(config, "voice_model", "") or "") or f"{getattr(config, 'gemma_model', '')} (planner)",
         "cloud": cloud,
@@ -3496,6 +3532,22 @@ async def update_settings(body: dict) -> dict:
 def _ollama_url() -> str:
     """Use the currently configured Ollama base URL."""
     return config.gemma_base_url.rstrip("/")
+
+
+class _CloudModelsBody(BaseModel):
+    provider: str
+    api_key: Optional[str] = None     # an unsaved key typed in the form
+    refresh: bool = False
+
+
+@app.post("/settings/cloud/models")
+async def cloud_models(body: _CloudModelsBody) -> dict:
+    """Live model list for a cloud provider (see cloud_models.py). Uses
+    the key typed in the form when given, else the stored one. Falls back
+    to a short built-in list — never blocks the field, which stays free
+    text."""
+    import cloud_models as _cm
+    return await _cm.list_models(body.provider, refresh=body.refresh, api_key=body.api_key)
 
 
 @app.get("/settings/ollama/status")

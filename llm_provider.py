@@ -179,6 +179,7 @@ class LLMProvider(ABC):
         user_message: str,
         system: Optional[str] = None,
         max_tokens: int = 2048,
+        model: Optional[str] = None,
     ) -> LLMTextResponse:
         """One-shot text completion — no tools, no history. Used by:
 
@@ -387,11 +388,14 @@ class AnthropicProvider(LLMProvider):
         user_message: str,
         system: Optional[str] = None,
         max_tokens: int = 2048,
+        model: Optional[str] = None,
     ) -> LLMTextResponse:
         sdk = self._get_sdk()
         client = self._get_client()
         kwargs: Dict[str, Any] = {
-            "model":      self.model_name,
+            # `model` lets a caller pick a different model on the same
+            # provider/key (e.g. a fast planner next to an Opus escalation).
+            "model":      model or self.model_name,
             "max_tokens": max_tokens,
             "messages":   [{"role": "user", "content": user_message}],
         }
@@ -845,6 +849,7 @@ class _OpenAICompatProvider(LLMProvider):
         user_message: str,
         system: Optional[str] = None,
         max_tokens: int = 2048,
+        model: Optional[str] = None,
     ) -> LLMTextResponse:
         client = self._get_client()
         messages: List[Dict[str, Any]] = []
@@ -853,7 +858,7 @@ class _OpenAICompatProvider(LLMProvider):
         messages.append({"role": "user", "content": user_message})
 
         payload = await self._post_chat_completions(client, {
-            "model":               self.model_name,
+            "model":               model or self.model_name,
             "messages":            messages,
             self.MAX_TOKENS_PARAM: max_tokens,
         })

@@ -362,6 +362,8 @@ openteddy run "Analyze ~/sales.xlsx and create a chart"   # follow live; approve
 openteddy run "..." --agent 客服 --unattended            # no prompts — needs a scoped agent
 openteddy run "..." --local-only --no-follow             # print the task id and return
 
+openteddy run "fix the failing test in tests/test_api.py" --dir .   # work inside this project checkout
+
 openteddy task list                 # recent tasks
 openteddy task status <id> --follow # attach to a running task (short id prefix is fine)
 openteddy task approve|reject|cancel <id>
@@ -953,6 +955,14 @@ Money is the other thing a wrong tool call can't take back, so `spend_guard.py` 
 | ad creatives | allowed — they don't spend |
 
 Anything beyond the caps is done by a person in the platform's own UI, on purpose.
+
+## Choosing models: live lists and a cloud planner
+
+**Model lists are live.** Each Cloud LLM Provider field in Settings fetches the provider's own model list (Anthropic, OpenAI, Gemini, DeepSeek, OpenRouter — `POST /settings/cloud/models`, cached 10 min, ↻ to refresh) using the key in the form, so new models appear without an OpenTeddy release. The field stays free text; without a key you get a short built-in list.
+
+**In Mixed mode the planner can be a cloud model.** The Planner dropdown has two groups — 🖥 local Ollama models and ☁️ models of your active provider. Pick a ☁️ one and planning, chat answers, intent classification and summaries go to that model (one short call each — fast, and the decomposition is usually better), while every tool-calling step still runs on the local executor. Escalation keeps its own model, so you can plan with Sonnet and escalate to Opus. A line under the dropdown always says where each part runs. Sessions marked local-only never leave the machine, Local mode disables the ☁️ group, and a failed cloud call falls back to the local planner. Settings: `orchestrator_backend` (`local`/`cloud`) and `orchestrator_cloud_model`.
+
+**Work inside a project.** `openteddy run "…" --dir .` starts a code-mode session pinned to that checkout, so shell and file tools operate on it directly. The path must exist on the machine running OpenTeddy (the CLI warns when the runtime is remote); OpenTeddy's own source tree is refused.
 
 ## Two latency fixes worth knowing about
 

@@ -119,6 +119,22 @@ SETTINGS_META: dict[str, dict[str, Any]] = {
                         "Leave empty to disable web search.",
         "type":        "secret",
     },
+    "orchestrator_backend": {
+        "label":       "Orchestrator backend (Mixed mode)",
+        "description": "'local' = plan / chat / summarise with the local "
+                       "orchestrator model; 'cloud' = use the Cloud LLM "
+                       "Provider for those calls while the executor stays "
+                       "local. local_only sessions always stay local.",
+        "type":        "select",
+        "options":     ["local", "cloud"],
+    },
+    "orchestrator_cloud_model": {
+        "label":       "Cloud orchestrator model",
+        "description": "Model id on the Cloud LLM Provider used when the "
+                       "orchestrator backend is 'cloud'. Empty = the "
+                       "provider's own model setting.",
+        "type":        "text",
+    },
     "llm_mode": {
         "label":       "LLM Mode",
         "description": "How OpenTeddy routes work between local + cloud "
@@ -478,6 +494,8 @@ def _defaults_from_config() -> dict[str, str]:
         "brave_search_api_key":     getattr(config, "brave_search_api_key", ""),
         # New 3-way LLM mode + legacy bool kept in sync for backward compat
         "llm_mode":                 getattr(config, "llm_mode", "mixed"),
+        "orchestrator_backend":     getattr(config, "orchestrator_backend", "local"),
+        "orchestrator_cloud_model": getattr(config, "orchestrator_cloud_model", ""),
         "escalation_enabled":       "true" if config.escalation_enabled else "false",
         "streaming_enabled":        "true" if config.streaming_enabled else "false",
         "verification_enabled":     "true" if getattr(config, "verification_enabled", True) else "false",

@@ -66,6 +66,17 @@ def is_cloud_mode() -> bool:
     return config.llm_mode == "cloud" and not is_session_local_only()
 
 
+def orchestrator_on_cloud() -> bool:
+    """True when the orchestrator's calls go to the Cloud LLM Provider:
+    always in cloud mode; in mixed mode only when the operator picked a
+    cloud orchestrator — and never for a local_only session."""
+    if is_session_local_only():
+        return False
+    if config.llm_mode == "cloud":
+        return True
+    return config.llm_mode == "mixed" and getattr(config, "orchestrator_backend", "local") == "cloud"
+
+
 def is_mixed_mode() -> bool:
     """True iff llm_mode == 'mixed' (default)."""
     return config.llm_mode == "mixed"
@@ -160,6 +171,19 @@ class Config:
     ad_max_budget_changes_per_day: int = field(
         default_factory=lambda: int(os.getenv("OPENTEDDY_AD_MAX_BUDGET_CHANGES_PER_DAY", "3") or 3)
     )
+    # Orchestrator (planning, chat answers, intent classification, summaries)
+    # backend in MIXED mode: "local" = the Ollama orchestrator model above;
+    # "cloud" = the configured Cloud LLM Provider, with
+    # orchestrator_cloud_model (empty → the provider's own model). The
+    # executor stays local. local_only sessions always stay local; "cloud"
+    # mode routes everything to the cloud regardless of this setting.
+    orchestrator_backend: str = field(
+        default_factory=lambda: os.getenv("OPENTEDDY_ORCHESTRATOR_BACKEND", "local").strip().lower()
+    )
+    orchestrator_cloud_model: str = field(
+        default_factory=lambda: os.getenv("OPENTEDDY_ORCHESTRATOR_CLOUD_MODEL", "").strip()
+    )
+
     # Reasoning models (qwen3*, gemma4*, deepseek-r1, gpt-oss…) think before
     # answering by default on Ollama. On a bandwidth-bound box that is
     # thousands of hidden tokens per call — a 27B planner spent minutes
@@ -809,6 +833,13 @@ class Config:
         #   1. Explicit llm_mode in DB → use it
         #   2. Else derive from legacy escalation_enabled (pre-llm_mode DBs)
         #   3. Else keep current attribute (env-var default)
+        if _s("orchestrator_backend"):
+            ob = settings["orchestrator_backend"].strip().lower()
+            if ob in {"local", "cloud"}:
+                self.orchestrator_backend = ob
+        if "orchestrator_cloud_model" in settings:
+            self.orchestrator_cloud_model = (settings["orchestrator_cloud_model"] or "").strip()
+
         if _s("llm_mode"):
             raw_mode = settings["llm_mode"].strip().lower()
             if raw_mode in {"local", "mixed", "cloud"}:

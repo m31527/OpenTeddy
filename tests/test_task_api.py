@@ -180,6 +180,23 @@ async def test_http() -> None:
             assert any(req.context.get("privacy") == "local_only" for req in calls)
             print("  ✓ privacy=local_only tightens the new session and rides in context")
 
+            # --dir: run inside an existing project checkout
+            import tempfile as _tf
+            proj = os.path.realpath(_tf.mkdtemp(prefix="proj-"))
+            r = await c.post("/tasks", json={"intent": "fix the bug", "workspace_dir": proj, "wait": True})
+            assert r.status_code == 202, r.text
+            s3 = await M.tracker.get_session(r.json()["session_id"])
+            created_sessions.append(r.json()["session_id"])
+            assert os.path.realpath(s3.get("workspace_dir") or "") == proj, s3
+            r = await c.post("/tasks", json={"intent": "x", "workspace_dir": proj + "/nope"})
+            assert r.status_code == 400 and "not found" in r.text, r.text
+            here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            r = await c.post("/tasks", json={"intent": "x", "workspace_dir": here})
+            assert r.status_code == 400 and "OpenTeddy" in r.text, r.text
+            r = await c.post("/tasks", json={"intent": "x", "workspace_dir": proj, "session_id": "s-1"})
+            assert r.status_code == 400
+            print("  ✓ workspace_dir: session pinned to the project; missing dir / OpenTeddy source / +session_id → 400")
+
             r = await c.post("/run", json={"goal": "legacy"})
             assert r.status_code == 202 and r.json()["status"] == "completed", r.text
             print("  ✓ POST /run still works (thin wrapper)")

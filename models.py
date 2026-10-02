@@ -339,6 +339,13 @@ class TaskCreate(BaseModel):
                     "(allowed_tools); refused with 400 otherwise.",
     )
     wait: bool = Field(default=False, description="Block until the task finishes.")
+    workspace_dir: Optional[str] = Field(
+        default=None,
+        description="Run in this directory (an existing project checkout) "
+                    "instead of an isolated sandbox. Absolute path on the "
+                    "runtime's machine. Creates a new session pinned to it; "
+                    "not combinable with session_id.",
+    )
     auto_lane: bool = Field(
         default=False,
         description="Let a conversational message take the chat lane (one "

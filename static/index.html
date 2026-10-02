@@ -4215,8 +4215,12 @@
                    previous choice without a re-pick. -->
               <div id="localModelFields" class="row" style="margin-bottom:0.85rem">
                 <div class="field">
-                  <label data-i18n="orchestrator_label">Orchestrator Model (Gemma)</label>
-                  <select id="sel_orchestrator_model" onchange="checkOrchestratorRecommended()"><option value="" data-i18n="ollama_offline">⚠️ Ollama offline</option></select>
+                  <label data-i18n="orchestrator_label">Planner Model (plans · chats · summarises)</label>
+                  <select id="sel_orchestrator_model" onchange="onOrchestratorChange()"><option value="" data-i18n="ollama_offline">⚠️ Ollama offline</option></select>
+                  <!-- Live summary of where planning / chat / execution actually
+                       run, rewritten by updateOrchestratorHint() on every change. -->
+                  <div id="orch_routing_hint"
+                       style="margin-top:0.4rem;font-size:0.72rem;line-height:1.5;color:var(--text-muted)"></div>
                   <!-- Inline guard. Toggled by checkOrchestratorRecommended()
                        whenever the dropdown changes. Rationale: a non-Gemma
                        orchestrator (Qwen, Llama, etc.) regularly flubs the
@@ -4380,17 +4384,14 @@
                          data-i18n-placeholder="claude_model_placeholder"
                          placeholder="claude-opus-4-7" />
                   <datalist id="claude_model_suggestions">
-                    <!-- Latest generation (Claude 4.7) — recommended baseline -->
-                    <option value="claude-opus-4-7">Claude Opus 4.7 — strongest reasoning, default for escalation</option>
-                    <option value="claude-sonnet-4-7">Claude Sonnet 4.7 — balanced (fast + capable)</option>
-                    <option value="claude-haiku-4-7">Claude Haiku 4.7 — cheapest + fastest, simple tasks</option>
-                    <!-- Previous generation (Claude 4.6) — well-tested fallbacks -->
-                    <option value="claude-opus-4-6">Claude Opus 4.6 — previous flagship, well-tested</option>
-                    <option value="claude-sonnet-4-6">Claude Sonnet 4.6 — previous mid-tier</option>
-                    <option value="claude-haiku-4-6">Claude Haiku 4.6 — previous fast tier</option>
-                    <!-- Legacy (Claude 3.x) — still usable, may be deprecated soon -->
-                    <option value="claude-3-7-sonnet-latest">Claude 3.7 Sonnet (legacy alias)</option>
-                    <option value="claude-3-5-haiku-latest">Claude 3.5 Haiku (legacy alias)</option>
+                    <!-- Fallback only: replaced by the live list from
+                         POST /settings/cloud/models once a key is set. -->
+                    <option value="claude-sonnet-5-5">Claude Sonnet 5.5</option>
+                    <option value="claude-opus-5-5">Claude Opus 5.5</option>
+                    <option value="claude-fable-5-1">Claude Fable 5.1</option>
+                    <option value="claude-opus-5">Claude Opus 5</option>
+                    <option value="claude-sonnet-5">Claude Sonnet 5</option>
+                    <option value="claude-haiku-4-5-20251001">Claude Haiku 4.5</option>
                   </datalist>
                 </div>
               </div>
@@ -10121,6 +10122,10 @@
         _setInput('inp_gemini_model',       s.gemini_model?.value       ?? '');
         _setInput('inp_deepseek_api_key',   s.deepseek_api_key?.value   ?? '');
         _setInput('inp_deepseek_model',     s.deepseek_model?.value     ?? '');
+        _orchBackend    = (s.orchestrator_backend?.value || 'local').toLowerCase();
+        _orchCloudModel = s.orchestrator_cloud_model?.value || '';
+        _lastLocalOrch  = s.orchestrator_model?.value || '';
+        _lastLocalExec  = s.executor_model?.value || '';
         syncProviderUI();
         // ── LLM Mode (3-way) ───────────────────────────────────────
         // Pull the new canonical setting first; fall back to legacy
@@ -10242,6 +10247,7 @@
       const notice   = document.getElementById('cloudModeNotice');
       if (localRow) localRow.classList.toggle('cloud-mode-inactive', isCloud);
       if (notice)   notice.hidden = !isCloud;
+      renderOrchestratorCloudOptions();
     }
     function _setSlider(key, val) {
       const rng = document.getElementById('rng_' + key);
@@ -10284,7 +10290,7 @@
         _ollamaModels = (data.data?.models ?? []);
         if (!data.success || !_ollamaModels.length) {
           list.innerHTML = '<div style="color:var(--text-muted);font-size:0.82rem">No models installed or Ollama offline.</div>';
-          _setOfflineDropdowns(selOrch, selExec); return;
+          _setOfflineDropdowns(selOrch, selExec); renderOrchestratorCloudOptions(); return;
         }
         list.innerHTML = _ollamaModels.map(m => `
           <div class="model-chip">
@@ -10309,15 +10315,18 @@
         const execOpts = _ollamaModels.map(m =>
           `<option value="${escHtml(m.name)}">${escHtml(m.name)}${m.size!=null?' ('+m.size+' GB)':''}</option>`
         ).join('');
-        selOrch.innerHTML = orchOpts; selExec.innerHTML = execOpts;
+        selOrch.innerHTML = `<optgroup label="${escHtml(t('orch_local_group'))}" data-local="1">${orchOpts}</optgroup>`;
+        selExec.innerHTML = execOpts;
         selOrch.disabled  = false; selExec.disabled = false;
         if (selectedOrch && [...selOrch.options].some(o => o.value === selectedOrch)) selOrch.value = selectedOrch;
         if (selectedExec && [...selExec.options].some(o => o.value === selectedExec)) selExec.value = selectedExec;
         // Sync the inline warning with the now-restored selection.
         checkOrchestratorRecommended();
+        renderOrchestratorCloudOptions();
       } catch (e) {
         list.innerHTML = `<div style="color:var(--error);font-size:0.82rem">Failed to load: ${escHtml(e.message)}</div>`;
         _setOfflineDropdowns(selOrch, selExec);
+        renderOrchestratorCloudOptions();
       }
     }
 
@@ -10338,7 +10347,7 @@
       const warn = document.getElementById('orch_warning');
       if (!sel || !warn) return;
       const v = (sel.value || '').toLowerCase();
-      const isGemma = v.startsWith('gemma');
+      const isGemma = v.startsWith('gemma') || v.startsWith('cloud:');
       // Empty value = Ollama offline placeholder; don't warn (the
       // offline state has its own messaging).
       warn.hidden = !v || isGemma;
@@ -10368,6 +10377,144 @@
         const expectedId = `row_${selected}`;
         row.hidden = row.id !== expectedId;
       });
+      Object.keys(CLOUD_MODEL_FIELDS).forEach(_ensureModelRefreshUI);
+      if (!_cloudModels[selected]) refreshCloudModels(selected);
+      renderOrchestratorCloudOptions();
+    }
+
+    // ── Cloud model lists + cloud planner ─────────────────────────────────
+    // Model fields used to offer hand-written <datalist> suggestions that
+    // went stale within months. The server now asks each provider for its
+    // live list (POST /settings/cloud/models, cached 10 min); the fields
+    // stay free text, the built-in list is only the fallback.
+    const CLOUD_MODEL_FIELDS = {
+      anthropic:  { input: 'inp_claude_model',     list: 'claude_model_suggestions',     key: 'inp_anthropic_api_key',  name: 'Anthropic' },
+      openrouter: { input: 'inp_openrouter_model', list: 'openrouter_model_suggestions', key: 'inp_openrouter_api_key', name: 'OpenRouter' },
+      openai:     { input: 'inp_openai_model',     list: 'openai_model_suggestions',     key: 'inp_openai_api_key',     name: 'OpenAI' },
+      gemini:     { input: 'inp_gemini_model',     list: 'gemini_model_suggestions',     key: 'inp_gemini_api_key',     name: 'Gemini' },
+      deepseek:   { input: 'inp_deepseek_model',   list: 'deepseek_model_suggestions',   key: 'inp_deepseek_api_key',   name: 'DeepSeek' },
+    };
+    const _cloudModels = {};          // provider -> [{id, label, created}]
+    let _orchBackend = 'local', _orchCloudModel = '', _lastLocalOrch = '', _lastLocalExec = '';
+
+    function _activeProvider() { return document.getElementById('sel_llm_provider')?.value || 'anthropic'; }
+    function _llmMode() { return document.querySelector('input[name="llm_mode"]:checked')?.value || 'mixed'; }
+    function _providerModel(p) { const f = CLOUD_MODEL_FIELDS[p]; return (document.getElementById(f?.input)?.value || '').trim(); }
+    function _providerHasKey(p) {
+      if (p === 'openrouter' && _cloudModels[p]?.length) return !!(document.getElementById(CLOUD_MODEL_FIELDS[p].key)?.value || '').trim();
+      const f = CLOUD_MODEL_FIELDS[p]; return !!(document.getElementById(f?.key)?.value || '').trim();
+    }
+    function _modelDate(m) {
+      if (!m.created) return '';
+      const d = typeof m.created === 'number' ? new Date(m.created * 1000) : new Date(m.created);
+      return isNaN(d) ? '' : d.toISOString().slice(0, 10);
+    }
+
+    // One "↻ Refresh" control under each provider's model field, built
+    // once; also refreshes when a key is pasted.
+    function _ensureModelRefreshUI(provider) {
+      const f = CLOUD_MODEL_FIELDS[provider];
+      const input = document.getElementById(f?.input);
+      if (!input || document.getElementById(`cm_row_${provider}`)) return;
+      const row = document.createElement('div');
+      row.id = `cm_row_${provider}`;
+      row.style.cssText = 'display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;margin-top:0.3rem;font-size:0.72rem';
+      row.innerHTML = `<button type="button" class="btn-ghost btn-sm" onclick="refreshCloudModels('${provider}', true)">${escHtml(t('cloud_models_refresh'))}</button>`
+                    + `<span id="cm_status_${provider}" style="color:var(--text-muted)"></span>`;
+      input.insertAdjacentElement('afterend', row);
+      const keyEl = document.getElementById(f.key);
+      if (keyEl) keyEl.addEventListener('change', () => refreshCloudModels(provider, true));
+    }
+
+    async function refreshCloudModels(provider, force = false) {
+      const f = CLOUD_MODEL_FIELDS[provider];
+      if (!f) return;
+      _ensureModelRefreshUI(provider);
+      const status = document.getElementById(`cm_status_${provider}`);
+      if (status) { status.textContent = t('cloud_models_loading'); status.style.color = 'var(--text-muted)'; }
+      try {
+        const key = (document.getElementById(f.key)?.value || '').trim();
+        const r = await fetch(`${API}/settings/cloud/models`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ provider, api_key: key || null, refresh: !!force }),
+        });
+        const d = await r.json();
+        const models = d.models || [];
+        if (models.length) {
+          _cloudModels[provider] = models;
+          const dl = document.getElementById(f.list);
+          if (dl) dl.innerHTML = models.map(m => {
+            const extra = [m.label && m.label !== m.id ? m.label : '', _modelDate(m)].filter(Boolean).join(' · ');
+            return `<option value="${escHtml(m.id)}">${escHtml(extra)}</option>`;
+          }).join('');
+        }
+        if (status) {
+          const live = d.source === 'live';
+          status.textContent = live ? t('cloud_models_live', { n: models.length, provider: f.name })
+                                    : t('cloud_models_fallback', { reason: d.error || '' });
+          status.style.color = live ? 'var(--success)' : 'var(--text-muted)';
+        }
+      } catch (e) {
+        if (status) status.textContent = t('cloud_models_fallback', { reason: e.message });
+      }
+      if (provider === _activeProvider()) renderOrchestratorCloudOptions();
+    }
+
+    // The planner dropdown holds two groups: 🖥 local Ollama models and
+    // ☁️ models of the active cloud provider (value "cloud:<id>"). Cloud
+    // entries are selectable in Mixed mode only; Local mode disables them.
+    function renderOrchestratorCloudOptions() {
+      const sel = document.getElementById('sel_orchestrator_model');
+      if (!sel) return;
+      const prev = sel.value;
+      sel.querySelectorAll('optgroup[data-cloud]').forEach(g => g.remove());
+      const p = _activeProvider(), f = CLOUD_MODEL_FIELDS[p], mode = _llmMode();
+      const g = document.createElement('optgroup');
+      g.dataset.cloud = '1';
+      g.label = t('orch_cloud_group', { provider: f?.name || p });
+      if (!_providerHasKey(p)) {
+        g.innerHTML = `<option value="" disabled>${escHtml(t('orch_cloud_need_key', { provider: f?.name || p }))}</option>`;
+      } else {
+        const ids = (_cloudModels[p] || []).map(m => m.id);
+        const cur = _providerModel(p);
+        if (cur && !ids.includes(cur)) ids.unshift(cur);
+        if (_orchCloudModel && !ids.includes(_orchCloudModel)) ids.unshift(_orchCloudModel);
+        g.innerHTML = ids.slice(0, 80).map(id =>
+          `<option value="cloud:${escHtml(id)}"${mode === 'local' ? ' disabled' : ''}>☁️ ${escHtml(id)}</option>`).join('');
+      }
+      sel.appendChild(g);
+      if (mode !== 'local' && [...sel.options].some(o => o.value.startsWith('cloud:') && !o.disabled)) sel.disabled = false;
+      if (_orchBackend === 'cloud' && mode !== 'local') {
+        const want = 'cloud:' + (_orchCloudModel || _providerModel(p));
+        if ([...sel.options].some(o => o.value === want)) sel.value = want;
+      } else if (prev.startsWith('cloud:') || mode === 'local') {
+        if (_lastLocalOrch && [...sel.options].some(o => o.value === _lastLocalOrch)) sel.value = _lastLocalOrch;
+      }
+      checkOrchestratorRecommended();
+      updateOrchestratorHint();
+    }
+
+    function onOrchestratorChange() {
+      const v = document.getElementById('sel_orchestrator_model')?.value || '';
+      if (v.startsWith('cloud:')) { _orchBackend = 'cloud'; _orchCloudModel = v.slice(6); }
+      else if (v) { _orchBackend = 'local'; _lastLocalOrch = v; }
+      checkOrchestratorRecommended();
+      updateOrchestratorHint();
+    }
+
+    function updateOrchestratorHint() {
+      const el = document.getElementById('orch_routing_hint');
+      if (!el) return;
+      const mode = _llmMode();
+      const v = document.getElementById('sel_orchestrator_model')?.value || '';
+      const exec = document.getElementById('sel_executor_model')?.value || '—';
+      const prov = CLOUD_MODEL_FIELDS[_activeProvider()]?.name || _activeProvider();
+      el.hidden = mode === 'cloud';
+      if (mode === 'local') { el.textContent = t('orch_hint_local'); return; }
+      const execShown = (exec && exec !== '—') ? exec : (t('ollama_offline') || '—');
+      el.textContent = v.startsWith('cloud:')
+        ? t('orch_hint_mixed_cloud', { orch: v.slice(6), provider: prov, exec: execShown })
+        : t('orch_hint_mixed_local', { orch: v || _lastLocalOrch || '—', provider: prov, exec: execShown });
     }
 
     async function deleteModel(name) {
@@ -10831,8 +10978,20 @@
       const msg = document.getElementById('settingsMsg');
       btn.disabled = true; msg.className = 'settings-msg';
       const payload = {
-        orchestrator_model:        document.getElementById('sel_orchestrator_model').value,
-        executor_model:            document.getElementById('sel_executor_model').value,
+        // A "cloud:<id>" planner choice keeps the last LOCAL model stored
+        // as orchestrator_model (used again in Local mode / as fallback).
+        // "" is the "Ollama offline" placeholder — never overwrite the stored
+        // local model with it.
+        orchestrator_model:        (() => { const v = document.getElementById('sel_orchestrator_model').value || '';
+                                            return (v.startsWith('cloud:') || !v) ? (_lastLocalOrch || v) : v; })(),
+        // In Local mode the planner choice doesn't apply — keep it for the
+        // next time Mixed is picked instead of silently resetting it.
+        orchestrator_backend:      (document.getElementById('sel_orchestrator_model').value || '').startsWith('cloud:') ? 'cloud'
+                                     : (_llmMode() === 'local' ? _orchBackend : 'local'),
+        orchestrator_cloud_model:  (() => { const v = document.getElementById('sel_orchestrator_model').value || '';
+                                            return v.startsWith('cloud:') ? v.slice(6) : (_orchCloudModel || ''); })(),
+        // "" = Ollama unreachable from this page; keep the stored model.
+        executor_model:            document.getElementById('sel_executor_model').value || _lastLocalExec,
         claude_model:              document.getElementById('inp_claude_model').value.trim(),
         anthropic_api_key:         document.getElementById('inp_anthropic_api_key').value.trim(),
         llm_provider:              document.getElementById('sel_llm_provider')?.value || 'anthropic',
