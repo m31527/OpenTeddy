@@ -785,6 +785,86 @@ def _make_progress_listener(
 
 # ── Update dispatch ───────────────────────────────────────────────────────────
 
+# ── Attachments ──────────────────────────────────────────────────────────────
+
+_MAX_DOWNLOAD_BYTES = 20 * 1024 * 1024        # Bot API getFile limit
+_ATTACHMENT_TTL_S = 30 * 60                   # pending file → next message
+_pending_attachments: Dict[str, List[Dict[str, Any]]] = {}
+
+
+def _fmt_size(n: int) -> str:
+    n = int(n or 0)
+    return f"{n / 1024 / 1024:.1f} MB" if n >= 1024 * 1024 else f"{max(n, 1) / 1024:.1f} KB"
+
+
+def _attachment_meta(msg: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """file_id / name / size / mime for a document or photo, else None."""
+    doc = msg.get("document")
+    if doc and doc.get("file_id"):
+        return {"file_id": doc["file_id"], "name": doc.get("file_name") or "file.bin",
+                "size": int(doc.get("file_size") or 0), "mime": doc.get("mime_type") or ""}
+    photos = msg.get("photo") or []
+    if photos:
+        p = photos[-1]                                    # largest size last
+        return {"file_id": p["file_id"], "name": f"photo_{p.get('file_unique_id', 'img')}.jpg",
+                "size": int(p.get("file_size") or 0), "mime": "image/jpeg"}
+    return None
+
+
+async def _receive_attachment(chat_id: str, att: Dict[str, Any]) -> Dict[str, Any]:
+    """Download a Telegram file into the chat session's workspace under
+    uploads/ (the web UI's convention). Returns the manifest entry."""
+    import os
+    if att["size"] and att["size"] > _MAX_DOWNLOAD_BYTES:
+        raise ValueError(f"超過 Telegram 機器人可下載的 20 MB 上限（{_fmt_size(att['size'])}）")
+    session_id = await _resolve_or_create_session(chat_id, f"[檔案] {att['name']}")
+    sess = await _tracker.get_session(session_id) or {}
+    workspace = os.path.abspath(sess.get("workspace_dir") or config.agent_workspace_dir)
+    uploads = os.path.join(workspace, "uploads")
+    os.makedirs(uploads, exist_ok=True)
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        r = await client.get(_bot_url("getFile"), params={"file_id": att["file_id"]})
+        data = r.json()
+        if not data.get("ok"):
+            raise ValueError(data.get("description") or f"getFile HTTP {r.status_code}")
+        file_path = data["result"]["file_path"]
+        token = (getattr(config, "telegram_bot_token", "") or "").strip()
+        r = await client.get(f"https://api.telegram.org/file/bot{token}/{file_path}")
+        if r.status_code != 200:
+            raise ValueError(f"download HTTP {r.status_code}")   # never echo the URL: it holds the token
+        content = r.content
+    name = os.path.basename(att["name"]).replace("\x00", "").strip() or "file.bin"
+    dest = os.path.join(uploads, name)
+    base, ext = os.path.splitext(name)
+    n = 0
+    while os.path.exists(dest):                  # never overwrite an earlier upload
+        n += 1
+        name = f"{base}_{int(time.time())}{'_' + str(n) if n > 1 else ''}{ext}"
+        dest = os.path.join(uploads, name)
+    with open(dest, "wb") as fh:
+        fh.write(content)
+    logger.info("Telegram bridge: saved %s (%d bytes) for chat %s", dest, len(content), chat_id)
+    return {"rel_path": os.path.relpath(dest, workspace), "name": name,
+            "size_bytes": len(content), "content_type": att.get("mime") or "",
+            "ts": time.monotonic()}
+
+
+def _with_pending_attachments(chat_id: str, text: str) -> str:
+    """Prefix the goal with files sent since the last goal (within 30
+    min), in the same manifest format the web UI uses."""
+    items = [a for a in _pending_attachments.pop(chat_id, [])
+             if time.monotonic() - a["ts"] < _ATTACHMENT_TTL_S]
+    if not items:
+        return text
+    manifest = "\n".join(
+        f"  - {a['rel_path']} ({_fmt_size(a['size_bytes'])}"
+        + (f", {a['content_type']}" if a.get("content_type") else "") + ")"
+        for a in items
+    )
+    return ("[Attachments in workspace — use these paths directly, do not re-upload:\n"
+            f"{manifest}\n]\n\n{text}")
+
+
 async def _dispatch(update: Dict[str, Any]) -> None:
     """Route a single Telegram update. Handles whitelist auth, command
     parsing, and (Phase 2) hand-off to the orchestrator. Today this
@@ -825,13 +905,34 @@ async def _dispatch(update: Dict[str, Any]) -> None:
         )
         return
 
-    text = (msg.get("text") or "").strip()
+    # A file's text arrives as its caption, not as `text`.
+    text = (msg.get("text") or msg.get("caption") or "").strip()
+
+    # Files (documents, photos) are saved into the chat's session
+    # workspace and attached to the next goal — the same manifest the web
+    # UI uses. They used to be rejected with "Only text messages are
+    # supported", so "幫我總結這幾個資訊" arrived with nothing to summarise.
+    att = _attachment_meta(msg)
+    if att:
+        try:
+            info = await _receive_attachment(chat_id, att)
+        except Exception as exc:  # noqa: BLE001
+            await _send_reply(chat_id, f"📎 收不到這個檔案：{exc}")
+            return
+        _pending_attachments.setdefault(chat_id, []).append(info)
+        if not text:
+            await _send_reply(
+                chat_id,
+                f"📎 已收到 {info['name']}（{_fmt_size(info['size_bytes'])}）。"
+                f"要我怎麼處理？例如「幫我總結重點」。",
+            )
+            return
+
     if not text:
-        # Photos, stickers, voice notes — out of scope for now. A
-        # cheerful nudge is friendlier than silent ignore.
+        # Stickers, voice notes, locations… A nudge beats silence.
         await _send_reply(
             chat_id,
-            "📎 Only text messages are supported for now. Try sending some words.",
+            "📎 目前支援文字訊息和檔案（文件、圖片）；貼圖和語音還不支援。",
         )
         return
 
@@ -871,7 +972,7 @@ async def _dispatch(update: Dict[str, Any]) -> None:
     # and the task body itself owns its own error handling so a crashed
     # run doesn't poison _running_chats.
     task = asyncio.create_task(
-        _run_goal_for_chat(chat_id, text),
+        _run_goal_for_chat(chat_id, _with_pending_attachments(chat_id, text)),
         name=f"telegram_goal:{chat_id[:16]}",
     )
     _running_chats[chat_id] = task
@@ -956,7 +1057,8 @@ async def _run_goal_for_chat(chat_id: str, goal_text: str) -> None:
         # Lane: a conversational message takes the chat lane (one call)
         # instead of the session's code-mode pipeline. See lane.py.
         from lane import pick_mode
-        _lane = await pick_mode(goal_text, "code")
+        _lane = await pick_mode(goal_text, "code",
+                                has_attachments=goal_text.startswith("[Attachments in workspace"))
         req = TaskRequest(
             id=str(uuid.uuid4()),
             goal=goal_text,

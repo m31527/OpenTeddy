@@ -75,8 +75,10 @@ def test_fast_chat_sentinel() -> None:
 
     async def complete_sentinel(*a, **k): return "[]"
     async def complete_ok(*a, **k): return "今天是星期四。"
+    async def no_recent(*a, **k): return ""
     fake = types.SimpleNamespace(memory=None, _last_gemma_error="ReadTimeout",
                                  _orchestrator_complete=complete_sentinel,
+                                 _recent_turns_block=no_recent,
                                  tracker=types.SimpleNamespace())
     req = TaskRequest(goal="Hi", session_id="s")
 

@@ -1292,6 +1292,42 @@ class Orchestrator:
 
     # ── Private helpers ───────────────────────────────────────────────────────
 
+    async def _recent_turns_block(self, req: TaskRequest, max_turns: int = 4,
+                                  max_chars: int = 2400) -> str:
+        """The last few exchanges of THIS session, oldest first.
+
+        Long-term memory is semantic retrieval over past task summaries —
+        good for "what did we learn", useless for "what did I just say".
+        Each Telegram message is its own task, so without this the model
+        answering "我剛剛有提供附件給您了" had never seen the previous
+        turn. Goes into the user prompt, never the system prompt, so the
+        system prefix stays cacheable. Skipped for scheduled runs: a daily
+        report must not be steered by yesterday's report.
+        """
+        if not req.session_id or (req.context or {}).get("triggered_by") == "schedule":
+            return ""
+        try:
+            rows = await self.tracker.list_tasks(limit=max_turns + 2, session_id=req.session_id)
+        except Exception:  # noqa: BLE001
+            return ""
+        turns = [r for r in rows if r.get("id") != req.id
+                 and r.get("status") in ("completed", "failed", "escalated")][:max_turns]
+        if not turns:
+            return ""
+        blocks: List[str] = []
+        for r in reversed(turns):                 # oldest first
+            goal = (r.get("goal") or "").strip()
+            m = re.match(r"^\[Attachments in workspace[^\]]*\]\s*", goal)
+            if m:                                   # keep the paths: "that file" must stay findable
+                paths = re.findall(r"^\s*-\s*(\S+)", m.group(0), re.M)
+                goal = f"[附件: {', '.join(paths)}] " + goal[m.end():]
+            summ = re.sub(r"\s+", " ", (r.get("summary") or "").strip())
+            blocks.append(f"使用者：{goal[:300]}\n助理：{summ[:500]}")
+        text = "\n\n".join(blocks)
+        if len(text) > max_chars:
+            text = "…" + text[-max_chars:]
+        return "【最近的對話（同一個對話串，舊→新；回答時可引用）】\n" + text
+
     async def _emit_task_event(self, kind: str, req: TaskRequest, **extra: Any) -> None:
         """Broadcast a task-level event (task.started / task.done) on the
         same channel as tool events. Best-effort: a UI hiccup must never
@@ -1512,8 +1548,10 @@ class Orchestrator:
         if memory_ctx:
             system_prompt = memory_ctx + "\n\n" + system_prompt
 
+        recent = await self._recent_turns_block(req)
         prompt = (
-            f"Goal: {req.goal}\n\n"
+            (recent + "\n\n" if recent else "")
+            + f"Goal: {req.goal}\n\n"
             f"Available skills: {json.dumps(skill_names)}\n\n"
             "Output the sub-task plan now."
         )
@@ -2410,8 +2448,9 @@ class Orchestrator:
 
         # Stream so the user gets tokens as they generate — same UX as
         # the full-loop chat-mode finalize step.
+        recent = await self._recent_turns_block(req)
         answer = await self._orchestrator_complete(
-            req.goal,
+            (recent + "\n\n使用者現在說：" + req.goal) if recent else req.goal,
             system,
             task_id=req.id,
             task_description=f"[fast-chat] {req.goal[:100]}",
