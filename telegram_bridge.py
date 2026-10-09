@@ -728,7 +728,8 @@ async def _send_reply_chunked(chat_id: str, text: str) -> None:
 _TYPING_REFRESH_S = 4
 
 # Status indicator: if no answer within _STATUS_DELAY_S, a looping sticker
-# of three fading dots appears (static/telegram/typing-dots.webm, built by
+# (a small "Thinking" pill with three hopping red dots) appears
+# (static/telegram/typing-dots.webm, built by
 # scripts/make_typing_sticker.py) and is deleted when the answer arrives —
 # the chat ends up holding only the question and the answer. A sticker
 # plays smoothly with no bubble; editing text can't. Uploaded once, then
