@@ -513,21 +513,204 @@ def _split_for_telegram(text: str, limit: int = _TELEGRAM_CHUNK_CHARS) -> List[s
     return chunks
 
 
-async def _send_reply_chunked(chat_id: str, text: str) -> None:
-    """Send `text` across as many Telegram messages as it takes, instead
-    of truncating. Each chunk gets a "(2/3)" page marker when there's
-    more than one, so the reader knows it's a continuation. Sends
-    sequentially so the chunks arrive in order."""
-    if not text:
+# ── Rich text: Markdown → Telegram HTML ──────────────────────────────────────
+# Models answer in Markdown. Telegram shows it raw unless told otherwise,
+# so a reply read like source code: "### 1. 授權" and "**重點**". We render
+# to Telegram's HTML subset (b / i / s / code / pre / a / blockquote) —
+# chosen over MarkdownV2, whose escaping rules break on ordinary
+# punctuation. Telegram has no tables or headings: headings become bold
+# lines, table rows become bullets. If Telegram still rejects the HTML,
+# the same text goes out as plain text with the markers stripped.
+
+_CJK_RE = re.compile(r"[\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff\uac00-\ud7af]")
+_FENCE_RE = re.compile(r"^[ \t]*```[^\n]*\n(.*?)(?:^[ \t]*```[ \t]*$|\Z)", re.S | re.M)
+_INLINE_CODE_RE = re.compile(r"`([^`\n]+)`")
+_LINK_RE = re.compile(r"\[([^\]\n]+)\]\((https?://[^)\s]+)\)")
+_HEADING_RE = re.compile(r"^\s{0,3}#{1,6}\s+(.*?)\s*#*\s*$")
+_HR_RE = re.compile(r"^\s{0,3}([-*_])(?:\s*\1){2,}\s*$")
+_BULLET_RE = re.compile(r"^(\s*)[-*+]\s+(.*)$")
+_TASK_RE = re.compile(r"^\[([ xX])\]\s+(.*)$")
+_QUOTE_RE = re.compile(r"^\s{0,3}>\s?(.*)$")
+_TABLE_SEP_RE = re.compile(r"^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$")
+_BOLD_RE = re.compile(r"\*\*(?=\S)(.+?)(?<=\S)\*\*")
+_STRIKE_RE = re.compile(r"~~(?=\S)(.+?)(?<=\S)~~")
+_ITALIC_RE = re.compile(r"(?<![*A-Za-z0-9])\*(?=[^\s*])([^*\n]+?)(?<=[^\s*])\*(?![*A-Za-z0-9])")
+
+
+def _is_zh(text: str) -> bool:
+    return bool(_CJK_RE.search(text or ""))
+
+
+def _esc(s: str) -> str:
+    return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def _table_cells(line: str) -> List[str]:
+    s = line.strip()
+    s = s[1:] if s.startswith("|") else s
+    s = s[:-1] if s.endswith("|") else s
+    return [c.strip() for c in s.split("|")]
+
+
+def _render_md(md: str, html: bool = True) -> str:
+    """Markdown → Telegram HTML (html=True) or clean plain text."""
+    md = (md or "").replace("\r\n", "\n")
+    slots: List[str] = []
+
+    def keep(rendered: str) -> str:            # protect from later passes
+        slots.append(rendered)
+        return f"\x00{len(slots) - 1}\x00"
+
+    md = _FENCE_RE.sub(lambda m: keep(
+        f"<pre>{_esc(m.group(1).rstrip())}</pre>" if html else m.group(1).rstrip()), md)
+    md = _INLINE_CODE_RE.sub(lambda m: keep(
+        f"<code>{_esc(m.group(1))}</code>" if html else m.group(1)), md)
+
+    def bold(t: str) -> str:
+        return f"<b>{t}</b>" if html and t else t
+
+    def inline(t: str) -> str:
+        t = _esc(t) if html else t
+        t = _LINK_RE.sub(lambda m: keep(
+            f'<a href="{m.group(2).replace(chr(34), "%22")}">{m.group(1)}</a>' if html
+            else f"{m.group(1)} ({m.group(2)})"), t)
+        t = _BOLD_RE.sub(lambda m: bold(m.group(1)), t)
+        t = _STRIKE_RE.sub(lambda m: f"<s>{m.group(1)}</s>" if html else m.group(1), t)
+        t = _ITALIC_RE.sub(lambda m: f"<i>{m.group(1)}</i>" if html else m.group(1), t)
+        return t.replace("**", "")              # unpaired markers are noise
+
+    def table(header: List[str], rows: List[List[str]]) -> List[str]:
+        if not rows:
+            return [" · ".join(inline(h) for h in header)]
+        lines = []
+        for r in rows:
+            first = inline(r[0].replace("**", "")) if r else ""
+            pairs = [(h, c) for h, c in zip(header[1:], r[1:]) if c]
+            if len(header) == 2 and pairs:
+                sep = "：" if _is_zh(first + pairs[0][1]) else ": "
+                lines.append(f"• {bold(first)}{sep}{inline(pairs[0][1])}")
+                continue
+            lines.append(f"• {bold(first)}")
+            for h, c in pairs:
+                sep = "：" if _is_zh(h + c) else ": "
+                lines.append(f"   {inline(h)}{sep}{inline(c)}")
+        return lines
+
+    src = md.split("\n")
+    out: List[str] = []
+    quote: List[str] = []
+
+    def flush_quote() -> None:
+        if quote:
+            out.append(f"<blockquote>{chr(10).join(quote)}</blockquote>" if html
+                       else "\n".join("│ " + q for q in quote))
+            quote.clear()
+
+    i = 0
+    while i < len(src):
+        line = src[i]
+        if (line.strip().startswith("|") and i + 1 < len(src)
+                and "-" in src[i + 1] and _TABLE_SEP_RE.match(src[i + 1])):
+            flush_quote()
+            j, rows = i + 2, []
+            while j < len(src) and src[j].strip().startswith("|"):
+                rows.append(_table_cells(src[j]))
+                j += 1
+            out.extend(table(_table_cells(line), rows))
+            i = j
+            continue
+        i += 1
+        qm = _QUOTE_RE.match(line)
+        if qm:
+            quote.append(inline(qm.group(1)))
+            continue
+        flush_quote()
+        if _HR_RE.match(line):
+            out.append("")
+            continue
+        hm = _HEADING_RE.match(line)
+        if hm:
+            out.append(bold(inline(hm.group(1).replace("**", ""))))
+            continue
+        bm = _BULLET_RE.match(line)
+        if bm:
+            depth = min(len(bm.group(1).replace("\t", "    ")) // 2, 3)
+            item, mark = bm.group(2), ("•" if depth == 0 else "◦")
+            tm = _TASK_RE.match(item)
+            if tm:
+                mark, item = ("☑" if tm.group(1).lower() == "x" else "☐"), tm.group(2)
+            out.append("   " * depth + f"{mark} {inline(item)}")
+            continue
+        out.append(inline(line))
+    flush_quote()
+
+    text = re.sub(r"\n{3,}", "\n\n", "\n".join(out)).strip()
+    for _ in range(3):                          # slots can nest (link inside bold…)
+        if "\x00" not in text:
+            break
+        text = re.sub(r"\x00(\d+)\x00", lambda m: slots[int(m.group(1))], text)
+    return text
+
+
+def _split_markdown(md: str, limit: int) -> List[str]:
+    """_split_for_telegram, but a code fence cut in two is closed at the
+    end of one chunk and reopened at the start of the next."""
+    chunks = _split_for_telegram(md, limit)
+    fixed: List[str] = []
+    carry = False
+    for c in chunks:
+        if carry:
+            c = "```\n" + c
+        carry = len(re.findall(r"^[ \t]*```", c, re.M)) % 2 == 1
+        fixed.append(c + "\n```" if carry else c)
+    return fixed
+
+
+def _rich_chunks(md: str, limit: int = _TELEGRAM_CHUNK_CHARS) -> List[str]:
+    """Markdown chunks whose rendered text fits one message. Table rows
+    repeat their headers when rendered, so a chunk can grow — re-split."""
+    out: List[str] = []
+    for c in _split_markdown(md, limit):
+        if len(_render_md(c, html=False)) > _TELEGRAM_CHUNK_CHARS and limit > 600:
+            out.extend(_rich_chunks(c, limit // 2))
+        else:
+            out.append(c)
+    return out
+
+
+async def _send_html(chat_id: str, html_text: str) -> bool:
+    """sendMessage with parse_mode=HTML. False when Telegram refuses it
+    (usually "can't parse entities") so the caller can send plain text."""
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(_bot_url("sendMessage"), json={
+                "chat_id": chat_id, "text": html_text, "parse_mode": "HTML",
+                "link_preview_options": {"is_disabled": True},
+            })
+        if resp.status_code == 200:
+            return True
+        logger.info("Telegram HTML send to %s refused (%d): %s — sending plain text",
+                    chat_id, resp.status_code, resp.text[:200])
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Telegram HTML send to %s failed: %s", chat_id, exc)
+    return False
+
+
+async def _send_rich(chat_id: str, md: str) -> None:
+    """Send Markdown as formatted Telegram messages, split as needed with
+    a "(2/3)" marker; any chunk Telegram rejects goes out as plain text."""
+    if not md:
         return
-    chunks = _split_for_telegram(text)
-    total = len(chunks)
-    if total <= 1:
-        await _send_reply(chat_id, text)
-        return
+    chunks = _rich_chunks(md)
     for i, chunk in enumerate(chunks, 1):
-        marker = f"({i}/{total})\n"
-        await _send_reply(chat_id, marker + chunk)
+        marker = f"({i}/{len(chunks)})\n" if len(chunks) > 1 else ""
+        if not await _send_html(chat_id, marker + _render_md(chunk, html=True)):
+            await _send_reply(chat_id, marker + _render_md(chunk, html=False))
+
+
+async def _send_reply_chunked(chat_id: str, text: str) -> None:
+    """Kept for callers outside this module (fleet alerts)."""
+    await _send_rich(chat_id, text)
 
 
 # ── Native "thinking" indicator ───────────────────────────────────────────────
@@ -543,11 +726,16 @@ async def _send_reply_chunked(chat_id: str, text: str) -> None:
 # the dots don't visibly blink off and on between sendChatAction calls.
 _TYPING_REFRESH_S = 4
 
-# After this many seconds without a result, send a one-shot text
-# "still working" message so the user knows the bot hasn't silently
-# crashed. ~5 s is the inflection point where the typing dots stop
-# feeling "fast" and start feeling "stuck".
-_LONG_TASK_HINT_S = 5
+# Status bubble: if no answer within _STATUS_DELAY_S, a small "🐻 思考中 ●○○"
+# message appears and animates by editing itself, then is deleted when the
+# answer arrives — the chat ends up holding only the question and the
+# answer. Telegram allows about one edit per second per chat; 2 s leaves
+# headroom, and long runs slow down to stay well clear of 429s.
+_STATUS_DELAY_S = 2.0
+_STATUS_INTERVAL_S = 2.0
+_STATUS_SLOW_INTERVAL_S = 4.0
+_STATUS_SLOW_AFTER_S = 60.0
+_STATUS_FRAMES = ("●○○", "○●○", "○○●", "○●○")
 
 # Hard upper bound on a single Telegram-initiated task. If the
 # orchestrator's subtask_timeout misbehaves, or the local model goes
@@ -621,13 +809,13 @@ async def _send_message_get_id(chat_id: str, text: str) -> Optional[int]:
     return None
 
 
-async def _edit_message(chat_id: str, message_id: int, text: str) -> None:
-    """Best-effort editMessageText. Silently ignores rate-limit 429s
-    (Telegram caps edits at ~1/s per chat; next progress event will
-    catch up). Any other failure logs at debug and moves on — a
-    stuck edit must never break the actual task pipeline."""
+async def _edit_message(chat_id: str, message_id: int, text: str) -> float:
+    """Best-effort editMessageText. Returns Telegram's retry_after on a
+    429 (0 otherwise) so a caller editing in a loop can back off. Any
+    other failure logs at debug and moves on — a stuck edit must never
+    break the actual task pipeline."""
     if not message_id or not text:
-        return
+        return 0.0
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.post(
@@ -638,9 +826,13 @@ async def _edit_message(chat_id: str, message_id: int, text: str) -> None:
                     "text":       text,
                 },
             )
-        if resp.status_code not in (200, 400, 429):
-            # 400 = "message is not modified" (text unchanged — fine);
-            # 429 = rate-limited (will catch up next round).
+        if resp.status_code == 429:
+            try:
+                return float((resp.json().get("parameters") or {}).get("retry_after") or 5)
+            except Exception:  # noqa: BLE001
+                return 5.0
+        if resp.status_code not in (200, 400):
+            # 400 = "message is not modified" (text unchanged — fine).
             logger.debug(
                 "editMessageText non-OK for %s/%s: %d %s",
                 chat_id, message_id, resp.status_code, resp.text[:200],
@@ -648,6 +840,17 @@ async def _edit_message(chat_id: str, message_id: int, text: str) -> None:
     except Exception as exc:  # noqa: BLE001
         logger.debug("_edit_message error for %s/%s: %s",
                      chat_id, message_id, exc)
+    return 0.0
+
+
+async def _delete_message(chat_id: str, message_id: int) -> None:
+    """Best-effort deleteMessage (a bot may delete its own messages)."""
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            await client.post(_bot_url("deleteMessage"),
+                              json={"chat_id": chat_id, "message_id": message_id})
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("_delete_message error for %s/%s: %s", chat_id, message_id, exc)
 
 
 # ── Live progress relay ───────────────────────────────────────────────────────
@@ -659,127 +862,85 @@ async def _edit_message(chat_id: str, message_id: int, text: str) -> None:
 # working" feedback without spamming the chat with one bubble per
 # subtask.
 
-# Throttle. Telegram allows ~1 edit/sec to the same message; we leave
-# headroom so a burst of fast subtasks doesn't trigger 429s.
-_PROGRESS_EDIT_MIN_INTERVAL_S = 1.5
-
-
 class _ProgressState:
-    """Per-task state for the editable progress message in Telegram.
+    """Per-task state for the animated status bubble."""
 
-    One instance per Telegram-driven orchestrator run. Holds the
-    message_id we're editing (None until first written), throttling
-    state, and a lock so concurrent fire-and-forget edits don't race.
-    """
-
-    __slots__ = (
-        "chat_id", "task_id", "short_goal",
-        "message_id", "last_edit_at", "lock",
-    )
-
-    def __init__(self, chat_id: str, task_id: str, short_goal: str):
-        self.chat_id    = chat_id
-        self.task_id    = task_id
-        self.short_goal = short_goal
+    def __init__(self, chat_id: str, task_id: str, zh: bool):
+        self.chat_id = chat_id
+        self.task_id = task_id
+        self.zh = zh
         self.message_id: Optional[int] = None
-        self.last_edit_at: float = 0.0
-        self.lock = asyncio.Lock()
+        self.order = 0                       # subtask n of total, from progress events
+        self.total = 0
+        self.started = time.monotonic()
+        self.done = asyncio.Event()
 
 
-async def _write_progress(state: "_ProgressState", text: str) -> None:
-    """Send-or-edit the progress message. Thread-safe via state.lock so
-    a fast burst (long-task hint timer firing at the same time as the
-    first subtask.progress event) can't double-send and end up with two
-    separate threads claiming the same slot."""
-    async with state.lock:
+def _status_text(state: "_ProgressState", frame: int) -> str:
+    if state.total > 1:
+        stage = (f"執行中 {state.order}/{state.total}" if state.zh
+                 else f"Working {state.order}/{state.total}")
+    else:
+        stage = "思考中" if state.zh else "Thinking"
+    text = f"🐻 {stage} {_STATUS_FRAMES[frame % len(_STATUS_FRAMES)]}"
+    secs = int(time.monotonic() - state.started)
+    if secs >= 60:
+        text += f"  {secs // 60}:{secs % 60:02d}"
+    elif secs >= 10:
+        text += f"  {secs} 秒" if state.zh else f"  {secs}s"
+    return text
+
+
+async def _animate_status(state: "_ProgressState") -> None:
+    """Show the status bubble after _STATUS_DELAY_S and animate it until
+    state.done is set. Exits on its own (never cancelled mid-send), so
+    the bubble's message_id is always known and _stop_status can delete
+    it — an orphaned "思考中" bubble would sit in the chat forever."""
+    async def pause(seconds: float) -> None:
+        try:
+            await asyncio.wait_for(state.done.wait(), timeout=seconds)
+        except asyncio.TimeoutError:
+            pass
+
+    await pause(_STATUS_DELAY_S)
+    frame = 0
+    while not state.done.is_set():
+        text = _status_text(state, frame)
+        backoff = 0.0
         if state.message_id is None:
             state.message_id = await _send_message_get_id(state.chat_id, text)
         else:
-            await _edit_message(state.chat_id, state.message_id, text)
-        state.last_edit_at = time.monotonic()
+            backoff = await _edit_message(state.chat_id, state.message_id, text)
+        frame += 1
+        slow = time.monotonic() - state.started > _STATUS_SLOW_AFTER_S
+        await pause(max(backoff, _STATUS_SLOW_INTERVAL_S if slow else _STATUS_INTERVAL_S))
 
 
-async def _long_task_hint(state: "_ProgressState", hint_task_ref=None) -> None:
-    """If no progress event has populated the progress message within
-    _LONG_TASK_HINT_S, send a generic 'still working' line so the chat
-    doesn't look frozen. For chat-mode fast answers (which never emit
-    subtask.progress events) this becomes the fallback signal.
-
-    Cancelled by the progress listener as soon as a real subtask.
-    progress event fires — that event's "Subtask 2/4 · 🎯 0.85 · 💰…"
-    text is strictly more useful than the generic hint, and we don't
-    want a 0.5s-later hint to clobber it."""
-    try:
-        await asyncio.sleep(_LONG_TASK_HINT_S)
-        # If a listener already wrote to the progress message, skip the
-        # hint — its generic wording would be a downgrade.
-        if state.message_id is not None:
-            return
-        await _write_progress(
-            state,
-            f"🐻 Still working on: {state.short_goal}\n"
-            "(local model is planning — first subtask should appear soon)",
-        )
-    except asyncio.CancelledError:
-        # Cancellation is the happy path for fast tasks. No message
-        # was sent; that's fine.
-        raise
+async def _stop_status(state: "_ProgressState", anim_task: "Optional[asyncio.Task]",
+                       typing_task: "Optional[asyncio.Task]") -> None:
+    """Stop typing + animation and delete the bubble before the answer
+    (or error) is sent."""
+    state.done.set()
+    if typing_task is not None and not typing_task.done():
+        typing_task.cancel()
+    if anim_task is not None:
+        try:
+            await asyncio.wait_for(anim_task, timeout=16.0)   # an in-flight send finishes
+        except Exception:  # noqa: BLE001
+            pass
+    if state.message_id:
+        await _delete_message(state.chat_id, state.message_id)
+        state.message_id = None
 
 
-def _make_progress_listener(
-    state: "_ProgressState", hint_task: "Optional[asyncio.Task]" = None,
-):
-    """Build a ws_manager listener that watches for subtask.progress
-    events on the bound task and pushes them into the editable progress
-    message. The listener also cancels the long-task hint (since the
-    real progress info is now driving the message) so we don't get a
-    generic "planning..." line clobbering a more specific "Subtask 3/5"
-    update."""
+def _make_progress_listener(state: "_ProgressState"):
+    """ws_manager listener: subtask.progress events for this task set the
+    bubble's "執行中 2/4"; the animation picks it up on its next frame."""
     async def listener(event: Dict[str, Any]) -> None:
-        # Filter to our task only — many tasks can run concurrently
-        # across the server.
-        if event.get("task_id") != state.task_id:
+        if event.get("task_id") != state.task_id or event.get("type") != "subtask.progress":
             return
-        # We only care about subtask.progress for the editable
-        # message. Other event types (tool_call, tool_result) fly past.
-        if event.get("type") != "subtask.progress":
-            return
-
-        # Once we have real progress, the long-task hint becomes
-        # redundant — its generic text would only clobber the more
-        # informative subtask info.
-        if hint_task is not None and not hint_task.done():
-            hint_task.cancel()
-
-        # Throttle. The first event always fires; subsequent edits
-        # respect the Telegram rate-limit window.
-        now = time.monotonic()
-        if state.message_id is not None and (now - state.last_edit_at) < _PROGRESS_EDIT_MIN_INTERVAL_S:
-            return
-
-        order = int(event.get("order") or 0)
-        total = int(event.get("total") or 0)
-        confidence = float(event.get("confidence") or 0.0)
-        cost = float(event.get("cost_usd") or 0.0)
-        tokens_out = int(event.get("tokens_out") or 0)
-
-        # Compose. Keep it dense — Telegram users skim. Confidence /
-        # cost only shown when meaningful (skips the "$0.000" noise
-        # for local-only chats).
-        bits = [f"⚙️ Subtask {order}/{total}" if total else f"⚙️ Subtask {order}"]
-        if confidence > 0:
-            bits.append(f"🎯 {confidence:.2f}")
-        if cost > 0:
-            bits.append(f"💰 ${cost:.3f}")
-        elif tokens_out > 0:
-            bits.append(f"🔤 {tokens_out:,} tok")
-
-        text = (
-            f"🐻 Working on: {state.short_goal}\n"
-            f"\n"
-            f"{' · '.join(bits)}"
-        )
-        await _write_progress(state, text)
+        state.order = int(event.get("order") or 0)
+        state.total = int(event.get("total") or 0)
     return listener
 
 
@@ -1047,8 +1208,6 @@ async def _run_goal_for_chat(chat_id: str, goal_text: str) -> None:
     # answers feel native ("typing…" → answer) and longer tasks get a
     # single "🐻 Subtask 3/5 · 🎯 0.85 · 💰 $0.04" message that edits
     # in place as the orchestrator works through its plan.
-    short_goal = goal_text if len(goal_text) <= 80 else goal_text[:77] + "…"
-
     # Build TaskRequest first so the progress listener can filter by
     # task_id before the orchestrator starts emitting events. (Build
     # is cheap — just a Pydantic model instance.)
@@ -1083,16 +1242,13 @@ async def _run_goal_for_chat(chat_id: str, goal_text: str) -> None:
     # initial fallback message) and the ws_manager listener (edits the
     # same message with real subtask info). Whoever fires first writes
     # the message; the other side edits.
-    progress_state = _ProgressState(
-        chat_id=chat_id, task_id=req.id, short_goal=short_goal,
-    )
+    progress_state = _ProgressState(chat_id=chat_id, task_id=req.id, zh=_is_zh(goal_text))
 
     typing_task = asyncio.create_task(
         _keep_typing(chat_id), name=f"tg_typing:{chat_id[:16]}",
     )
-    hint_task = asyncio.create_task(
-        _long_task_hint(progress_state),
-        name=f"tg_hint:{chat_id[:16]}",
+    anim_task = asyncio.create_task(
+        _animate_status(progress_state), name=f"tg_status:{chat_id[:16]}",
     )
 
     # Subscribe to ws_manager so subtask.progress events filtered to
@@ -1104,7 +1260,7 @@ async def _run_goal_for_chat(chat_id: str, goal_text: str) -> None:
     try:
         from main import ws_manager as _wsm
         ws_listener_token = _wsm.subscribe(
-            _make_progress_listener(progress_state, hint_task)
+            _make_progress_listener(progress_state)
         )
     except Exception as exc:  # noqa: BLE001
         logger.debug("Telegram bridge: ws_manager subscribe failed: %s", exc)
@@ -1139,7 +1295,7 @@ async def _run_goal_for_chat(chat_id: str, goal_text: str) -> None:
             "chat=%s session=%s — aborted.",
             _TELEGRAM_RUN_TIMEOUT_S, chat_id, session_id,
         )
-        _cancel_indicator_tasks(typing_task, hint_task)
+        await _stop_status(progress_state, anim_task, typing_task)
         await _send_reply(
             chat_id,
             f"⌛ Task ran longer than {_TELEGRAM_RUN_TIMEOUT_S // 60} min "
@@ -1158,7 +1314,7 @@ async def _run_goal_for_chat(chat_id: str, goal_text: str) -> None:
         # Stop the indicator / hint before surfacing the error so a slow
         # crash doesn't keep flashing "typing…" while the failure reply
         # is being read.
-        _cancel_indicator_tasks(typing_task, hint_task)
+        await _stop_status(progress_state, anim_task, typing_task)
         await _send_reply(
             chat_id,
             f"❌ Task crashed inside the orchestrator: {exc}\n"
@@ -1167,11 +1323,8 @@ async def _run_goal_for_chat(chat_id: str, goal_text: str) -> None:
         _running_chats.pop(chat_id, None)
         return
 
-    # Happy path: cancel the indicator + hint so a fast answer doesn't
-    # also get the "still working" line. For sub-_LONG_TASK_HINT_S runs
-    # the hint never fired; for longer runs it fired once and that's
-    # the right number of times.
-    _cancel_indicator_tasks(typing_task, hint_task)
+    # Happy path: the status bubble goes away just before the answer.
+    await _stop_status(progress_state, anim_task, typing_task)
 
     elapsed_s = time.monotonic() - start
     reply = _format_result_for_telegram(result, session_id, elapsed_s)
@@ -1194,9 +1347,9 @@ async def _run_goal_for_chat(chat_id: str, goal_text: str) -> None:
     if artifacts:
         reply = reply + _format_artifacts_block(artifacts)
 
-    # Chunked send — a long summary now spans multiple Telegram messages
-    # ("(1/3)" … "(3/3)") instead of being truncated at 3500 chars.
-    await _send_reply_chunked(chat_id, reply)
+    # Formatted (Markdown → Telegram HTML) and split across messages
+    # ("(1/3)" … "(3/3)") instead of being truncated.
+    await _send_rich(chat_id, reply)
 
     # For small text artifacts, push the file CONTENT as follow-up
     # messages so the user doesn't have to open the web UI to see
@@ -1295,7 +1448,10 @@ async def _push_artifact_contents(
                 preview = f"📄 {name}\n\n{content}"
                 if len(preview) > 3800:
                     preview = preview[:3800] + "\n…(truncated)"
-                await _send_reply(chat_id, preview)
+                if fpath.lower().endswith((".md", ".markdown")):
+                    await _send_rich(chat_id, preview)
+                else:
+                    await _send_reply(chat_id, preview)
             elif size <= _SEND_DOCUMENT_SIZE_LIMIT:
                 # sendDocument — Telegram-native file attachment. Tap
                 # to download / preview on phone.
@@ -1335,16 +1491,6 @@ async def _send_document(chat_id: str, file_path: str, caption: str = "") -> Non
                      chat_id, file_path, exc)
 
 
-def _cancel_indicator_tasks(*tasks: asyncio.Task) -> None:
-    """Cancel the typing-keep-alive + long-task-hint background tasks
-    safely. Cancelling an already-finished task is a no-op; cancelling
-    one that's mid-await produces the asyncio.CancelledError that those
-    coroutines themselves let propagate. Both behaviours are fine here."""
-    for t in tasks:
-        if t and not t.done():
-            t.cancel()
-
-
 async def _resolve_or_create_session(chat_id: str, first_goal: str) -> str:
     """Find the session bound to this Telegram chat, or create + bind a
     new one. "One chat = one persistent agent" — the user's chat history
@@ -1372,12 +1518,9 @@ async def _resolve_or_create_session(chat_id: str, first_goal: str) -> str:
 
 
 def _format_result_for_telegram(result: Any, session_id: str, elapsed_s: float) -> str:
-    """Render a TaskResult into a Telegram-readable message. Aggressive
-    on length (cap at _TELEGRAM_MAX_BODY_CHARS) since Telegram clamps
-    messages at 4096 chars total and we want headroom for trailer
-    metadata. Truncated summaries pointer the user at the web UI for
-    the full text — exporting the session via the kebab menu is the
-    "see everything" escape hatch."""
+    """Render a TaskResult as Markdown for _send_rich: the answer, then a
+    one-line status footer. Not truncated — _send_rich splits long
+    replies across messages."""
     # Late import — avoids pulling Pydantic models into module load.
     try:
         from models import TaskStatus
@@ -1385,31 +1528,26 @@ def _format_result_for_telegram(result: Any, session_id: str, elapsed_s: float) 
     except Exception:  # noqa: BLE001
         status_val = str(getattr(result, "status", "unknown"))
 
-    # Pick the right status emoji. Anything we haven't explicitly seen
-    # falls through to a neutral marker rather than a misleading ✅/❌.
-    icon = {
-        "completed": "✅",
-        "failed":    "❌",
-        "escalated": "⚠️",
-        "running":   "⏳",
-    }.get(status_val.lower(), "ℹ️")
-
-    # Full summary — NOT truncated here. _send_reply_chunked splits a
-    # long message across multiple Telegram messages ("(1/3)"…) so the
-    # user gets the complete output instead of a "…(truncated)" stub.
-    summary = (getattr(result, "summary", "") or "").strip() or "(no summary)"
-
-    subtask_count = len(getattr(result, "subtasks", []) or [])
-
-    parts = [
-        f"{icon} {status_val.title()} · {elapsed_s:.1f}s · {subtask_count} subtask"
-        + ("s" if subtask_count != 1 else ""),
-        "",
-        summary,
-        "",
-        f"session: {session_id}",
-    ]
-    return "\n".join(parts)
+    # Answer first, then one quiet italic line (✅ 完成 · 11.7 秒). The old
+    # header ("✅ Completed · 11.7s · 1 subtask") and "session: <uuid>"
+    # footer read like a log line. A failure keeps its status on top.
+    summary = (getattr(result, "summary", "") or "").strip()
+    zh = _is_zh(summary) or _is_zh(str(getattr(result, "goal", "") or ""))
+    status = status_val.lower()
+    icon = {"completed": "✅", "failed": "❌", "escalated": "⚠️", "running": "⏳"}.get(status, "ℹ️")
+    label = ({"completed": "完成", "failed": "沒有完成", "escalated": "已轉交處理", "running": "仍在執行"}
+             if zh else
+             {"completed": "Done", "failed": "Failed", "escalated": "Escalated", "running": "Still running"}
+             ).get(status, status_val)
+    n = len(getattr(result, "subtasks", []) or [])
+    meta = f"{icon} {label} · " + (f"{elapsed_s:.1f} 秒" if zh else f"{elapsed_s:.1f}s")
+    if n > 1:
+        meta += f" · {n} 個步驟" if zh else f" · {n} steps"
+    if not summary:
+        summary = "（沒有內容）" if zh else "(no summary)"
+    if status == "completed":
+        return f"{summary}\n\n*{meta}*"
+    return f"{meta}\n\n{summary}"
 
 
 async def _handle_command(chat_id: str, text: str) -> None:

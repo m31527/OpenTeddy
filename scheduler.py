@@ -503,7 +503,7 @@ async def _maybe_push_to_telegram(
 
     # Late import to keep the cyclic risk out of module load time.
     from telegram_bridge import (
-        _send_reply, _format_result_for_telegram,
+        _send_reply, _send_rich, _format_result_for_telegram,
         _format_artifacts_block, _push_artifact_contents,
     )
 
@@ -535,7 +535,7 @@ async def _maybe_push_to_telegram(
         pass
     if artifacts:
         body += _format_artifacts_block(artifacts)
-    await _send_reply(chat_id, body)
+    await _send_rich(chat_id, body)       # Markdown → Telegram formatting
     if artifacts:
         await _push_artifact_contents(chat_id, artifacts)
 
