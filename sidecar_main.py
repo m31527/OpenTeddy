@@ -158,6 +158,8 @@ def main() -> None:
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         stream=sys.stderr,
     )
+    import log_redact
+    log_redact.install()
 
     port = _pick_free_port()
     logging.info("OpenTeddy sidecar starting on 127.0.0.1:%d", port)

@@ -86,6 +86,11 @@ class _RingBufferHandler(logging.Handler):
 _ring_log_handler = _RingBufferHandler()
 logging.getLogger().addHandler(_ring_log_handler)
 
+# Mask bot tokens / API keys in every log line (journald and the ring
+# buffer above), and drop httpx's per-request INFO lines that carried them.
+import log_redact  # noqa: E402
+log_redact.install()
+
 # ── Application state ─────────────────────────────────────────────────────────
 tracker:          Tracker
 skill_factory:    SkillFactory
