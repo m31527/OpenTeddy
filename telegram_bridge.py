@@ -75,6 +75,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import re
 import time
 import uuid
@@ -726,11 +727,18 @@ async def _send_reply_chunked(chat_id: str, text: str) -> None:
 # the dots don't visibly blink off and on between sendChatAction calls.
 _TYPING_REFRESH_S = 4
 
-# Status bubble: if no answer within _STATUS_DELAY_S, a small "🐻 思考中 ●○○"
-# message appears and animates by editing itself, then is deleted when the
-# answer arrives — the chat ends up holding only the question and the
-# answer. Telegram allows about one edit per second per chat; 2 s leaves
-# headroom, and long runs slow down to stay well clear of 429s.
+# Status indicator: if no answer within _STATUS_DELAY_S, a looping sticker
+# of three fading dots appears (static/telegram/typing-dots.webm, built by
+# scripts/make_typing_sticker.py) and is deleted when the answer arrives —
+# the chat ends up holding only the question and the answer. A sticker
+# plays smoothly with no bubble; editing text can't. Uploaded once, then
+# re-sent by file_id. If the sticker can't be sent, a text line
+# ("思考中 ●○○") animates by editing itself instead; Telegram allows about
+# one edit per second per chat, so 2 s leaves headroom and long runs slow
+# down to stay clear of 429s.
+_STATUS_STICKER_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                    "static", "telegram", "typing-dots.webm")
+_status_sticker_file_id: Optional[str] = None
 _STATUS_DELAY_S = 2.0
 _STATUS_INTERVAL_S = 2.0
 _STATUS_SLOW_INTERVAL_S = 4.0
@@ -780,7 +788,7 @@ async def _keep_typing(chat_id: str) -> None:
         raise
 
 
-async def _send_message_get_id(chat_id: str, text: str) -> Optional[int]:
+async def _send_message_get_id(chat_id: str, text: str, silent: bool = False) -> Optional[int]:
     """sendMessage that returns the new message_id on success, None on
     failure. Used by progressive-update flows that want to EDIT this
     message later (editMessageText needs the id).
@@ -794,7 +802,7 @@ async def _send_message_get_id(chat_id: str, text: str) -> Optional[int]:
         async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.post(
                 _bot_url("sendMessage"),
-                json={"chat_id": chat_id, "text": text},
+                json={"chat_id": chat_id, "text": text, "disable_notification": silent},
             )
         if resp.status_code == 200:
             payload = resp.json()
@@ -882,13 +890,44 @@ def _status_text(state: "_ProgressState", frame: int) -> str:
                  else f"Working {state.order}/{state.total}")
     else:
         stage = "思考中" if state.zh else "Thinking"
-    text = f"🐻 {stage} {_STATUS_FRAMES[frame % len(_STATUS_FRAMES)]}"
+    text = f"{stage} {_STATUS_FRAMES[frame % len(_STATUS_FRAMES)]}"
     secs = int(time.monotonic() - state.started)
     if secs >= 60:
         text += f"  {secs // 60}:{secs % 60:02d}"
     elif secs >= 10:
         text += f"  {secs} 秒" if state.zh else f"  {secs}s"
     return text
+
+
+async def _send_status_sticker(chat_id: str) -> Optional[int]:
+    """Send the typing-dots sticker silently; its message_id, or None if
+    it couldn't be sent (missing file, API refusal) — the caller then
+    falls back to the text animation."""
+    global _status_sticker_file_id
+    if not _status_sticker_file_id and not os.path.isfile(_STATUS_STICKER_PATH):
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            if _status_sticker_file_id:
+                resp = await client.post(_bot_url("sendSticker"), json={
+                    "chat_id": chat_id, "sticker": _status_sticker_file_id,
+                    "disable_notification": True})
+            else:
+                with open(_STATUS_STICKER_PATH, "rb") as fh:
+                    resp = await client.post(
+                        _bot_url("sendSticker"),
+                        data={"chat_id": chat_id, "disable_notification": "true"},
+                        files={"sticker": ("typing-dots.webm", fh, "video/webm")})
+        payload = resp.json() if resp.status_code == 200 else {}
+        if payload.get("ok"):
+            msg = payload.get("result") or {}
+            _status_sticker_file_id = (msg.get("sticker") or {}).get("file_id") or _status_sticker_file_id
+            return msg.get("message_id")
+        logger.info("Telegram status sticker refused (%d): %s", resp.status_code, resp.text[:200])
+        _status_sticker_file_id = None        # a stale file_id: upload again next time
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("Telegram status sticker to %s failed: %s", chat_id, exc)
+    return None
 
 
 async def _animate_status(state: "_ProgressState") -> None:
@@ -903,12 +942,18 @@ async def _animate_status(state: "_ProgressState") -> None:
             pass
 
     await pause(_STATUS_DELAY_S)
+    if state.done.is_set():
+        return
+    state.message_id = await _send_status_sticker(state.chat_id)
+    if state.message_id:
+        await state.done.wait()               # the sticker animates by itself
+        return
     frame = 0
     while not state.done.is_set():
         text = _status_text(state, frame)
         backoff = 0.0
         if state.message_id is None:
-            state.message_id = await _send_message_get_id(state.chat_id, text)
+            state.message_id = await _send_message_get_id(state.chat_id, text, silent=True)
         else:
             backoff = await _edit_message(state.chat_id, state.message_id, text)
         frame += 1

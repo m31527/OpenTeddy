@@ -112,9 +112,10 @@ class _Client:
     def __init__(self, *a, **k): pass
     async def __aenter__(self): return self
     async def __aexit__(self, *a): return False
-    async def post(self, url, json=None, **k):
-        _Client.posts.append((url.rsplit("/", 1)[-1], json))
-        return _Client.handler(url, json) if _Client.handler else _Resp()
+    async def post(self, url, json=None, data=None, files=None, **k):
+        body = json if json is not None else {**(data or {}), "_files": sorted(files or {})}
+        _Client.posts.append((url.rsplit("/", 1)[-1], body))
+        return _Client.handler(url, body) if _Client.handler else _Resp()
 
 
 async def test_chunks_and_send() -> None:
@@ -162,7 +163,25 @@ async def test_status_bubble() -> None:
     assert _Client.posts == [], _Client.posts
     print("  ✓ fast answer: no bubble at all")
 
+    assert os.path.getsize(TB._STATUS_STICKER_PATH) < 256 * 1024
+    sticker_ok = lambda url, j: _Resp(200, {"ok": True, "result": {"message_id": 77, "sticker": {"file_id": "FID"}}}) \
+        if url.endswith("sendSticker") else _Resp()
+    _Client.posts, _Client.handler = [], sticker_ok
+    TB._status_sticker_file_id = None
+    for run in (1, 2):
+        st = TB._ProgressState("42", f"s{run}", zh=True)
+        anim = asyncio.create_task(TB._animate_status(st))
+        await asyncio.sleep(0.15)
+        await TB._stop_status(st, anim, None)
+    (m1, b1), (m2, b2), (m3, b3), (m4, b4) = _Client.posts
+    assert m1 == "sendSticker" and b1["_files"] == ["sticker"] and b1["disable_notification"] == "true"
+    assert (m2, b2["message_id"]) == ("deleteMessage", 77)
+    assert m3 == "sendSticker" and b3["sticker"] == "FID" and b3["disable_notification"] is True
+    assert (m4, b4["message_id"]) == ("deleteMessage", 77)
+    print("  ✓ dots sticker: uploaded once, then re-sent by file_id; silent; no edits; deleted")
+
     _Client.posts = []
+    _Client.handler = lambda url, j: _Resp(400, {"ok": False}) if url.endswith("sendSticker") else _Resp()
     st = TB._ProgressState("42", "t2", zh=True)
     anim = asyncio.create_task(TB._animate_status(st))
     await asyncio.sleep(0.12)
@@ -174,24 +193,26 @@ async def test_status_bubble() -> None:
     await TB._stop_status(st, anim, None)
     methods = [m for m, _ in _Client.posts]
     texts = [b.get("text", "") for _, b in _Client.posts]
-    assert methods[0] == "sendMessage" and texts[0].startswith("🐻 思考中 ●○○"), texts
+    assert methods[0] == "sendSticker" and TB._status_sticker_file_id is None, "stale file_id dropped"
+    assert methods[1] == "sendMessage" and texts[1].startswith("思考中 ●○○"), texts
+    assert _Client.posts[1][1]["disable_notification"] is True and "🐻" not in "".join(texts)
     assert methods.count("sendMessage") == 1 and "editMessageText" in methods
     assert len({t for t in texts if t}) > 1, "frames change"
     assert any("執行中 2/3" in t for t in texts) and not any("9/9" in t for t in texts)
     assert methods[-1] == "deleteMessage" and _Client.posts[-1][1]["message_id"] == 99
     assert anim.done() and st.message_id is None
-    print("  ✓ bubble appears, animates, shows 執行中 2/3, deleted before the answer")
+    print("  ✓ sticker refused → text fallback (no icon): animates, 執行中 2/3, deleted")
 
     st = TB._ProgressState("42", "t3", zh=False)
     st.order, st.total = 1, 1
-    assert TB._status_text(st, 1) == "🐻 Thinking ○●○"
+    assert TB._status_text(st, 1) == "Thinking ○●○"
     st.started -= 75
     assert TB._status_text(st, 0).endswith("1:15")
     print("  ✓ English goal → English bubble; elapsed time shown on long runs")
 
     _Client.posts = []
     _Client.handler = lambda url, j: _Resp(429, {"ok": False, "parameters": {"retry_after": 0.2}}) \
-        if url.endswith("editMessageText") else _Resp()
+        if url.endswith("editMessageText") else _Resp(400, {"ok": False}) if url.endswith("sendSticker") else _Resp()
     st = TB._ProgressState("42", "t4", zh=True)
     anim = asyncio.create_task(TB._animate_status(st))
     await asyncio.sleep(0.15)
