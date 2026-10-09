@@ -121,6 +121,16 @@ openteddy update                             # git pull → 需要時裝依賴 �
 
 用 `--system` 裝成系統服務的話,這些指令也要加 `--system`。
 
+從開發機一鍵部署到另一台機器(先 `git push`,目標機會從 GitHub 拉):
+
+```bash
+./deploy.sh home                 # m31527@192.168.50.86:/home/m31527/OpenTeddy
+./deploy.sh user@host:/path      # 其他機器
+./deploy.sh home --autostash     # 目標機有本地修改、而這次更新剛好動到同一個檔案
+```
+
+它會在目標機 `git pull` → 需要時裝依賴 → `openteddy service restart` → 健康檢查。目標機上的本地修改會保留。
+
 ## 小提醒
 
 - `--json` 和 `--url` 要放在子指令**前面**:`openteddy --json task list`、`openteddy --url http://x:8000 health`
