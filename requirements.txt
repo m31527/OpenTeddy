@@ -76,3 +76,7 @@ markdownify>=0.13
 # + DST + missed-fire policies, and is the de-facto standard. Pure Python,
 # no native deps, PyInstaller-friendly.
 APScheduler>=3.10
+
+# OpenTeddy as an MCP server for Claude Code (`openteddy mcp`). Pinned below 2:
+# mcp 2.x renamed FastMCP and changed the server API.
+mcp>=1.10,<2

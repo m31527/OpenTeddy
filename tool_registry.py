@@ -531,6 +531,8 @@ class ToolRegistry:
         # Weather from Open-Meteo (no key); short questions are answered
         # before planning (weather.py).
         from tools.weather_tool import WEATHER_TOOLS
+        # Coding handed to Claude Code (headless `claude -p`) in the background.
+        from tools.claude_code_tool import CLAUDE_CODE_TOOLS
 
         for fn, schema, risk in (
             SHELL_TOOLS + FILE_TOOLS + HTTP_TOOLS
@@ -539,7 +541,7 @@ class ToolRegistry:
             + SEARCH_TOOLS + BROWSER_TOOLS + MARKITDOWN_TOOLS
             + CYBER_SKILLS_TOOLS + GITHUB_TRENDING_TOOLS
             + CHROME_ATTACHED_TOOLS + THREADS_TOOLS + DIGEST_TOOLS
-            + PRINT_TOOLS + HOME_TOOLS + WEATHER_TOOLS
+            + PRINT_TOOLS + HOME_TOOLS + WEATHER_TOOLS + CLAUDE_CODE_TOOLS
         ):
             self.register(fn, schema, risk)
 

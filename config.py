@@ -459,6 +459,12 @@ class Config:
     ha_confirm_domains: str = field(default_factory=lambda: os.getenv(
         "HA_CONFIRM_DOMAINS", "lock,alarm_control_panel,valve,siren,water_heater"))
     xiaoai_entity: str = field(default_factory=lambda: os.getenv("XIAOAI_ENTITY", ""))
+    # Claude Code delegation (claude_code.py). Empty bin = find `claude` on
+    # PATH or ~/.local/bin; empty allowed_tools = the built-in allowlist.
+    claude_code_bin: str = field(default_factory=lambda: os.getenv("CLAUDE_CODE_BIN", ""))
+    claude_code_default_dir: str = field(default_factory=lambda: os.getenv("CLAUDE_CODE_DEFAULT_DIR", ""))
+    claude_code_allowed_tools: str = field(default_factory=lambda: os.getenv("CLAUDE_CODE_ALLOWED_TOOLS", ""))
+    claude_code_timeout: int = field(default_factory=lambda: int(os.getenv("CLAUDE_CODE_TIMEOUT", "1800") or 1800))
     # Inbound (Telegram → OpenTeddy) — long-polling bridge.
     # When `telegram_inbound_enabled` is True AND `telegram_bot_token`
     # is set AND `telegram_inbound_chat_id_whitelist` is non-empty,
@@ -971,9 +977,12 @@ class Config:
 
         if "printer_name" in settings:
             self.printer_name = (settings["printer_name"] or "").strip()
-        for k in ("ha_url", "ha_token", "ha_language", "ha_confirm_domains", "xiaoai_entity"):
+        for k in ("ha_url", "ha_token", "ha_language", "ha_confirm_domains", "xiaoai_entity",
+                  "claude_code_bin", "claude_code_default_dir", "claude_code_allowed_tools"):
             if k in settings:
                 setattr(self, k, (settings[k] or "").strip())
+        if (settings.get("claude_code_timeout") or "").strip().isdigit():
+            self.claude_code_timeout = max(60, min(14400, int(settings["claude_code_timeout"])))
         if (settings.get("print_max_copies") or "").strip().isdigit():
             self.print_max_copies = max(1, min(200, int(settings["print_max_copies"])))
 

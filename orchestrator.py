@@ -972,6 +972,18 @@ class Orchestrator:
             if _print_cmd is not None:
                 return await self._direct_print(req, _print_cmd)
 
+        # ── 0′. Claude Code: "用 Claude Code 在 ~/x 修好測試" → background job ──
+        try:
+            import claude_code as _cc
+            _cc_req = _cc.parse_request(req.goal)
+            _cc_status = _cc.parse_status(req.goal)
+        except Exception:  # noqa: BLE001
+            _cc_req, _cc_status = None, False
+        if _cc_status:
+            return await self._finish_direct(req, _cc.describe_jobs(), True)
+        if _cc_req:
+            return await self._claude_code(req, _cc_req[0], _cc_req[1], session_ws)
+
         # ── Asked again? ─────────────────────────────────────────────────
         # The same question within 10 minutes means the last answer missed
         # ("最近有颱風靠近台灣嗎" got the local forecast twice). Informational
@@ -1453,6 +1465,38 @@ class Orchestrator:
         except HA.HAError as exc:
             return await self._finish_direct(req, f"❌ {exc}", False)
         return await self._finish_direct(req, HA.describe_devices(devs, only_offline=(kind == "offline")), True)
+
+    async def _claude_code(self, req: TaskRequest, task: str, directory: Optional[str],
+                           session_dir: Optional[str]) -> TaskResult:
+        """Start Claude Code in the background; the result comes back as a
+        message (Telegram) and as a task row in this session."""
+        import claude_code as CC
+        try:
+            if not CC.find_binary():
+                raise CC.ClaudeCodeError("這台機器沒有安裝 Claude Code（找不到 claude 指令）。安裝並登入後再試。")
+            where = CC.resolve_directory(directory, session_dir)
+        except CC.ClaudeCodeError as exc:
+            return await self._finish_direct(req, f"🤖 {exc}", False)
+
+        chat_id = str((req.context or {}).get("telegram_chat_id") or "") or \
+            (getattr(config, "telegram_default_chat_id", "") or "").strip()
+
+        async def notify(text: str) -> None:
+            if chat_id and (getattr(config, "telegram_bot_token", "") or "").strip():
+                from telegram_bridge import _send_rich
+                await _send_rich(chat_id, text)
+
+        async def on_done(text: str, res: Dict[str, Any]) -> None:
+            done = TaskRequest(goal=f"（Claude Code 完成）{task}", session_id=req.session_id,
+                               context={"triggered_by": "claude_code"})
+            await self.tracker.create_task(done)
+            await self.tracker.update_task_status(
+                done.id, TaskStatus.COMPLETED if res.get("ok") else TaskStatus.FAILED, text)
+
+        job = CC.start(task, where, notify, on_done)
+        tail = "完成後會傳訊息給你。" if chat_id else "完成後可以問「Claude Code 做到哪了」。"
+        return await self._finish_direct(
+            req, f"🤖 已交給 Claude Code（工作 `{job}`）：「{task}」\n📁 {where}\n{tail}", True)
 
     async def _asked_again(self, req: TaskRequest, within_min: int = 10) -> bool:
         """The same question was answered in this session within the last

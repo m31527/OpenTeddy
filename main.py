@@ -3532,6 +3532,30 @@ async def list_printers_endpoint() -> dict:
     return {"success": True, "printers": printers, "default": default, "status": status, "error": None}
 
 
+class _NotifyBody(BaseModel):
+    text: str
+
+
+@app.post("/notify")
+async def notify_endpoint(body: _NotifyBody) -> dict:
+    """Send the owner a Telegram message (Settings → Telegram Default Chat
+    ID) — used by the MCP server's notify_me so Claude Code can say
+    "deploy done" to a phone."""
+    chat = (getattr(config, "telegram_default_chat_id", "") or "").strip()
+    if not chat or not (getattr(config, "telegram_bot_token", "") or "").strip():
+        return {"success": False, "error": "Telegram isn't set up: Settings → Telegram bot token and Default Chat ID."}
+    from telegram_bridge import _send_rich
+    await _send_rich(chat, body.text[:8000])
+    return {"success": True, "error": None}
+
+
+@app.get("/claude-code/jobs")
+async def claude_code_jobs_endpoint() -> dict:
+    """Claude Code jobs started from OpenTeddy (running / done / failed)."""
+    import claude_code
+    return {"jobs": claude_code.jobs(20), "binary": claude_code.find_binary()}
+
+
 @app.get("/review")
 async def self_review_endpoint(days: int = 7) -> dict:
     """每週自我體檢: what went wrong in the last `days` days, from the

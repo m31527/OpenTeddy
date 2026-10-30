@@ -480,6 +480,15 @@ def cmd_models(rt: Runtime, a: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_mcp(rt: Runtime, a: argparse.Namespace) -> int:
+    """Serve OpenTeddy as an MCP server on stdio (for Claude Code):
+    claude mcp add openteddy -- /path/to/openteddy --url http://<runtime>:8000 mcp"""
+    sys.path.insert(0, REPO_DIR)
+    import mcp_server
+    mcp_server.main(rt.url)
+    return 0
+
+
 def cmd_review(rt: Runtime, a: argparse.Namespace) -> int:
     """每週自我體檢 — print the report (or JSON with --json)."""
     r = rt.req("GET", f"/review?days={int(a.days)}")
@@ -809,6 +818,8 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("tools", help="list tools and their risk level").set_defaults(fn=cmd_tools)
     sub.add_parser("models", help="which models/engine the runtime uses").set_defaults(fn=cmd_models)
     sub.add_parser("health", help="is the runtime up").set_defaults(fn=cmd_health)
+
+    sub.add_parser("mcp", help="serve OpenTeddy's tools over MCP stdio (for Claude Code)").set_defaults(fn=cmd_mcp)
 
     rv = sub.add_parser("review", help="self check-up: what went wrong lately (自我體檢)")
     rv.add_argument("--days", type=int, default=7)

@@ -448,6 +448,26 @@ SETTINGS_META: dict[str, dict[str, Any]] = {
         "description": "Optional. media_player entity of the Xiao AI speaker; found automatically when empty.",
         "type":        "text",
     },
+    "claude_code_default_dir": {
+        "label":       "Claude Code default folder",
+        "description": "Project folder used when \"用 Claude Code …\" names none.",
+        "type":        "text",
+    },
+    "claude_code_allowed_tools": {
+        "label":       "Claude Code allowed tools",
+        "description": "Space-separated, e.g. Read Edit Bash(pytest:*). Empty = the built-in allowlist.",
+        "type":        "text",
+    },
+    "claude_code_timeout": {
+        "label":       "Claude Code time limit (s)",
+        "description": "A delegated job is stopped after this long.",
+        "type":        "int",
+    },
+    "claude_code_bin": {
+        "label":       "Claude Code binary",
+        "description": "Optional path to `claude`; found automatically when empty.",
+        "type":        "text",
+    },
     "telegram_default_chat_id": {
         "label":       "Telegram Default Chat ID",
         "description": "Optional. When set, telegram_send can omit chat_id "
@@ -567,6 +587,10 @@ def _defaults_from_config() -> dict[str, str]:
         "ha_language":               str(getattr(config, "ha_language", "zh-tw")),
         "ha_confirm_domains":        str(getattr(config, "ha_confirm_domains", "")),
         "xiaoai_entity":             str(getattr(config, "xiaoai_entity", "")),
+        "claude_code_default_dir":   str(getattr(config, "claude_code_default_dir", "")),
+        "claude_code_allowed_tools": str(getattr(config, "claude_code_allowed_tools", "")),
+        "claude_code_timeout":       str(getattr(config, "claude_code_timeout", 1800)),
+        "claude_code_bin":           str(getattr(config, "claude_code_bin", "")),
         "print_max_copies":          str(getattr(config, "print_max_copies", 20)),
         "telegram_inbound_enabled":  "true" if getattr(config, "telegram_inbound_enabled", False) else "false",
         "telegram_inbound_chat_id_whitelist": str(getattr(config, "telegram_inbound_chat_id_whitelist", "")),
@@ -940,9 +964,13 @@ class SettingsStore:
 
         if "printer_name" in settings:
             config.printer_name = (settings["printer_name"] or "").strip()
-        for k in ("ha_url", "ha_token", "ha_language", "ha_confirm_domains", "xiaoai_entity"):
+        for k in ("ha_url", "ha_token", "ha_language", "ha_confirm_domains", "xiaoai_entity",
+                  "claude_code_bin", "claude_code_default_dir", "claude_code_allowed_tools"):
             if k in settings:
                 setattr(config, k, (settings[k] or "").strip())
+        vcc = _int("claude_code_timeout")
+        if vcc is not None:
+            config.claude_code_timeout = max(60, min(14400, vcc))
         vpc = _int("print_max_copies")
         if vpc is not None:
             config.print_max_copies = max(1, min(200, vpc))

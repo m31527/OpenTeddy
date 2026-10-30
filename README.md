@@ -133,6 +133,7 @@ Claude Pro auto-renewing.
 - **Agents with a real permission boundary** — a reusable role = persona + bound database + API credentials + allowed domains + API docs + **tool scope** (`allowed_tools`). Credentials never enter a prompt (the model writes `{{CRED:name}}`, the server substitutes only for allow-listed hosts); a scoped agent's executor sees only its tools and the registry refuses the rest, so a prompt injection has no shell/python to route around the allowlist. Unattended runs are permitted only inside a scope. See [Agents](#agents--reusable-roles-with-bound-databases) and [Security model](#security-model).
 - **Ask once, see everything** — schedules bound to sessions run on cron (or just say "每天早上 8 點…" in any door); `read_schedule_digest` gives the latest result of every scheduled job across all sessions, problems first, so "how are things today?" is one question. See [Schedules & the morning digest](#schedules--the-morning-digest).
 - **Print from any door** — upload a file and say *"列印"* / *"print 2 copies, double-sided"* in chat or Telegram and it is on the printer about a second later, through CUPS, with the job number and printer warnings such as low toner. Word / Excel / PowerPoint are converted with LibreOffice first; printing as one step of a bigger job ("整理成題庫再印出來") is a tool call. See [Printing](#printing).
+- **Works with Claude Code, both ways** — `openteddy mcp` lets Claude Code use OpenTeddy (control the house, print, message you on Telegram, run its agents), and *"用 Claude Code 在 ~/projects/shop 修好失敗的測試"* from your phone hands coding to Claude Code in the background, with the result and changed files sent back. See [Claude Code ↔ OpenTeddy](#claude-code--openteddy).
 - **Control your home through Home Assistant** — *"關客廳燈"*, *"冷氣開 26 度"*, *"家裡有哪些設備離線"* are answered in about a second by Home Assistant, which speaks to 米家 / Xiaomi, Google TV and 2,000+ other integrations; the 小愛音箱 can speak announcements and reminders, play music, or run spoken commands for infrared devices. Locks, alarms and garage doors wait for you to reply *"確認 <code>"*. See [Smart home](#smart-home-home-assistant).
 - **Deadlines that follow the work** — time spent waiting for a human approval, and time a tool declared up front (`http_post timeout=2700` for a 31-minute video render), extend the subtask deadline instead of being billed against it. A stuck agent is still caught in minutes; a slow-but-progressing one isn't killed.
 - **Voice fast path** *(experimental)* — `POST /voice/ask` routes a spoken question to the cheapest lane that can answer it: templates (0 ms), a small model over the digest (~0.5 s), or a background task with a spoken acknowledgement. The big model is never in the conversational path.
@@ -1111,6 +1112,66 @@ leave single unsupported features unavailable on devices that are fine.
   don't want controlled by voice.
 - The token is stored as a secret and redacted from diagnostics exports.
 
+## Claude Code ↔ OpenTeddy
+
+Claude Code is the better engineer; OpenTeddy is the one that is always on
+and connected to the physical world. They work together in both
+directions.
+
+### Use OpenTeddy from Claude Code (MCP)
+
+`openteddy mcp` serves OpenTeddy as an MCP server on stdio. It is a thin
+client of a running runtime, so it works from any machine that can reach
+it — your laptop talking to the home server, for example:
+
+```bash
+claude mcp add openteddy -- /path/to/OpenTeddy/openteddy --url http://<runtime>:8000 mcp
+```
+
+| Tool | What Claude Code can do with it |
+|---|---|
+| `ask_openteddy` | any request — questions for its agents, reports, "每天早上 8 點…" to create a schedule |
+| `home_control` | *"關客廳燈"*, *"冷氣開 26 度"*, *"叫小愛說：部署完成了"*, *"家裡有哪些設備離線"* |
+| `print_file` | print a local file (uploaded first) with copies, two-sided, black and white, page range |
+| `notify_me` | a Telegram message to you — "the deploy finished, tests pass" |
+| `weather` | weather and typhoons |
+| `self_review` | OpenTeddy's self check-up |
+| `list_schedules` | recurring jobs and their next run |
+
+Requests run in one OpenTeddy session called "Claude Code", so context
+carries over between calls. Telegram needs the bot token and Default Chat
+ID in Settings. `mcp` (1.x) is in `requirements.txt`.
+
+### Hand coding to Claude Code from OpenTeddy
+
+Say it in Telegram, the dashboard or a schedule:
+
+```
+用 Claude Code 在 ~/projects/shop 修好失敗的測試
+Claude Code 幫我 review 最近的改動          ← uses the default folder
+Claude Code 做到哪了                        ← job status
+```
+
+OpenTeddy starts `claude -p` in that folder on its own machine, in the
+background, and answers at once. When the job ends you get a Telegram
+message with Claude Code's own summary, the files it changed and how long
+it took; the same result is saved in the conversation, so *"剛剛改了什麼"*
+works afterwards. The planner can also hand work over with the
+`claude_code` tool (high risk) and check `claude_code_jobs`;
+`GET /claude-code/jobs` lists them.
+
+Boundaries:
+
+- **File edits are accepted, shell commands come from an allowlist**:
+  git status / diff / log / show, ls / cat and the usual test runners
+  (`pytest`, `npm test`, `go test`, `cargo test`, `make test`).
+- **Never** `git push`, `git reset --hard`, `rm -rf` or `sudo`, and **no
+  commits** — the changes are left uncommitted for you to review.
+- Only an existing folder on that machine, never OpenTeddy's own source;
+  a job is stopped after 30 minutes (Settings).
+- Claude Code must be installed and logged in on the OpenTeddy machine.
+  It runs on your Claude plan or API key, not on the local model.
+
 ## Worked example: an e-commerce growth loop (Shopify + Meta Ads)
 
 Three agents, one ledger, three schedules — set up in one command, spending nothing:
@@ -1196,6 +1257,7 @@ What the runtime enforces, and what stays the operator's job.
 | Human approval | high-risk tools wait for a human (web UI, `openteddy` terminal prompt, `POST /tasks/{id}/approve`, Telegram policy). Waiting time is not billed to the task's deadline |
 | Unattended only inside a scope | `require_approval=false` and scheduled auto-approval are refused for unscoped agents; the destructive denylist applies even then |
 | Privacy | `local_only` sessions never call a cloud model; a task can tighten it (`privacy: local_only`), never loosen |
+| Delegated coding stays reviewable | Claude Code runs with an allowlist of shell commands; push, hard reset, `rm -rf` and `sudo` are refused and nothing is committed |
 | Physical actions need a person | locks, alarms, valves and garage doors are held until *you* reply `確認 <code>` (the model, Telegram auto-approval and schedules can't confirm); printing takes only workspace files, with copies and sheets capped |
 
 | Operator's job | Why |
@@ -1529,6 +1591,16 @@ Also editable in **Settings → 🖨️ Printer** and **Settings → 🏠 Home A
 | `HA_LANGUAGE` | `zh-tw` | Language for short device commands sent to Assist. |
 | `HA_CONFIRM_DOMAINS` | `lock,alarm_control_panel,valve,siren,water_heater` | Domains held for `確認 <code>`; garage / gate / door covers are always held. |
 | `XIAOAI_ENTITY` | — | `media_player` entity of the 小愛音箱; found automatically when empty. |
+
+### Claude Code
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CLAUDE_CODE_DEFAULT_DIR` | — | Project folder used when *"用 Claude Code …"* names none. |
+| `CLAUDE_CODE_ALLOWED_TOOLS` | built-in allowlist | Space-separated, e.g. `Read Edit Bash(pytest:*)`. |
+| `CLAUDE_CODE_TIMEOUT` | `1800` | Seconds before a delegated job is stopped. |
+| `CLAUDE_CODE_BIN` | — | Path to `claude`; found on `PATH` or in `~/.local/bin` when empty. |
+| `OPENTEDDY_URL` | `http://127.0.0.1:8000` | Runtime the MCP server (`openteddy mcp`) talks to; `--url` does the same. |
 
 ## Desktop Client (macOS)
 

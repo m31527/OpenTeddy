@@ -112,6 +112,7 @@ cd ~/OpenTeddy && ./run.sh --open                       # 儀表板在 http://lo
 - **Web 儀表板** — 提交任務、即時看工具呼叫、審核敏感指令、管理記憶、即時顯示「已省 $X vs GPT-4」，還有 GFM 表格 + Chart.js 數值標籤 HTML 報表。
 - **Capabilities tab** — 內建 Tools 跟自動長出來的 Skills 合併在同一個可篩選列表，type badge 標明來源；技能用越多自動從 TESTING 升 ACTIVE。
 - **上傳就能列印** — 在對話或 Telegram 上傳檔案，說「列印」或「印 2 份 雙面」，大約一秒就送到印表機（透過 CUPS），回覆附工作編號和碳粉不足之類的提醒。Word / Excel / PowerPoint 會先用 LibreOffice 轉成 PDF；「整理成題庫再印出來」這種要先做事的，由 agent 做完再呼叫列印工具。詳見 [列印](#列印)。
+- **和 Claude Code 雙向合作** — `openteddy mcp` 讓 Claude Code 可以使用 OpenTeddy（控制家裡設備、列印、傳 Telegram 給你、叫用 agent）；在手機上說「用 Claude Code 在 ~/projects/shop 修好失敗的測試」，就會在背景交給 Claude Code，完成後把結果和改動的檔案傳回來。詳見 [Claude Code ↔ OpenTeddy](#claude-code--openteddy)。
 - **透過 Home Assistant 控制家裡的設備** — 「關客廳燈」、「冷氣開 26 度」、「家裡有哪些設備離線」大約一秒由 Home Assistant 完成；它能接米家、Google TV 和兩千多種品牌。小愛音箱可以播報、定時提醒、放音樂，也能代你下語音指令控制紅外線家電。門鎖、保全、車庫門會等你回覆「確認 代碼」才動作。詳見 [智慧家庭](#智慧家庭home-assistant)。
 - **從 Telegram 驅動 OpenTeddy** — 在 Settings → Notification Credentials 填一支 bot token + 白名單 chat_id 後，手機上就能用 Telegram 下任務：發任何文字當 goal，也可以傳文件或照片（存進 session 的 `uploads/`，給下一句話用）；處理時會出現一個小小的「Thinking」動畫，回答會排版成正常的文字而不是一堆 `###`、`**` 符號，另外附上 `📎 Files produced`（文字檔直接 inline 顯示，二進位走 sendDocument 變附件）。每則訊息都看得到最近幾輪對話。自動 approve 高風險工具讓日常任務不卡 — 但 hard denylist（`rm`、`rmdir`、`DROP TABLE`、`TRUNCATE TABLE`、`DELETE FROM`、`mkfs`、`dd if=…/of=/dev/…` 等）絕對擋住破壞性指令。命令：`/start`、`/help`、`/cancel`、`/new`。詳見 [遠端存取](#遠端存取手機--telegram--tailscale)。
 - **手機友善的 Web UI 透過 Tailscale** — `./run.sh --host 0.0.0.0` + 自家 tailnet 就讓 dashboard 在手機瀏覽器上能用。Sessions / chat / artifact 預覽都 responsive；手機寬度時 session header 會自動把記憶 / 隱私 / 匯出收進右上 ⋯ kebab。不用 port forward、不用 nginx、不用公網 DNS — 手機裝 Tailscale app 直接連 `http://<你的機器名>:8000`。
@@ -466,6 +467,49 @@ Telegram / 對話 / 排程 ──▶ OpenTeddy ──▶ Home Assistant ──�
 - **敏感字詞不走快速指令**（鎖、保全、瓦斯、車庫、lock、alarm、garage…），多步驟的要求也不走。
 - **Home Assistant 自己的公開設定仍然有效：** Assist 只會操作「設定 → 語音助理 → 公開」裡的設備，門鎖預設不公開。不想被語音控制的設備，請在那裡確認。
 - 權杖以密碼欄位儲存，匯出診斷資料時會遮蔽。
+
+## Claude Code ↔ OpenTeddy
+
+Claude Code 是比較強的工程師，OpenTeddy 是一直在線、連著實體世界的管家。兩者可以雙向合作。
+
+### 在 Claude Code 裡使用 OpenTeddy（MCP）
+
+`openteddy mcp` 會把 OpenTeddy 變成一個 MCP 伺服器。它只是連到執行中 OpenTeddy 的輕量程式，所以任何連得到的電腦都能用，例如筆電連家裡的伺服器：
+
+```bash
+claude mcp add openteddy -- /path/to/OpenTeddy/openteddy --url http://<執行 OpenTeddy 的機器>:8000 mcp
+```
+
+| 工具 | Claude Code 可以拿來做什麼 |
+|---|---|
+| `ask_openteddy` | 任何要求：問 agent、做報表、說「每天早上 8 點…」建立排程 |
+| `home_control` | 「關客廳燈」、「冷氣開 26 度」、「叫小愛說：部署完成了」、「家裡有哪些設備離線」 |
+| `print_file` | 列印本機檔案（先上傳），可指定份數、雙面、黑白、頁數 |
+| `notify_me` | 傳 Telegram 訊息給你，例如「部署完成，測試全過」 |
+| `weather` | 天氣與颱風 |
+| `self_review` | OpenTeddy 的自我體檢 |
+| `list_schedules` | 排程和下次執行時間 |
+
+這些要求都在同一個叫「Claude Code」的 OpenTeddy 對話裡執行，前後文會延續。Telegram 通知需要在 Settings 設好 bot token 和 Default Chat ID。
+
+### 從 OpenTeddy 把寫程式交給 Claude Code
+
+在 Telegram、網頁或排程裡說：
+
+```
+用 Claude Code 在 ~/projects/shop 修好失敗的測試
+Claude Code 幫我 review 最近的改動          ← 用預設資料夾
+Claude Code 做到哪了                        ← 查進度
+```
+
+OpenTeddy 會在自己那台機器的那個資料夾，於背景執行 `claude -p`，並立刻回覆。完成後你會收到 Telegram 訊息，內容有 Claude Code 自己寫的總結、改了哪些檔案、花了多久；結果也會存進對話，之後問「剛剛改了什麼」也答得出來。規劃模型也可以用 `claude_code` 工具（高風險）把工作交出去，用 `claude_code_jobs` 查狀態；`GET /claude-code/jobs` 會列出所有工作。
+
+界線：
+
+- **可以直接改檔案，指令只限白名單**：git status / diff / log / show、ls / cat，以及常見的測試指令（`pytest`、`npm test`、`go test`、`cargo test`、`make test`）。
+- **絕不** `git push`、`git reset --hard`、`rm -rf`、`sudo`，也**不會 commit**，改動會留著讓你檢查。
+- 只能在那台機器上已存在的資料夾工作，不能動 OpenTeddy 自己的程式碼；超過 30 分鐘會自動停止（可在 Settings 調整）。
+- 執行 OpenTeddy 的那台機器要安裝並登入 Claude Code。它用的是你的 Claude 方案或 API 金鑰，不是地端模型。
 
 ## Fleet — 分散式「AI 大腦群」（可選）
 

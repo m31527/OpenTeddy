@@ -107,7 +107,16 @@ openteddy skill run 技能名稱 --input '{"path": "~/data/q3.csv"}'   # 直接�
 openteddy health          # runtime 是否在線、版本
 openteddy models          # 規劃 / 執行 / 語音模型、雲端供應商
 openteddy decisions       # 決策引擎（Laya 影子模式）每種判斷的一致率
+openteddy review --days 3 # 自我體檢：答錯的問題、可疑技能、排程有沒有漏跑
 ```
+
+## 給 Claude Code 用（MCP）
+
+```bash
+claude mcp add openteddy -- /path/to/OpenTeddy/openteddy --url http://<執行 OpenTeddy 的機器>:8000 mcp
+```
+
+之後在 Claude Code 裡就能叫 OpenTeddy 控制家裡設備、列印、傳 Telegram 給你。反過來，在 Telegram 說「用 Claude Code 在 ~/projects/shop 修好失敗的測試」，OpenTeddy 會在背景交給 Claude Code，完成後通知你。
 
 ## 背景服務與更新
 
