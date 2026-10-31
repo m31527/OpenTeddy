@@ -465,6 +465,11 @@ class Config:
     claude_code_default_dir: str = field(default_factory=lambda: os.getenv("CLAUDE_CODE_DEFAULT_DIR", ""))
     claude_code_allowed_tools: str = field(default_factory=lambda: os.getenv("CLAUDE_CODE_ALLOWED_TOOLS", ""))
     claude_code_timeout: int = field(default_factory=lambda: int(os.getenv("CLAUDE_CODE_TIMEOUT", "1800") or 1800))
+    # Google, read-only (google_personal.py): the calendar's secret iCal
+    # address, and Gmail over IMAP with an app password.
+    google_ical_url: str = field(default_factory=lambda: os.getenv("GOOGLE_ICAL_URL", ""))
+    gmail_address: str = field(default_factory=lambda: os.getenv("GMAIL_ADDRESS", ""))
+    gmail_app_password: str = field(default_factory=lambda: os.getenv("GMAIL_APP_PASSWORD", ""))
     # Inbound (Telegram → OpenTeddy) — long-polling bridge.
     # When `telegram_inbound_enabled` is True AND `telegram_bot_token`
     # is set AND `telegram_inbound_chat_id_whitelist` is non-empty,
@@ -978,7 +983,8 @@ class Config:
         if "printer_name" in settings:
             self.printer_name = (settings["printer_name"] or "").strip()
         for k in ("ha_url", "ha_token", "ha_language", "ha_confirm_domains", "xiaoai_entity",
-                  "claude_code_bin", "claude_code_default_dir", "claude_code_allowed_tools"):
+                  "claude_code_bin", "claude_code_default_dir", "claude_code_allowed_tools",
+                  "google_ical_url", "gmail_address", "gmail_app_password"):
             if k in settings:
                 setattr(self, k, (settings[k] or "").strip())
         if (settings.get("claude_code_timeout") or "").strip().isdigit():

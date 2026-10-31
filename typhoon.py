@@ -112,6 +112,16 @@ async def active_storms() -> List[Dict[str, Any]]:
     return storms
 
 
+def closest_km(s: Dict[str, Any]) -> int:
+    return min([s["distance"]] + [km for _, _, km in s["forecast"]])
+
+
+def is_near(s: Dict[str, Any]) -> bool:
+    """Heading this way and forecast within NEAR_KM, or already close."""
+    closest = closest_km(s)
+    return (closest < s["distance"] and closest <= NEAR_KM) or s["distance"] <= NOW_NEAR_KM
+
+
 def describe(storms: List[Dict[str, Any]], zh: bool = True) -> str:
     if not storms:
         return ("🌀 日本氣象廳目前沒有追蹤中的颱風或熱帶性低氣壓，台灣附近沒有颱風。\n資料來源：日本氣象廳（JMA）。台灣的颱風警報以中央氣象署為準。"
@@ -126,12 +136,11 @@ def describe(storms: List[Dict[str, Any]], zh: bool = True) -> str:
              else f"🌀 {len(storms)} tropical cyclone(s) in the Northwest Pacific (JMA, {issued}):"]
     near = []
     for s in storms:
-        closest = min([s["distance"]] + [km for _, _, km in s["forecast"]])
+        closest = closest_km(s)
         approaching = closest < s["distance"]
         num = s["number"][-2:].lstrip("0") if s["number"] else "?"
         course = _COURSE_ZH.get(s["course"], s["course"])
         speed = f"，時速 {s['speed']} 公里" if s["speed"] else ""
-        is_near = (approaching and closest <= NEAR_KM) or s["distance"] <= NOW_NEAR_KM
         if zh:
             if not approaching:
                 trend = "正在遠離台灣"
@@ -151,7 +160,7 @@ def describe(storms: List[Dict[str, Any]], zh: bool = True) -> str:
             line = (f"• No. {num} {s['name']} ({_strength(s['wind'], False)}): about {s['distance']:,} km from Taiwan, "
                     f"heading {en_course}, {trend}")
         lines.append(line)
-        if is_near:
+        if is_near(s):
             near.append(s)
     if near:
         lines.append("\n⚠️ " + ("、".join(f"{s['name']}" for s in near) + " 的路徑接近台灣，請留意中央氣象署的颱風警報。"

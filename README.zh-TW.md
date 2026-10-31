@@ -113,6 +113,7 @@ cd ~/OpenTeddy && ./run.sh --open                       # 儀表板在 http://lo
 - **Capabilities tab** — 內建 Tools 跟自動長出來的 Skills 合併在同一個可篩選列表，type badge 標明來源；技能用越多自動從 TESTING 升 ACTIVE。
 - **上傳就能列印** — 在對話或 Telegram 上傳檔案，說「列印」或「印 2 份 雙面」，大約一秒就送到印表機（透過 CUPS），回覆附工作編號和碳粉不足之類的提醒。Word / Excel / PowerPoint 會先用 LibreOffice 轉成 PDF；「整理成題庫再印出來」這種要先做事的，由 agent 做完再呼叫列印工具。詳見 [列印](#列印)。
 - **和 Claude Code 雙向合作** — `openteddy mcp` 讓 Claude Code 可以使用 OpenTeddy（控制家裡設備、列印、傳 Telegram 給你、叫用 agent）；在手機上說「用 Claude Code 在 ~/projects/shop 修好失敗的測試」，就會在背景交給 Claude Code，完成後把結果和改動的檔案傳回來。詳見 [Claude Code ↔ OpenTeddy](#claude-code--openteddy)。
+- **知道你今天要做什麼的個人助理** — 「今天有什麼行程」、「有什麼新信」、「明天早上 9 點提醒我繳費」和每天早上的「早安簡報」（天氣、往台灣來的颱風、行程、提醒、未讀信、離線設備）都不用經過模型，資料來自你的 Google 行事曆（iCal 私人網址）和 Gmail（IMAP 應用程式密碼），兩者都是唯讀。提醒也可以由小愛音箱唸出來。詳見 [個人助理](#個人助理行事曆gmail提醒早安簡報)。
 - **透過 Home Assistant 控制家裡的設備** — 「關客廳燈」、「冷氣開 26 度」、「家裡有哪些設備離線」大約一秒由 Home Assistant 完成；它能接米家、Google TV 和兩千多種品牌。小愛音箱可以播報、定時提醒、放音樂，也能代你下語音指令控制紅外線家電。門鎖、保全、車庫門會等你回覆「確認 代碼」才動作。詳見 [智慧家庭](#智慧家庭home-assistant)。
 - **從 Telegram 驅動 OpenTeddy** — 在 Settings → Notification Credentials 填一支 bot token + 白名單 chat_id 後，手機上就能用 Telegram 下任務：發任何文字當 goal，也可以傳文件或照片（存進 session 的 `uploads/`，給下一句話用）；處理時會出現一個小小的「Thinking」動畫，回答會排版成正常的文字而不是一堆 `###`、`**` 符號，另外附上 `📎 Files produced`（文字檔直接 inline 顯示，二進位走 sendDocument 變附件）。每則訊息都看得到最近幾輪對話。自動 approve 高風險工具讓日常任務不卡 — 但 hard denylist（`rm`、`rmdir`、`DROP TABLE`、`TRUNCATE TABLE`、`DELETE FROM`、`mkfs`、`dd if=…/of=/dev/…` 等）絕對擋住破壞性指令。命令：`/start`、`/help`、`/cancel`、`/new`。詳見 [遠端存取](#遠端存取手機--telegram--tailscale)。
 - **手機友善的 Web UI 透過 Tailscale** — `./run.sh --host 0.0.0.0` + 自家 tailnet 就讓 dashboard 在手機瀏覽器上能用。Sessions / chat / artifact 預覽都 responsive；手機寬度時 session header 會自動把記憶 / 隱私 / 匯出收進右上 ⋯ kebab。不用 port forward、不用 nginx、不用公網 DNS — 手機裝 Tailscale app 直接連 `http://<你的機器名>:8000`。
@@ -467,6 +468,33 @@ Telegram / 對話 / 排程 ──▶ OpenTeddy ──▶ Home Assistant ──�
 - **敏感字詞不走快速指令**（鎖、保全、瓦斯、車庫、lock、alarm、garage…），多步驟的要求也不走。
 - **Home Assistant 自己的公開設定仍然有效：** Assist 只會操作「設定 → 語音助理 → 公開」裡的設備，門鎖預設不公開。不想被語音控制的設備，請在那裡確認。
 - 權杖以密碼欄位儲存，匯出診斷資料時會遮蔽。
+
+## 個人助理：行事曆、Gmail、提醒、早安簡報
+
+OpenTeddy 讀得到你的 Google 行事曆和 Gmail，幫你記一次性的提醒，每天早上把今天要知道的事整理成一則訊息。行事曆和 Gmail 都是**唯讀**：不會新增、寄出、標成已讀或刪除任何東西，兩組密鑰也不會進到模型的提示詞裡。
+
+### 設定步驟（不用建 Google Cloud 專案）
+
+1. **行事曆**：Google 日曆 → ⚙️ 設定 → 左邊點你的日曆 → 「整合日曆」→ 複製「**iCal 格式的私人網址**」。重複的行程會自動展開；一個私人網址對應一本日曆。
+2. **Gmail**：先開啟兩步驟驗證，再到 Google 帳戶 → 安全性 → 「應用程式密碼」，建立一組叫 OpenTeddy 的密碼。Gmail 透過 IMAP 以唯讀方式開啟信箱。
+3. 把兩者和你的 Gmail 地址貼到 **Settings → 📅 Google 行事曆與 Gmail**，儲存後按「測試連線」。會顯示未來 7 天有幾個行程、主要分類 24 小時內有幾封未讀（`GET /personal/status` 也一樣）。
+
+想停止存取時，在 Google 日曆重設私人網址，或撤銷應用程式密碼即可。
+
+### 可以怎麼說
+
+| 你說 | 路徑 | 會怎樣 |
+|---|---|---|
+| 「今天有什麼行程」、「明天的會議」、「這週行程」、「下週有哪些會議」 | 直接 | 列出行程、時間和地點 |
+| 「有什麼新信」、「有重要的信嗎」 | 直接 | 主要分類 24 小時內的未讀信：寄件人、主旨、時間 |
+| 「明天早上 9 點提醒我繳電話費」、「30 分鐘後提醒我關火」、「下週一提醒我交報告」 | 直接 | 建立一次性提醒，時間到傳到你發問的那個聊天 |
+| 「下午 3 點叫小愛提醒我出門」 | 直接 | 下午 3 點小愛音箱說出來，Telegram 也會收到 |
+| 「我有哪些提醒」、「取消提醒 3f2a1b」、「取消剛剛的提醒」 | 直接 | 列出或取消 |
+| 「早安簡報」 | 直接 | 天氣（要不要帶傘）、往台灣來的颱風（沒有就不提）、今天的行程、今天的提醒、未讀信、家裡離線的設備 |
+| 「每天早上 7:30 給我早安簡報」 | 排程 | 每天早上把簡報傳到 Telegram |
+| 「看我明天的行程，空檔排一個健身」、「整理今天未讀信的重點」、「會議前 15 分鐘提醒我」 | agent | 用 `calendar_events`、`gmail_unread`（Gmail 搜尋語法）、`reminder_create` 當成大任務的其中幾步 |
+
+提醒存在資料庫裡，重開機不會不見；OpenTeddy 停機時到期的提醒，開機後照樣送出，並註明晚了多久（超過 30 分鐘就不叫小愛唸了）。「每天」、「每週一」這種重複的說法會變成排程；「如果明天下雨…」這種有條件的交給 agent；已經過去的時間會先問你，不會直接設定。簡報的每個部分都是選配，而且同時抓取；其中一項失敗只會顯示一行說明，其他照常送出。
 
 ## Claude Code ↔ OpenTeddy
 

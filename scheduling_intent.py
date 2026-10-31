@@ -351,6 +351,13 @@ async def detect_scheduling_intent(
     """
     if not regex_might_be_schedule(text):
         return None
+    # "明天 9 點提醒我…" happens once: reminders.py, not a cron job.
+    try:
+        from reminders import parse_reminder
+        if parse_reminder(text) is not None:
+            return None
+    except Exception:  # noqa: BLE001
+        pass
     # Decision engine: is this really a schedule request? The regex is a
     # cheap net with false positives, and each one costs an LLM call. In
     # shadow mode Laya's verdict is logged next to the LLM's; once

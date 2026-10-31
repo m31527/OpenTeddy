@@ -184,20 +184,31 @@ def _describe_day(daily: Dict[str, List[Any]], i: int, zh: bool) -> Tuple[str, i
     return s, pop
 
 
-async def forecast(q: WeatherQuery) -> str:
-    lat, lon, name = await resolve(q.place, q.zh)
-    total = max(q.start + q.days, 2)
+async def _fetch(lat: float, lon: float, total: int) -> Dict[str, Any]:
     key = f"{lat:.2f},{lon:.2f},{total}"
     hit = _cache.get(key)
     if hit and time.monotonic() - hit[0] < 600:
-        data = hit[1]
-    else:
-        data = await _get(_FORECAST, {
-            "latitude": lat, "longitude": lon, "timezone": "auto", "forecast_days": min(total, 16),
-            "current": "temperature_2m,apparent_temperature,relative_humidity_2m,weather_code,wind_speed_10m",
-            "daily": "weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max",
-        })
-        _cache[key] = (time.monotonic(), data)
+        return hit[1]
+    data = await _get(_FORECAST, {
+        "latitude": lat, "longitude": lon, "timezone": "auto", "forecast_days": min(total, 16),
+        "current": "temperature_2m,apparent_temperature,relative_humidity_2m,weather_code,wind_speed_10m",
+        "daily": "weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max",
+    })
+    _cache[key] = (time.monotonic(), data)
+    return data
+
+
+async def brief(place: str = "") -> str:
+    """One line for the morning briefing: "家裡：🌧 小雨，22–27°C，降雨機率 70%，☂️ 記得帶傘"."""
+    lat, lon, name = await resolve(place, True)
+    head, pop = _describe_day((await _fetch(lat, lon, 2))["daily"], 0, True)
+    return f"{name}：{head}" + ("，☂️ 記得帶傘" if pop >= 50 else "")
+
+
+async def forecast(q: WeatherQuery) -> str:
+    lat, lon, name = await resolve(q.place, q.zh)
+    total = max(q.start + q.days, 2)
+    data = await _fetch(lat, lon, total)
     daily = data["daily"]
     days = [datetime.strptime(x, "%Y-%m-%d").date() for x in daily["time"]]
     zh = q.zh

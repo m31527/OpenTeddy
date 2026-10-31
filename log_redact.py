@@ -20,6 +20,8 @@ _PATTERNS = [
     (re.compile(r"((?:api\.telegram\.org/)(?:file/)?bot)\d+:[A-Za-z0-9_-]+"), r"\1<redacted>"),
     # ?key=… (Gemini), ?api_key=…, ?access_token=…, ?token=…
     (re.compile(r"([?&](?:key|api_key|apikey|access_token|token|secret)=)[^&\s'\"]+", re.I), r"\1<redacted>"),
+    # Google Calendar secret iCal address (…/ical/<id>/private-<hex>/basic.ics)
+    (re.compile(r"(/ical/[^/\s]+/private-)[0-9a-f]+"), r"\1<redacted>"),
     # Authorization headers that end up in a message
     (re.compile(r"(Bearer\s+)[A-Za-z0-9._~+/=-]{8,}"), r"\1<redacted>"),
 ]

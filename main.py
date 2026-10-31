@@ -539,6 +539,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:  # type: ignore[type-arg]
     except Exception as exc:  # noqa: BLE001
         logger.warning("Scheduler startup failed (non-fatal): %s", exc)
 
+    # One-shot reminders ("明天 9 點提醒我…"): reload pending ones, start
+    # the loop that fires them. Ones that came due while down fire now.
+    try:
+        from reminders import start as _start_reminders
+        await _start_reminders(tracker)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Reminders startup failed (non-fatal): %s", exc)
+
     # Pre-warm Ollama models in the background. First LLM call after a
     # cold start (or after Ollama's KEEP_ALIVE timeout expired) has to
     # load the model into VRAM — typically 5-15 s for a Gemma 3:4B
@@ -619,6 +627,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:  # type: ignore[type-arg]
         await _stop_scheduler()
     except Exception as exc:  # noqa: BLE001
         logger.warning("Scheduler shutdown saw: %s", exc)
+    try:
+        from reminders import stop as _stop_reminders
+        await _stop_reminders()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Reminders shutdown saw: %s", exc)
 
     await executor.close()
     await orchestrator.close()
@@ -1199,7 +1212,7 @@ async def admin_diagnostics() -> Response:
 
     SECRET_KEYS = {
         "anthropic_api_key", "telegram_bot_token", "smtp_password", "webhook_secret",
-        "ha_token",
+        "ha_token", "google_ical_url", "gmail_app_password",
     }
 
     def _redact(value: str) -> str:
@@ -3564,6 +3577,31 @@ async def self_review_endpoint(days: int = 7) -> dict:
     import self_review
     rep = await self_review.build_report(tracker, days=days)
     return {"success": True, "days": rep["days"], "text": rep["text"], "findings": rep["findings"]}
+
+
+@app.get("/personal/status")
+async def personal_status_endpoint() -> dict:
+    """Settings → Google → Test: can the calendar and Gmail be read, and
+    how many events / unread mails there are. Never returns the secrets."""
+    import google_personal as G
+    return {"success": True, **(await G.status()), "error": None}
+
+
+@app.get("/reminders")
+async def reminders_endpoint() -> dict:
+    """Pending one-shot reminders."""
+    import reminders as R
+    rows = await R.pending()
+    return {"success": True, "reminders": [
+        {"id": r["id"], "fire_at": r["fire_at_local"].isoformat(), "text": r["text"], "via": r["via"],
+         "session_id": r["session_id"]} for r in rows]}
+
+
+@app.get("/briefing")
+async def briefing_endpoint() -> dict:
+    """The morning briefing, as it would be sent now."""
+    import briefing
+    return {"success": True, "text": await briefing.morning_briefing()}
 
 
 @app.get("/home/status")

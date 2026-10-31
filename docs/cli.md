@@ -110,6 +110,17 @@ openteddy decisions       # 決策引擎（Laya 影子模式）每種判斷的�
 openteddy review --days 3 # 自我體檢：答錯的問題、可疑技能、排程有沒有漏跑
 ```
 
+## 個人助理（直接在 run 或 Telegram 說）
+
+```bash
+openteddy run "今天有什麼行程"                 # Google 行事曆（Settings → Google）
+openteddy run "有什麼新信"                     # Gmail 主要分類的未讀信（唯讀）
+openteddy run "明天早上 9 點提醒我繳電話費"      # 一次性提醒，時間到傳 Telegram
+openteddy run "我有哪些提醒"
+openteddy run "早安簡報"                       # 天氣、颱風、行程、提醒、未讀信、離線設備
+openteddy run "每天早上 7:30 給我早安簡報"       # 變成排程
+```
+
 ## 給 Claude Code 用（MCP）
 
 ```bash

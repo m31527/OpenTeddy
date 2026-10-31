@@ -984,6 +984,20 @@ class Orchestrator:
         if _cc_req:
             return await self._claude_code(req, _cc_req[0], _cc_req[1], session_ws)
 
+        # ── 0″. Reminders: "明天早上 9 點提醒我繳費" → a one-shot reminder ──
+        # Without this the model faked it or made a daily schedule. A
+        # scheduled run's goal ("提醒我出門") is the reminder itself.
+        if (req.context or {}).get("triggered_by") != "schedule":
+            try:
+                import reminders as _rem
+                _rem_new = _rem.parse_reminder(req.goal)
+                _rem_cancel = _rem.parse_cancel(req.goal)
+                _rem_list = _rem.parse_list(req.goal)
+            except Exception:  # noqa: BLE001
+                _rem_new, _rem_cancel, _rem_list = None, None, False
+            if _rem_new is not None or _rem_cancel is not None or _rem_list:
+                return await self._reminder(req, _rem_new, _rem_cancel)
+
         # ── Asked again? ─────────────────────────────────────────────────
         # The same question within 10 minutes means the last answer missed
         # ("最近有颱風靠近台灣嗎" got the local forecast twice). Informational
@@ -1002,6 +1016,20 @@ class Orchestrator:
             _review_days = None
         if _review_days and not _again:
             return await self._self_review(req, _review_days)
+
+        # ── 0a⁗. Personal: 早安簡報, today's calendar, new mail — no model ──
+        try:
+            import briefing as _brief
+            import google_personal as _gp
+            _want_brief = _brief.parse_briefing_request(req.goal)
+            _cal_q = _gp.parse_calendar_question(req.goal)
+            _mail_q = _gp.parse_mail_question(req.goal)
+        except Exception:  # noqa: BLE001
+            _want_brief, _cal_q, _mail_q = False, None, False
+        if _want_brief:          # scheduled 07:30 runs included; asking twice still gets it
+            return await self._finish_direct(req, await _brief.morning_briefing(), True)
+        if (_cal_q or _mail_q) and not _again:
+            return await self._personal(req, _cal_q, _mail_q)
 
         # ── 0a‴. Typhoons: "最近有颱風靠近台灣嗎" → JMA's active storms, no model ──
         try:
@@ -1526,6 +1554,56 @@ class Orchestrator:
                 logger.info("Task %s repeats an answered question — skipping shortcuts", req.id)
                 return True
         return False
+
+    async def _reminder(self, req: TaskRequest, new: Any, cancel_id: Optional[str]) -> TaskResult:
+        """Create / list / cancel a one-shot reminder (reminders.py)."""
+        import reminders as R
+        from datetime import datetime
+        try:
+            if new is not None:
+                if new.fire_at is None:
+                    return await self._finish_direct(
+                        req, f"⏰ 要什麼時候提醒你「{new.text}」？例如「明天早上 9 點提醒我{new.text}」"
+                             "或「30 分鐘後提醒我」。", False)
+                if new.fire_at <= datetime.now().astimezone():
+                    return await self._finish_direct(
+                        req, f"⏰ {R.when_label(new.fire_at)} 已經過了，要改成什麼時候？", False)
+                row = await R.create(new, session_id=req.session_id or "",
+                                     chat_id=str((req.context or {}).get("telegram_chat_id") or ""))
+                return await self._finish_direct(req, R.describe_created(row), True)
+            if cancel_id is not None:
+                done, candidates = await R.cancel(cancel_id, req.session_id)
+                if done:
+                    return await self._finish_direct(
+                        req, f"🗑 已取消：{R.when_label(done['fire_at_local'])} {done['text']}", True)
+                if not candidates:
+                    return await self._finish_direct(req, "⏰ 沒有找到這個提醒。\n" +
+                                                     R.describe_pending(await R.pending()), False)
+                return await self._finish_direct(
+                    req, "⏰ 要取消哪一個？說「取消提醒 <編號>」：\n" + R.describe_pending(candidates), False)
+            return await self._finish_direct(req, R.describe_pending(await R.pending()), True)
+        except RuntimeError as exc:                     # reminders not started
+            return await self._finish_direct(req, f"❌ 提醒功能沒有啟動：{exc}", False)
+
+    async def _personal(self, req: TaskRequest, cal_q: Any, mail_q: bool) -> TaskResult:
+        """今天有什麼行程 / 有什麼新信 — Google calendar and Gmail, read-only."""
+        import google_personal as G
+        try:
+            if cal_q:
+                first, days, label = cal_q
+                if not G.calendar_configured():
+                    return await self._finish_direct(
+                        req, "📅 還沒連接 Google 行事曆：Google 日曆 → 設定 → 你的日曆 → 整合日曆 → "
+                             "複製「iCal 格式的私人網址」，貼到 OpenTeddy Settings → Google。", False)
+                evs = await G.events_for_days(first, days)
+                return await self._finish_direct(req, G.describe_events(evs, label, multi_day=days > 1), True)
+            if not G.gmail_configured():
+                return await self._finish_direct(
+                    req, "✉️ 還沒連接 Gmail：Google 帳戶 → 安全性 → 兩步驟驗證 → 應用程式密碼，"
+                         "建立一組後和 Gmail 地址一起貼到 OpenTeddy Settings → Google。", False)
+            return await self._finish_direct(req, G.describe_mail(await G.unread()), True)
+        except G.PersonalError as exc:
+            return await self._finish_direct(req, f"❌ {exc}", False)
 
     async def _typhoon(self, req: TaskRequest, zh: bool) -> TaskResult:
         import typhoon
