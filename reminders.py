@@ -279,27 +279,31 @@ async def create(rem: Reminder, session_id: str = "", chat_id: str = "") -> Dict
 
 
 async def pending(session_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    """One conversation's pending reminders. session_id=None (admin
+    endpoint, startup count only) means all of them — never use it to
+    answer a person: someone else's reminders are private."""
     db = await _db()
     sql, args = "SELECT * FROM reminders WHERE status='pending'", []
-    if session_id:
+    if session_id is not None:
         sql += " AND session_id=?"
         args.append(session_id)
     async with db.execute(sql + " ORDER BY fire_at", args) as cur:
         return [_row(r) for r in await cur.fetchall()]
 
 
-async def between(start: datetime, end: datetime) -> List[Dict[str, Any]]:
+async def between(start: datetime, end: datetime, session_id: str) -> List[Dict[str, Any]]:
     db = await _db()
     async with db.execute(
-        "SELECT * FROM reminders WHERE status='pending' AND fire_at>=? AND fire_at<? ORDER BY fire_at",
-        (_iso(start), _iso(end)),
+        "SELECT * FROM reminders WHERE status='pending' AND session_id=? AND fire_at>=? AND fire_at<? "
+        "ORDER BY fire_at", (session_id, _iso(start), _iso(end)),
     ) as cur:
         return [_row(r) for r in await cur.fetchall()]
 
 
-async def cancel(prefix: str, session_id: Optional[str] = None) -> Tuple[Optional[Dict[str, Any]], List[Dict[str, Any]]]:
-    """(cancelled row, candidates when it's ambiguous)."""
-    rows = await pending(session_id) or (await pending() if session_id else [])
+async def cancel(prefix: str, session_id: str) -> Tuple[Optional[Dict[str, Any]], List[Dict[str, Any]]]:
+    """(cancelled row, candidates when it's ambiguous). Only this
+    conversation's reminders can be cancelled."""
+    rows = await pending(session_id)
     if prefix:
         rows = [r for r in rows if r["id"].startswith(prefix.lower())]
     elif len(rows) > 1:

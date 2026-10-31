@@ -3599,7 +3599,8 @@ async def reminders_endpoint() -> dict:
 
 @app.get("/briefing")
 async def briefing_endpoint() -> dict:
-    """The morning briefing, as it would be sent now."""
+    """The morning briefing, as it would be sent now (no conversation's
+    reminders: those belong to whoever set them)."""
     import briefing
     return {"success": True, "text": await briefing.morning_briefing()}
 

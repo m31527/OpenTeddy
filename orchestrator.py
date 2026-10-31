@@ -1046,7 +1046,7 @@ class Orchestrator:
         except Exception:  # noqa: BLE001
             _want_brief, _cal_q, _mail_q = False, None, False
         if _want_brief:          # scheduled 07:30 runs included; asking twice still gets it
-            return await self._finish_direct(req, await _brief.morning_briefing(), True)
+            return await self._finish_direct(req, await _brief.morning_briefing(req.session_id or ""), True)
         if (_cal_q or _mail_q) and not _again:
             return await self._personal(req, _cal_q, _mail_q)
 
@@ -1591,16 +1591,16 @@ class Orchestrator:
                                      chat_id=str((req.context or {}).get("telegram_chat_id") or ""))
                 return await self._finish_direct(req, R.describe_created(row), True)
             if cancel_id is not None:
-                done, candidates = await R.cancel(cancel_id, req.session_id)
+                done, candidates = await R.cancel(cancel_id, req.session_id or "")
                 if done:
                     return await self._finish_direct(
                         req, f"🗑 已取消：{R.when_label(done['fire_at_local'])} {done['text']}", True)
                 if not candidates:
                     return await self._finish_direct(req, "⏰ 沒有找到這個提醒。\n" +
-                                                     R.describe_pending(await R.pending()), False)
+                                                     R.describe_pending(await R.pending(req.session_id or "")), False)
                 return await self._finish_direct(
                     req, "⏰ 要取消哪一個？說「取消提醒 <編號>」：\n" + R.describe_pending(candidates), False)
-            return await self._finish_direct(req, R.describe_pending(await R.pending()), True)
+            return await self._finish_direct(req, R.describe_pending(await R.pending(req.session_id or "")), True)
         except RuntimeError as exc:                     # reminders not started
             return await self._finish_direct(req, f"❌ 提醒功能沒有啟動：{exc}", False)
 

@@ -276,7 +276,11 @@ async def test_reminder_store(tracker) -> None:
     assert done["id"] == b["id"] and not cand and len(await R.pending()) == 1
     none, cand = await R.cancel("ffffff", "s1")
     assert none is None and cand == []
-    print("  ✓ create, duplicate ignored, list, cancel by id; unknown id")
+    other = await R.create(R.Reminder(now + timedelta(hours=4), "看診"), session_id="s2")
+    assert [r["text"] for r in await R.pending("s1")] == ["繳電話費"], "s2's reminder isn't s1's business"
+    assert await R.cancel(other["id"][:6], "s1") == (None, []), "s1 can't cancel s2's reminder"
+    assert [r["text"] for r in await R.pending("s2")] == ["看診"]
+    print("  ✓ create, duplicate ignored, list, cancel by id; unknown id; other people's stay private")
 
     # Delivery: Telegram to the chat it came from; 小愛 too; late ones say so.
     db = tracker.db
@@ -329,7 +333,8 @@ async def test_briefing() -> None:
     real_configured = HA.configured
     HA.configured = lambda: True
     await R.create(R.Reminder(datetime.now().astimezone() + timedelta(minutes=1), "打給媽媽"), session_id="s1")
-    text = await briefing.morning_briefing()
+    text = await briefing.morning_briefing("s1")
+    assert "看診" not in text, "another conversation's reminder never shows up in this briefing"
     parts = text.split("\n\n")
     assert parts[0].startswith(f"☀️ 早安！今天是 {TODAY.month}/{TODAY.day}"), parts[0]
     assert "☂️ 記得帶傘" in parts[1]
@@ -346,7 +351,7 @@ async def test_briefing() -> None:
     typhoon.active_storms = calm
     HA.configured = real_configured
     config.ha_token = ""
-    text = await briefing.morning_briefing()
+    text = await briefing.morning_briefing("s1")
     assert "⚠️ 天氣：Open-Meteo down" in text and "看牙醫" in text and "🌀" not in text and "📴" not in text
     assert briefing.parse_briefing_request("早安簡報") and briefing.parse_briefing_request("今日簡報")
     assert briefing.parse_briefing_request("morning briefing") and briefing.parse_briefing_request("產生早安簡報")
@@ -385,6 +390,7 @@ async def test_orchestrator() -> None:
     assert res.status == TaskStatus.FAILED and "要什麼時候提醒你「買牛奶」" in res.summary
     res = await run("我有哪些提醒")
     assert "繳電話費" in res.summary and rid in res.summary
+    assert "看診" not in res.summary and "打給媽媽" not in res.summary, "only this conversation's reminders"
     res = await run(f"取消提醒 {rid}")
     assert res.summary.startswith("🗑 已取消") and not await R.pending("s9")
     try:

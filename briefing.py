@@ -66,11 +66,11 @@ async def _calendar() -> Optional[str]:
         return f"⚠️ 行事曆：{exc}"
 
 
-async def _reminders() -> Optional[str]:
+async def _reminders(session_id: str) -> Optional[str]:
     import reminders as R
     now = datetime.now().astimezone()
     end = datetime.combine(now.date() + timedelta(days=1), datetime.min.time(), now.tzinfo)
-    rows = await R.between(now, end)
+    rows = await R.between(now, end, session_id)
     if not rows:
         return None
     return "⏰ 今天的提醒：\n" + "\n".join(f"• {r['fire_at_local']:%H:%M} {r['text']}" for r in rows)
@@ -98,11 +98,12 @@ async def _home() -> Optional[str]:
     return f"📴 家裡有 {len(off)} 台設備離線：{names}"
 
 
-async def morning_briefing() -> str:
+async def morning_briefing(session_id: str = "") -> str:
+    """The briefing for one conversation: its own reminders only."""
     today = datetime.now().date()
     parts = await asyncio.gather(
         _part("天氣", _weather()), _part("颱風", _typhoon()), _part("行事曆", _calendar()),
-        _part("提醒", _reminders()), _part("Gmail", _mail()), _part("家裡設備", _home()),
+        _part("提醒", _reminders(session_id)), _part("Gmail", _mail()), _part("家裡設備", _home()),
     )
     lines: List[str] = [f"☀️ 早安！今天是 {today.month}/{today.day}（週{_WEEKDAY[today.weekday()]}）"]
     lines += [p for p in parts if p]
