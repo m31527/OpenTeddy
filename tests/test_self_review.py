@@ -71,6 +71,7 @@ async def make_db() -> aiosqlite.Connection:
          590, status="failed")
     task(23, "叫小愛說：早安，該出門了！", "🔊 小愛說了：「早安，該出門了！」", 400, ctx=SCHED, secs=2)
     task(24, "寫一份很長的報告", "完成", 300, secs=351)
+    task(25, "做最近三天的自我體檢", "🩺 OpenTeddy 自我體檢 · …", 200, ctx=SCHED, secs=1)
     await db.executemany("INSERT INTO tasks VALUES (?,?,?,?,?,?,?,?,?,?)", rows)
     # a skill invoked for unrelated goals, always the same output
     await db.executemany("INSERT INTO subtasks (id, parent_task_id) VALUES (?, ?)",
@@ -83,6 +84,7 @@ async def make_db() -> aiosqlite.Connection:
         ("68a3633c-x", "40 7 * * 1-5", "叫小愛說：早安，該出門了！", 1, 0, None, created),
         ("e8fb514b-x", "40 7 * * 1-5", "提醒使用者出門", 1, 0, None, created),
         ("deadbeef-x", "0 9 * * *", "查昨日營收", 0, 3, "HTTP 401 Unauthorized", created),
+        ("3d7b7dd0-x", "0 9 2-31/3 * *", "做最近三天的自我體檢", 1, 0, None, (NOW - timedelta(days=2)).isoformat()),
     ])
     await db.executemany("INSERT INTO usage_records (id, model, duration_ms, tokens_out, created_at) VALUES (?,?,?,?,?)",
                          [("u1", "qwen3.8:27b", 600000, 9000, NOW.isoformat()), ("u2", "gemma4:e4b", 120000, 4000, NOW.isoformat())])
@@ -117,6 +119,7 @@ async def test_checks(db) -> dict:
     assert sch["68a3633c"]["duplicate"] and sch["e8fb514b"]["duplicate"]
     assert sch["e8fb514b"]["missed"] and sch["e8fb514b"]["expected"] >= 5 and sch["e8fb514b"]["ok"] == 0
     assert sch["deadbeef"]["problem"] and not sch["deadbeef"]["enabled"]
+    assert sch["3d7b7dd0"]["ok"] == 1 and not sch["3d7b7dd0"]["missed"], sch["3d7b7dd0"]
     print("  ✓ schedules: two at the same time flagged, missed runs counted, a disabled failing one flagged")
 
     assert f["usage"][0] == {"model": "qwen3.8:27b", "calls": 1, "minutes": 10.0, "tokens_out": 9000}

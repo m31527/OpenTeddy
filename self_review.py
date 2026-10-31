@@ -315,13 +315,15 @@ async def build_report(tracker: Any, days: int = 7) -> Dict[str, Any]:
         tasks.append({**r, "created": created, "origin": _origin(r["context"]),
                       "seconds": (done - created).total_seconds() if done else None,
                       "goal": r["goal"] or "", "summary": r["summary"] or ""})
-    # Ignore this report's own runs.
+    # The report's own runs are left out of the answer checks — but still
+    # counted as schedule runs (the check-up schedule once looked "missed").
+    all_tasks = tasks
     tasks = [t for t in tasks if not t["summary"].startswith("🩺")]
 
     f: Dict[str, Any] = {
         "repeats": find_repeats(tasks), "give_up": find_give_ups(tasks),
         "same_answer": find_same_answers(tasks), "failures": group_failures(tasks),
-        "skills": await check_skills(db, since), "schedules": await check_schedules(db, tasks, since_dt, now),
+        "skills": await check_skills(db, since), "schedules": await check_schedules(db, all_tasks, since_dt, now),
         "usage": await check_usage(db, since), "environment": await check_environment(),
     }
     status = Counter(t["status"] for t in tasks)
