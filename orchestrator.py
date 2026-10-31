@@ -482,9 +482,29 @@ _PLAN_INTENT_FIRST_HEADER = """\
 # prompt — so no matter which stage the model answers a time-sensitive
 # question at, it has the right anchor.
 
+def _clock_note() -> str:
+    """The current time for a USER message, to the minute.
+
+    It used to open every system prompt with seconds precision, so no two
+    calls shared a prefix and Ollama re-read the whole prompt — system
+    text and every tool schema, ~10k tokens — on every call (measured
+    5.3 s vs 0.33 s once moved). System prompts are now fixed text and
+    this goes into the message instead."""
+    import datetime
+    now = datetime.datetime.now().astimezone()
+    weekday_zh = ["週一", "週二", "週三", "週四", "週五", "週六", "週日"][now.weekday()]
+    off = now.strftime("%z")
+    return (
+        f"[Now: {now.strftime('%Y-%m-%d %H:%M')} {now.strftime('%A')} / {weekday_zh}, "
+        f"{now.tzname() or ''} (UTC{off[:3]}:{off[3:]}). Use this as today / 今天 / now / 現在, "
+        "not your training cutoff. Derive any 農曆 date from it; if you can't compute it "
+        "reliably, say so.]\n\n"
+    )
+
+
 def _current_time_header() -> str:
     """Build a tiny system-prompt prelude that pins the model's clock to
-    real time. Uses the host's local time (which on a Taiwanese DGX is
+    real time. Not used in system prompts any more (see _clock_note). Uses the host's local time (which on a Taiwanese DGX is
     UTC+8 / Asia/Taipei; on a US server it'll be whatever the host is
     set to — that's fine, the LLM just needs SOMETHING factual to
     anchor 'today / 今天 / now / 現在')."""
@@ -525,14 +545,13 @@ def _plan_prompt_for_mode(mode: str, model_name: str = "") -> str:
         _PLAN_SYSTEM_ANALYTIC if mode == "analytic" else _PLAN_SYSTEM_CODE
     )
     tier = model_tier(model_name)
-    # Current-time header goes FIRST so every model (regardless of tier)
-    # has a real-clock anchor before reading anything else.
-    time_hdr = _current_time_header()
+    # Fixed text only: the clock goes in the user message (_clock_note) so
+    # consecutive plans share this prefix and Ollama reuses its KV cache.
     if tier == "strict":
-        return time_hdr + _PLAN_INTENT_FIRST_HEADER + _PLAN_STRICT_HEADER + base
+        return _PLAN_INTENT_FIRST_HEADER + _PLAN_STRICT_HEADER + base
     # Mid-range and large models keep the existing prompt — the JSON
     # contract is already restrictive enough; loosening it doesn't help.
-    return time_hdr + _PLAN_INTENT_FIRST_HEADER + base
+    return _PLAN_INTENT_FIRST_HEADER + base
 
 
 def _is_local_only() -> bool:
@@ -1981,15 +2000,17 @@ class Orchestrator:
                 pass
 
         system_prompt = base_prompt + workspace_hint
-        if memory_ctx:
-            system_prompt = memory_ctx + "\n\n" + system_prompt
 
         recent = await self._recent_turns_block(req)
         if (req.context or {}).get("asked_again"):
             recent += ("\n\n（注意：使用者剛剛問過幾乎一樣的問題，上一個回答沒有幫到他。"
                        "請換個方法或工具回答，不要重複上一個回答。）")
+        # What changes per task (time, memory, recent turns) goes here, not
+        # in the system prompt, so the system prefix is reused across plans.
         prompt = (
-            (recent + "\n\n" if recent else "")
+            _clock_note()
+            + (memory_ctx + "\n\n" if memory_ctx else "")
+            + (recent + "\n\n" if recent else "")
             + f"Goal: {req.goal}\n\n"
             f"Available skills: {json.dumps(skill_names)}\n\n"
             "Output the sub-task plan now."
@@ -2739,15 +2760,14 @@ class Orchestrator:
 - 若 render_chart_report / write_file 有產出檔案，動作摘要末尾
   加一行「📎 產出：<relative/path.html>」。
 """
+        # The clock rides in the message (not the system prompt) so the
+        # synthesizer has today's date without breaking the prompt cache.
         prompt = (
-            f"用戶的目標：{goal}\n\n"
+            _clock_note()
+            + f"用戶的目標：{goal}\n\n"
             f"工具執行記錄：\n{tool_log}\n\n"
             "請根據以上記錄生成完成報告。"
         )
-        # Prepend current-time header so synthesizer doesn't default to
-        # its training-cutoff year if the goal asks anything time-related
-        # (calendar, "what year is it", lunar date, etc).
-        system_prompt = _current_time_header() + system_prompt
         # Same cloud-aware routing as planning — see _orchestrator_complete.
         result = await self._orchestrator_complete(
             prompt, system_prompt,
@@ -2869,27 +2889,24 @@ class Orchestrator:
             except Exception:  # noqa: BLE001
                 pass
 
-        # Current-time header FIRST so a "today / 今天 / 現在 / what year"
-        # question answered on this fast path doesn't fall back to the
-        # model's training-cutoff year. This path skips the planner +
-        # synthesizer (which already carry the header), so without this
-        # it's the one place a date question gets the wrong year — the
-        # exact "今天農曆幾月幾號 → 2024" bug.
+        # The clock goes in the message so a "today / 今天 / 現在 / what year"
+        # question on this fast path doesn't fall back to the model's
+        # training-cutoff year (the "今天農曆幾月幾號 → 2024" bug), while
+        # the system prompt stays fixed and cached.
         system = (
-            _current_time_header()
-            + "You are OpenTeddy, a helpful and concise AI assistant. "
+            "You are OpenTeddy, a helpful and concise AI assistant. "
             "The user asked a question that doesn't require running "
             "tools — answer directly. Keep the response tight and "
             "useful; use markdown for structure where it helps."
         )
-        if memory_ctx:
-            system += "\n\n--- Relevant memory ---\n" + memory_ctx
+        mem_block = ("--- Relevant memory ---\n" + memory_ctx + "\n\n") if memory_ctx else ""
 
         # Stream so the user gets tokens as they generate — same UX as
         # the full-loop chat-mode finalize step.
         recent = await self._recent_turns_block(req)
         answer = await self._orchestrator_complete(
-            (recent + "\n\n使用者現在說：" + req.goal) if recent else req.goal,
+            _clock_note() + mem_block
+            + ((recent + "\n\n使用者現在說：" + req.goal) if recent else req.goal),
             system,
             task_id=req.id,
             task_description=f"[fast-chat] {req.goal[:100]}",
@@ -3545,6 +3562,7 @@ class Orchestrator:
                 eval_dur_ns  = last.get("eval_duration", 0) or 0
                 total_dur_ns = last.get("total_duration", 0) or 0
                 response_text = acc
+                data = last
             else:
                 resp = await self._http.post(
                     f"{config.gemma_base_url}/api/generate",
@@ -3561,6 +3579,8 @@ class Orchestrator:
             # ── Record Ollama usage (best-effort) ─────────────────────────────
             # #6 Auto-benchmark: include real wall-clock + measured t/s
             # so the Settings perf-stats query has data to aggregate.
+            _t = local_engine.log_timing((task_description or "planner").split(" ")[0],
+                                         config.gemma_model, data)
             if tokens_in or tokens_out:
                 tps = (
                     tokens_out * 1_000_000_000 / eval_dur_ns
@@ -3576,6 +3596,8 @@ class Orchestrator:
                         task_description=task_description,
                         duration_ms=int(total_dur_ns / 1_000_000),
                         tokens_per_sec=tps,
+                        load_ms=_t["load_ms"],
+                        prefill_ms=_t["prefill_ms"],
                     )
                 except Exception:  # noqa: BLE001
                     pass

@@ -44,8 +44,11 @@ macOS hard-gate:
 
 from __future__ import annotations
 
+import logging
 import platform
 from typing import Any, Dict, List, Optional
+
+logger = logging.getLogger(__name__)
 
 
 # ── Engine resolution ─────────────────────────────────────────────────────────
@@ -226,6 +229,26 @@ def normalize_response(raw: Dict[str, Any]) -> Dict[str, Any]:
         "prompt_eval_duration": 0,
         "done_reason":          choice.get("finish_reason"),
     }
+
+
+def timings(data: Dict[str, Any]) -> Dict[str, int]:
+    """Where one call's time went, in ms: load (bringing the model into
+    memory), prefill (reading the prompt — what a reused KV-cache prefix
+    saves) and decode (writing the answer). Ollama only; vLLM reports 0."""
+    ms = lambda k: int((data.get(k) or 0) / 1_000_000)
+    return {"load_ms": ms("load_duration"), "prefill_ms": ms("prompt_eval_duration"),
+            "decode_ms": ms("eval_duration"), "total_ms": ms("total_duration")}
+
+
+def log_timing(kind: str, model: str, data: Dict[str, Any]) -> Dict[str, int]:
+    """One log line per model call, e.g.
+    "LLM executor qwen3.8:27b: load 0 ms · prefill 412 tok 0.9 s · decode 88 tok 6.1 s · 7.2 s"."""
+    t = timings(data)
+    if t["total_ms"]:
+        logger.info("LLM %s %s: load %d ms · prefill %d tok %.1f s · decode %d tok %.1f s · %.1f s",
+                    kind, model, t["load_ms"], data.get("prompt_eval_count") or 0, t["prefill_ms"] / 1000,
+                    data.get("eval_count") or 0, t["decode_ms"] / 1000, t["total_ms"] / 1000)
+    return t
 
 
 def normalize_stream_chunk(chunk: Dict[str, Any]) -> Dict[str, Any]:

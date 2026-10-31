@@ -670,6 +670,8 @@ OpenTeddy 是一人 side project。Server 費、雲端 LLM API 測試、桌面�
 
 ## 跑大模型（DGX Spark / 35B 等級）的人請注意
 
+**系統提示詞是固定文字，KV cache 可以重複使用。** 以前每次呼叫模型，系統提示詞開頭都放了精確到秒的時間，discovery memo 也接在系統提示詞後面、工具定義前面，所以沒有兩次呼叫的開頭一樣，Ollama 每次都要把整份提示詞（系統文字加約 60 個工具定義，大約 1.2 萬 token）從頭讀一遍。現在時間改放在使用者訊息裡（只到分鐘），memo 放在對話最後。在 GX10（DGX Spark 等級）+ qwen3.8:27b 上實測：每個新子任務讀提示詞的時間 **14.1 秒 → 1.5 秒**，有 memo 的下一輪 1.6 秒 → 0.4 秒。用 `scripts/prompt_cache_bench.py --url http://<ollama>:11434 --model <執行模型>` 可以在你的機器上量。每次地端呼叫也會在 log 寫一行時間花在哪（`LLM executor r0 qwen3.8:27b: load 0 ms · prefill 11941 tok 1.5 s · decode 88 tok 6.1 s`），用量紀錄另存 `load_ms` / `prefill_ms`。
+
 預設啟用的「逐步交付物驗證」是一個額外的 LLM-as-judge call，每個成功 subtask 都會跑一次。在小模型上幾秒就結束沒感覺；但在 DGX Spark + qwen3.5:35b 之類的設定下，每次 5–60 秒，多步驟的報表任務會明顯變慢甚至卡住。
 
 兩種關法：

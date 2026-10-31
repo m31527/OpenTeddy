@@ -443,20 +443,18 @@ def _system_prompt_for_mode(mode: str, model_name: str = "") -> str:
     (qwen3.5:2b etc.) get the strict preamble + few-shot examples; large
     models get a brief openness suffix; mid-range stays as-is.
 
-    Also prepends a real-clock anchor (current date / weekday / timezone)
-    so the executor doesn't default to its training-cutoff year when the
-    user asks anything time-sensitive (`今天 / now / current year /
-    lunar date / etc.`). Imported lazily so executor.py doesn't grow a
-    new hard dependency on orchestrator.py.
+    Fixed text only. The current time goes in the first user message
+    (orchestrator._clock_note): at the top of this prompt, with seconds,
+    it made every call's prefix unique, so Ollama re-read the system
+    prompt and every tool schema each time.
     """
-    from orchestrator import _current_time_header
     base = _SYSTEM_PROMPT_CHAT if mode == "chat" else _SYSTEM_PROMPT_CODE
     tier = model_tier(model_name)
     if tier == "strict":
-        return _current_time_header() + _STRICT_PREAMBLE + "\n" + base
+        return _STRICT_PREAMBLE + "\n" + base
     if tier == "open":
-        return _current_time_header() + base + _OPEN_SUFFIX
-    return _current_time_header() + base
+        return base + _OPEN_SUFFIX
+    return base
 
 
 # ── Workspace artifact scanner ────────────────────────────────────────────────
@@ -777,11 +775,13 @@ class Executor:
             k: v for k, v in (context or {}).items()
             if k not in _internal_ctx_keys
         }
+        from orchestrator import _clock_note
         messages: List[Dict[str, Any]] = [
             {
                 "role": "user",
                 "content": (
-                    workspace_block
+                    _clock_note()
+                    + workspace_block
                     + prior_block
                     + f"Task: {description}\n\n"
                     f"Context: {json.dumps(_public_ctx, ensure_ascii=False)[:2000]}"
@@ -1025,14 +1025,23 @@ class Executor:
                         "SELECT）從資料庫回答；內部營運資料（品牌/工廠/倉庫/"
                         "訂單等）不要用 web_search 找。]"
                     )
+            # Discovery memos go AFTER the conversation, as a note for this
+            # request only. In the system prompt they sat in front of the
+            # tool schemas, so each new memo made Ollama re-read every
+            # schema and the whole history. At the end, everything before
+            # them is the same as last round and comes from the KV cache;
+            # rebuilt each round, they still can't be lost to compression.
+            request_messages = messages
             if discovery_memos:
-                effective_system = (
-                    effective_system
-                    + "\n\n[Discovery memo — what you ALREADY learned in this subtask. "
-                    "Do NOT call these tools again on the same file/path; "
-                    "use the info below directly:]\n"
-                    + "\n".join(f"  • {m}" for m in discovery_memos)
-                )
+                request_messages = messages + [{
+                    "role": "user",
+                    "content": (
+                        "[Discovery memo — what you ALREADY learned in this subtask. "
+                        "Do NOT call these tools again on the same file/path; "
+                        "use the info below directly:]\n"
+                        + "\n".join(f"  • {m}" for m in discovery_memos)
+                    ),
+                }]
             # Engine-aware request body. local_engine.build_payload
             # produces the Ollama /api/chat shape (with num_ctx +
             # keep_alive) or the vLLM OpenAI shape depending on the
@@ -1040,7 +1049,7 @@ class Executor:
             # keeps us under (Ollama only; vLLM sets it at serve time).
             payload: Dict[str, Any] = local_engine.build_payload(
                 model=config.qwen_model,
-                messages=messages,
+                messages=request_messages,
                 system=effective_system,
                 tools=tools or None,
                 stream=stream_on,
@@ -1107,6 +1116,7 @@ class Executor:
                         "eval_duration":        last_chunk.get("eval_duration", 0),
                         "total_duration":       last_chunk.get("total_duration", 0),
                         "prompt_eval_duration": last_chunk.get("prompt_eval_duration", 0),
+                        "load_duration":        last_chunk.get("load_duration", 0),
                         "done_reason":          last_chunk.get("done_reason"),
                     }
                     # Mark the stream as complete so the UI can stop the
@@ -1145,6 +1155,7 @@ class Executor:
                 (_tokens_out * 1_000_000_000 / _eval_dur_ns)
                 if _eval_dur_ns > 0 and _tokens_out > 0 else 0.0
             )
+            _t = local_engine.log_timing(f"executor r{round_idx}", config.qwen_model, data)
             try:
                 await self.tracker.record_usage(
                     task_id=task_id,
@@ -1156,6 +1167,8 @@ class Executor:
                     cost_usd=0.0,
                     duration_ms=int(_total_dur_ns / 1_000_000),
                     tokens_per_sec=_tps,
+                    load_ms=_t["load_ms"],
+                    prefill_ms=_t["prefill_ms"],
                 )
             except Exception:  # noqa: BLE001
                 pass
@@ -1710,6 +1723,9 @@ class Executor:
                     stream=False,
                     temperature=float(getattr(config, "qwen_temperature", 0.2)),
                     num_predict=config.qwen_max_tokens,
+                    # Same num_ctx as the loop: without it Ollama reloads the
+                    # model at its default context for this one call.
+                    num_ctx=int(getattr(config, "qwen_num_ctx", 16384)),
                     keep_alive=getattr(config, "ollama_keep_alive", "24h"),
                 ),
             )

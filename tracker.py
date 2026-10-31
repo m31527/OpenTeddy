@@ -198,6 +198,11 @@ class Tracker:
             "  task_id TEXT NOT NULL DEFAULT '', outcome TEXT"
             ")",
             "CREATE INDEX IF NOT EXISTS ix_decisions_kind_ts ON decisions(kind, ts)",
+            # Per-call split of local model time (local_engine.timings):
+            # loading the model, and reading the prompt (prefill) — the part
+            # a reused KV-cache prefix saves.
+            "ALTER TABLE usage_records ADD COLUMN load_ms INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE usage_records ADD COLUMN prefill_ms INTEGER NOT NULL DEFAULT 0",
         ]
         for sql in migrations:
             try:
@@ -1257,6 +1262,8 @@ class Tracker:
         # query just filters those rows out.
         duration_ms: int = 0,
         tokens_per_sec: float = 0.0,
+        load_ms: int = 0,
+        prefill_ms: int = 0,
     ) -> None:
         """
         Persist a single API call record to usage_records.
@@ -1273,8 +1280,8 @@ class Tracker:
                 "INSERT INTO usage_records "
                 "(id, task_id, session_id, model, model_provider, "
                 "tokens_in, tokens_out, cost_usd, task_description, "
-                "duration_ms, tokens_per_sec, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "duration_ms, tokens_per_sec, created_at, load_ms, prefill_ms) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     record_id,
                     task_id,
@@ -1288,6 +1295,8 @@ class Tracker:
                     int(duration_ms or 0),
                     float(tokens_per_sec or 0.0),
                     created_at,
+                    int(load_ms or 0),
+                    int(prefill_ms or 0),
                 ),
             )
             await self.db.commit()

@@ -1261,7 +1261,9 @@ Anything beyond the caps is done by a person in the platform's own UI, on purpos
 
 **Work inside a project.** `openteddy run "…" --dir .` starts a code-mode session pinned to that checkout, so shell and file tools operate on it directly. The path must exist on the machine running OpenTeddy (the CLI warns when the runtime is remote); OpenTeddy's own source tree is refused.
 
-## Two latency fixes worth knowing about
+## Latency fixes worth knowing about
+
+**System prompts are fixed text, so the KV cache is reused.** Every model call used to open with the current time to the second, and each discovery memo was appended to the system prompt — in front of the tool schemas. No two calls shared a prefix, so Ollama re-read the whole prompt (system text plus ~60 tool schemas, about 12k tokens) every time. The clock now goes in the user message (to the minute) and memos come after the conversation. Measured on a GX10 (DGX Spark class) with qwen3.8:27b: reading the prompt for a new subtask **14.1 s → 1.5 s**, a tool round after a memo 1.6 s → 0.4 s. `scripts/prompt_cache_bench.py --url http://<ollama>:11434 --model <executor>` measures it on your machine. Every local call also logs where its time went (`LLM executor r0 qwen3.8:27b: load 0 ms · prefill 11941 tok 1.5 s · decode 88 tok 6.1 s`), and usage records keep `load_ms` / `prefill_ms`.
 
 **Thinking is off for the planner and executor.** Reasoning models (`qwen3*`, `gemma4*`, `deepseek-r1`, `gpt-oss`…) think before answering by default on Ollama — thousands of hidden tokens per call, which on a bandwidth-bound box is minutes: a 27B planner spent 579 s working out what day it was. OpenTeddy now sends `think: false` to those families for planning and execution (0 hidden tokens, same answer). `OLLAMA_THINK=true` restores the model default if a task genuinely benefits from deliberation. Models without the switch are never sent it.
 
