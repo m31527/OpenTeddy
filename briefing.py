@@ -3,7 +3,9 @@
 
 Weather (and an umbrella), a typhoon only when one is heading for Taiwan,
 today's calendar, today's reminders, unread Primary mail, and devices at
-home that went offline. Every part is optional: a part that isn't set up
+home that went offline. Calendar, mail and reminders are the asking
+person's own (privacy.py): none of them in the web UI, a group, or for
+someone who hasn't linked Google. Every part is optional: a part that isn't set up
 is left out, a part that fails says so in one line, and the rest still
 arrives. All parts are fetched at once, so the briefing takes as long as
 the slowest source, not the sum.
@@ -56,12 +58,12 @@ async def _typhoon() -> Optional[str]:
                              for s in near) + "，請留意中央氣象署警報"
 
 
-async def _calendar() -> Optional[str]:
+async def _calendar(person: Optional[str]) -> Optional[str]:
     import google_personal as G
-    if not G.calendar_configured():
+    if not person:
         return None
     try:
-        return G.describe_events(await G.events_for_days(datetime.now().date(), 1), "今天")
+        return G.describe_events(await G.events_for_days(datetime.now().date(), 1, person), "今天")
     except G.PersonalError as exc:
         return f"⚠️ 行事曆：{exc}"
 
@@ -76,12 +78,12 @@ async def _reminders(session_id: str) -> Optional[str]:
     return "⏰ 今天的提醒：\n" + "\n".join(f"• {r['fire_at_local']:%H:%M} {r['text']}" for r in rows)
 
 
-async def _mail() -> Optional[str]:
+async def _mail(person: Optional[str]) -> Optional[str]:
     import google_personal as G
-    if not G.gmail_configured():
+    if not person:
         return None
     try:
-        mails = await G.unread(limit=5)
+        mails = await G.unread(limit=5, person=person)
     except G.PersonalError as exc:
         return f"⚠️ Gmail：{exc}"
     return G.describe_mail(mails, "未讀的主要信件（24 小時內）")
@@ -98,16 +100,24 @@ async def _home() -> Optional[str]:
     return f"📴 家裡有 {len(off)} 台設備離線：{names}"
 
 
-async def morning_briefing(session_id: str = "") -> str:
-    """The briefing for one conversation: its own reminders only."""
+async def morning_briefing(session_id: str = "", person: Optional[str] = None) -> str:
+    """The briefing for one conversation: its reminders, and — for a person
+    in their Telegram private chat who linked Google — their calendar and mail."""
+    import google_auth as GA
     today = datetime.now().date()
+    linked = None
+    if person:
+        try:
+            acct = await GA.account(person)
+            linked = person if acct and acct.get("status") == "ok" else None
+        except Exception:  # noqa: BLE001
+            linked = None
     parts = await asyncio.gather(
-        _part("天氣", _weather()), _part("颱風", _typhoon()), _part("行事曆", _calendar()),
-        _part("提醒", _reminders(session_id)), _part("Gmail", _mail()), _part("家裡設備", _home()),
+        _part("天氣", _weather()), _part("颱風", _typhoon()), _part("行事曆", _calendar(linked)),
+        _part("提醒", _reminders(session_id)), _part("Gmail", _mail(linked)), _part("家裡設備", _home()),
     )
     lines: List[str] = [f"☀️ 早安！今天是 {today.month}/{today.day}（週{_WEEKDAY[today.weekday()]}）"]
     lines += [p for p in parts if p]
-    import google_personal as G
-    if not G.calendar_configured() and not G.gmail_configured():
-        lines.append("（行事曆和 Gmail 還沒連接：Settings → Google）")
+    if person and not linked:
+        lines.append("（說「連結我的 Google」，簡報就會加上你的行程和未讀信）")
     return "\n\n".join(lines)

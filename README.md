@@ -134,7 +134,7 @@ Claude Pro auto-renewing.
 - **Ask once, see everything** — schedules bound to sessions run on cron (or just say "每天早上 8 點…" in any door); `read_schedule_digest` gives the latest result of every scheduled job across all sessions, problems first, so "how are things today?" is one question. See [Schedules & the morning digest](#schedules--the-morning-digest).
 - **Print from any door** — upload a file and say *"列印"* / *"print 2 copies, double-sided"* in chat or Telegram and it is on the printer about a second later, through CUPS, with the job number and printer warnings such as low toner. Word / Excel / PowerPoint are converted with LibreOffice first; printing as one step of a bigger job ("整理成題庫再印出來") is a tool call. See [Printing](#printing).
 - **Works with Claude Code, both ways** — `openteddy mcp` lets Claude Code use OpenTeddy (control the house, print, message you on Telegram, run its agents), and *"用 Claude Code 在 ~/projects/shop 修好失敗的測試"* from your phone hands coding to Claude Code in the background, with the result and changed files sent back. See [Claude Code ↔ OpenTeddy](#claude-code--openteddy).
-- **A personal assistant that knows your day** — *"今天有什麼行程"*, *"有什麼新信"*, *"明天早上 9 點提醒我繳費"* and a morning *"早安簡報"* (weather, typhoons heading for Taiwan, calendar, reminders, unread mail, offline devices) are answered without a model call, from your Google calendar (secret iCal address) and Gmail (IMAP, app password) — both read-only. Reminders can be spoken by the 小愛音箱. See [Personal assistant](#personal-assistant-calendar-gmail-reminders-morning-briefing).
+- **A personal assistant for each person** — *"今天有什麼行程"*, *"有什麼新信"*, *"明天早上 9 點提醒我繳費"* and a morning *"早安簡報"* (weather, typhoons heading for Taiwan, calendar, reminders, unread mail, offline devices) are answered without a model call. Each person links their own Google account (OAuth, read-only) from their own Telegram private chat and only they get their data back; answers that contain it are never stored or shown in the web UI. Reminders can be spoken by the 小愛音箱. See [Personal assistant](#personal-assistant-calendar-gmail-reminders-morning-briefing).
 - **Control your home through Home Assistant** — *"關客廳燈"*, *"冷氣開 26 度"*, *"家裡有哪些設備離線"* are answered in about a second by Home Assistant, which speaks to 米家 / Xiaomi, Google TV and 2,000+ other integrations; the 小愛音箱 can speak announcements and reminders, play music, or run spoken commands for infrared devices. Locks, alarms and garage doors wait for you to reply *"確認 <code>"*. See [Smart home](#smart-home-home-assistant).
 - **Deadlines that follow the work** — time spent waiting for a human approval, and time a tool declared up front (`http_post timeout=2700` for a 31-minute video render), extend the subtask deadline instead of being billed against it. A stuck agent is still caught in minutes; a slow-but-progressing one isn't killed.
 - **Voice fast path** *(experimental)* — `POST /voice/ask` routes a spoken question to the cheapest lane that can answer it: templates (0 ms), a small model over the digest (~0.5 s), or a background task with a spoken acknowledgement. The big model is never in the conversational path.
@@ -1115,38 +1115,72 @@ leave single unsupported features unavailable on devices that are fine.
 
 ## Personal assistant: calendar, Gmail, reminders, morning briefing
 
-OpenTeddy reads your Google calendar and Gmail, keeps one-off reminders,
-and puts the day together in one morning message. Calendar and Gmail are
-**read-only**: nothing is created, sent, marked read or deleted, and
-neither secret ever reaches a prompt.
+Each person links **their own** Google account from **their own Telegram
+private chat**, and only they get their calendar and mail back. OpenTeddy
+also keeps one-off reminders and puts the day together in one morning
+message. Google access is **read-only**: nothing is created, sent, marked
+read or deleted.
 
-### Set it up (no Google Cloud project)
+### Privacy model
 
-1. **Calendar** — Google Calendar → ⚙️ Settings → your calendar →
-   *Integrate calendar* → copy **Secret address in iCal format**. Recurring
-   events are expanded; one secret address covers one calendar.
-2. **Gmail** — turn on 2-Step Verification, then Google Account → Security
-   → *App passwords* → create one called *OpenTeddy*. Gmail is read over
-   IMAP with the mailbox opened read-only.
-3. Paste both, plus your Gmail address, into **Settings → 📅 Google
-   Calendar & Gmail**, Save, and press *Test connection* (`GET
-   /personal/status` returns the same: events in the next 7 days, unread
-   Primary mail in the last 24 h).
+OpenTeddy has no user accounts, so the one door that knows who is asking
+is a Telegram private chat (the bridge marks it in-process; an HTTP
+client can't fake it). A person is that chat.
 
-Reset the iCal address in Google Calendar, or revoke the app password,
-to cut access at any time.
+- The web UI, CLI, MCP and group chats are nobody: calendar and Gmail
+  are refused there, by the direct answers and by the agent's tools.
+- A task that reads someone's calendar or mail is **private**. Its stored
+  answer and its live events in the web UI are replaced by a note, memory
+  doesn't keep it, and only the Telegram reply carries the full text.
+- Refresh tokens are encrypted at rest (`google_tokens.key` next to the
+  database, mode 600) and never shown anywhere.
+- Reminders, and the morning briefing's reminders, belong to the
+  conversation that set them.
+- The web UI itself still has no login: anyone who can open it sees
+  other sessions' non-personal history. Keep it on your LAN / tailnet.
 
-### What you can say
+### Set it up — the owner, once
+
+1. [Google Cloud console](https://console.cloud.google.com/) → create a
+   project → *APIs & Services* → enable **Google Calendar API** and
+   **Gmail API**.
+2. *OAuth consent screen* → External → add the scopes
+   `calendar.readonly` and `gmail.readonly` → set the publishing status
+   to **In production**. In *Testing*, Google expires every refresh token
+   after 7 days. The app stays unverified, which is fine for a household
+   (up to 100 accounts).
+3. *Credentials* → *Create credentials* → *OAuth client ID* → type
+   **Desktop app**. Paste the client ID and secret into **Settings → 📅
+   Google**, Save, and press *Test connection* (`GET /personal/status`:
+   set up or not, and how many people linked — a count, no names).
+
+### Link an account — each person
+
+1. In your Telegram private chat with the bot, say *"連結我的 Google"*.
+2. Open the link, sign in, and allow both items. Google warns that the
+   app isn't verified: *Advanced → Go to …*. If Telegram's built-in
+   browser is blocked, open the link in Safari or Chrome.
+3. The browser ends on a page that won't load (`127.0.0.1:8749`).
+   **Copy that page's address and paste it back into the chat.** Google
+   doesn't accept LAN addresses as a return address, so this works from
+   anywhere with no network setup. The link is yours only, lasts 15
+   minutes, and works once.
+
+*"Google 連結了嗎"* shows the linked account; *"解除 Google"* revokes the
+token at Google and deletes it. You can also remove access from your
+Google Account → Security → Third-party access.
+
+### What you can say (in your Telegram private chat)
 
 | You say | Path | What happens |
 |---|---|---|
-| *"今天有什麼行程"*, *"明天的會議"*, *"這週行程"*, *"下週有哪些會議"* | direct | the events, with times and places |
+| *"今天有什麼行程"*, *"明天的會議"*, *"這週行程"*, *"下週有哪些會議"* | direct | events from every calendar you show in Google Calendar, with times and places; declined events left out |
 | *"有什麼新信"*, *"有重要的信嗎"*, *"check my email"* | direct | unread mail in Primary from the last 24 h: sender, subject, time |
 | *"明天早上 9 點提醒我繳電話費"*, *"30 分鐘後提醒我關火"*, *"下週一提醒我交報告"*, *"remind me at 5pm to call mom"* | direct | a one-off reminder, sent to the chat you asked from |
 | *"下午 3 點叫小愛提醒我出門"* | direct | the 小愛音箱 says it at 3 pm, and Telegram gets it too |
-| *"我有哪些提醒"*, *"取消提醒 3f2a1b"*, *"取消剛剛的提醒"* | direct | list or cancel |
-| *"早安簡報"* | direct | weather (and an umbrella), a typhoon only when one is heading for Taiwan, today's events, today's reminders, unread mail, offline devices at home |
-| *"每天早上 7:30 給我早安簡報"* | schedule | the briefing on Telegram every morning |
+| *"我有哪些提醒"*, *"取消提醒 3f2a1b"*, *"取消剛剛的提醒"* | direct | your reminders only |
+| *"早安簡報"* | direct | weather (and an umbrella), a typhoon only when one is heading for Taiwan, your events and reminders today, your unread mail, offline devices at home |
+| *"每天早上 7:30 給我早安簡報"* | schedule | the briefing on Telegram every morning (with your calendar and mail when said in your private chat) |
 | *"看我明天的行程，空檔排一個健身"*, *"整理今天未讀信的重點"*, *"會議前 15 分鐘提醒我"* | agent | `calendar_events`, `gmail_unread` (Gmail search syntax) and `reminder_create` as steps of a bigger job |
 
 Reminders survive restarts; one that came due while OpenTeddy was down
@@ -1641,13 +1675,13 @@ Also editable in **Settings → 🖨️ Printer** and **Settings → 🏠 Home A
 
 ### Google calendar & Gmail
 
-Also editable in **Settings → 📅 Google Calendar & Gmail**. Both read-only.
+Also editable in **Settings → 📅 Google**. One OAuth client per install;
+each person links their own account from Telegram.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `GOOGLE_ICAL_URL` | — | The calendar's *Secret address in iCal format*. Empty = calendar off. |
-| `GMAIL_ADDRESS` | — | Gmail account read over IMAP. |
-| `GMAIL_APP_PASSWORD` | — | App password from Google Account → Security → App passwords. |
+| `GOOGLE_CLIENT_ID` | — | OAuth client ID (type *Desktop app*). Empty = calendar and Gmail off. |
+| `GOOGLE_CLIENT_SECRET` | — | The same client's secret. |
 
 ### Claude Code
 

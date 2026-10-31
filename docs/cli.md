@@ -110,15 +110,14 @@ openteddy decisions       # 決策引擎（Laya 影子模式）每種判斷的�
 openteddy review --days 3 # 自我體檢：答錯的問題、可疑技能、排程有沒有漏跑
 ```
 
-## 個人助理（直接在 run 或 Telegram 說）
+## 個人助理
+
+行事曆和 Gmail 是每個人自己的，只能在本人的 Telegram 私訊使用（先說「連結我的 Google」），CLI 讀不到任何人的。提醒和簡報的其他部分在 CLI 也能用：
 
 ```bash
-openteddy run "今天有什麼行程"                 # Google 行事曆（Settings → Google）
-openteddy run "有什麼新信"                     # Gmail 主要分類的未讀信（唯讀）
 openteddy run "明天早上 9 點提醒我繳電話費"      # 一次性提醒，時間到傳 Telegram
-openteddy run "我有哪些提醒"
-openteddy run "早安簡報"                       # 天氣、颱風、行程、提醒、未讀信、離線設備
-openteddy run "每天早上 7:30 給我早安簡報"       # 變成排程
+openteddy run "我有哪些提醒"                   # 只列這個對話的提醒
+openteddy run "早安簡報"                       # 天氣、颱風、這個對話的提醒、離線設備
 ```
 
 ## 給 Claude Code 用（MCP）

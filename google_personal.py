@@ -1,113 +1,132 @@
 """
-Your Google calendar and Gmail, read-only — what a personal assistant
-needs to know before it can be one.
+Each person's own Google calendar and Gmail, read-only.
 
-The simple route, no Google Cloud project:
-  • Calendar: the calendar's "Secret address in iCal format" (Settings →
-    the calendar → Integrate calendar). Recurring events are expanded.
-  • Gmail: IMAP with an app password (Google Account → Security → 2-Step
-    Verification → App passwords). The mailbox is opened read-only, so
-    nothing is ever marked read, moved or deleted.
+Data is fetched with the token of the person asking (google_auth.py) — the
+one behind a Telegram private chat (privacy.py). There is no machine-wide
+account: the web UI, CLI, MCP and group chats can't read anyone's
+calendar or mail, and a task that does is marked private so its answer
+isn't stored or shown in the web UI.
 
-Both secrets live in Settings (redacted in exports) and never reach a
-prompt. Creating events or sending mail would need Google's OAuth APIs —
-a later step, with confirmation before anything is sent.
+  • Calendar API: every calendar the person shows in Google Calendar,
+    recurring events expanded by Google, declined and cancelled ones left out.
+  • Gmail API, gmail.readonly: headers fetched with format=metadata;
+    nothing is marked read, moved, sent or deleted.
 """
 from __future__ import annotations
 
 import asyncio
-import imaplib
 import logging
 import re
-import time
+import urllib.parse
 from datetime import date, datetime, timedelta
-from email import message_from_bytes
-from email.header import decode_header, make_header
-from email.utils import parseaddr, parsedate_to_datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 
-from config import config
+import google_auth as GA
+import privacy
 
 logger = logging.getLogger(__name__)
 
+CAL_BASE = "https://www.googleapis.com/calendar/v3"
+GMAIL_BASE = "https://gmail.googleapis.com/gmail/v1"
 _WEEKDAY = "一二三四五六日"
-_ics_cache: Tuple[float, str, Optional[bytes]] = (0.0, "", None)
+
+ONLY_TELEGRAM = ("🔒 個人的行事曆和信件只在本人的 Telegram 私訊裡使用（網頁、CLI、群組都不行）。"
+                 "在 Telegram 私訊 bot 說「連結我的 Google」就可以開始。")
 
 
 class PersonalError(Exception):
-    """A Google read that failed, with a message for the user."""
+    """A Google read that failed, with a message for the person."""
 
 
 def local_tz():
     return datetime.now().astimezone().tzinfo
 
 
-def calendar_configured() -> bool:
-    return bool((getattr(config, "google_ical_url", "") or "").strip())
-
-
-def gmail_configured() -> bool:
-    return bool((getattr(config, "gmail_address", "") or "").strip()
-                and (getattr(config, "gmail_app_password", "") or "").strip())
-
-
 def day_label(d: date) -> str:
     return f"{d.month}/{d.day}（週{_WEEKDAY[d.weekday()]}）"
 
 
+def person_or_raise(person: Optional[str] = None) -> str:
+    p = person or privacy.current_person()
+    if not p:
+        raise PersonalError(ONLY_TELEGRAM)
+    return p
+
+
+async def _get(person: str, url: str, params: Any = None) -> Dict[str, Any]:
+    try:
+        token = await GA.access_token(person)
+    except GA.GoogleAuthError as exc:
+        raise PersonalError(str(exc)) from exc
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        for attempt in (0, 1):
+            r = await client.get(url, params=params, headers={"Authorization": f"Bearer {token}"})
+            if r.status_code == 401 and attempt == 0:
+                try:
+                    token = await GA.access_token(person, force=True)
+                except GA.GoogleAuthError as exc:
+                    raise PersonalError(str(exc)) from exc
+                continue
+            break
+    if r.status_code == 403:
+        what = "行事曆" if url.startswith(CAL_BASE) else "Gmail"
+        raise PersonalError(f"Google 沒有授權讀取你的{what}：重新說「連結我的 Google」，同意畫面裡兩項都要勾選。")
+    if r.status_code >= 400:
+        raise PersonalError(f"Google 回應錯誤（HTTP {r.status_code}），請稍後再試。")
+    return r.json()
+
+
 # ── Calendar ─────────────────────────────────────────────────────────────────
 
-async def _ics() -> bytes:
-    global _ics_cache
-    url = (getattr(config, "google_ical_url", "") or "").strip()
-    if not url:
-        raise PersonalError("還沒連接 Google 行事曆：Settings → Google 貼上「iCal 格式的私人網址」。")
-    if _ics_cache[2] is not None and _ics_cache[1] == url and time.monotonic() - _ics_cache[0] < 300:
-        return _ics_cache[2]
-    try:
-        async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
-            r = await client.get(url)
-    except httpx.HTTPError as exc:
-        raise PersonalError(f"讀不到 Google 行事曆（{type(exc).__name__}）") from exc
-    if r.status_code in (401, 403, 404):
-        raise PersonalError("Google 行事曆網址失效了（可能被重設），請重新複製「iCal 格式的私人網址」。")
-    if r.status_code >= 400 or b"BEGIN:VCALENDAR" not in r.content[:2000]:
-        raise PersonalError(f"Google 行事曆回應異常（HTTP {r.status_code}）")
-    _ics_cache = (time.monotonic(), url, r.content)
-    return r.content
+def _when(t: Dict[str, Any], tz) -> Tuple[Any, bool]:
+    if t.get("dateTime"):
+        return datetime.fromisoformat(t["dateTime"].replace("Z", "+00:00")).astimezone(tz), False
+    return date.fromisoformat(t["date"]), True
 
 
-async def events_between(start: datetime, end: datetime) -> List[Dict[str, Any]]:
-    """Events overlapping [start, end) in local time: {start, end, all_day, title, location}."""
-    import icalendar
-    import recurring_ical_events
-    raw = await _ics()
-    cal = icalendar.Calendar.from_ical(raw)
+async def events_between(start: datetime, end: datetime, person: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Events overlapping [start, end) on the calendars the person shows: {start, end, all_day, title, location}."""
+    who = person_or_raise(person)
     tz = local_tz()
-    out = []
-    for ev in recurring_ical_events.of(cal).between(start, end):
-        if str(ev.get("STATUS", "")).upper() == "CANCELLED":
+    cals = await _get(who, f"{CAL_BASE}/users/me/calendarList", {"minAccessRole": "reader"})
+    ids = [c["id"] for c in cals.get("items", []) if c.get("primary") or (c.get("selected") and not c.get("hidden"))][:12]
+    window = {"timeMin": start.isoformat(), "timeMax": end.isoformat(), "singleEvents": "true",
+              "orderBy": "startTime", "maxResults": "100"}
+    pages = await asyncio.gather(*(_get(who, f"{CAL_BASE}/calendars/{urllib.parse.quote(i, safe='')}/events", window)
+                                   for i in ids), return_exceptions=True)
+    failed = [p for p in pages if isinstance(p, Exception)]
+    if pages and len(failed) == len(pages):     # one bad shared calendar doesn't sink the rest
+        raise failed[0] if isinstance(failed[0], PersonalError) else PersonalError("讀不到行事曆，請稍後再試。")
+    out, seen = [], set()
+    for page in pages:
+        if isinstance(page, Exception):
             continue
-        s = ev.get("DTSTART").dt
-        e = ev.get("DTEND").dt if ev.get("DTEND") else s
-        all_day = isinstance(s, date) and not isinstance(s, datetime)
-        if not all_day:
-            s = (s if s.tzinfo else s.replace(tzinfo=tz)).astimezone(tz)
-            e = (e if e.tzinfo else e.replace(tzinfo=tz)).astimezone(tz)
-        out.append({"start": s, "end": e, "all_day": all_day,
-                    "title": str(ev.get("SUMMARY") or "（無標題）").strip(),
-                    "location": str(ev.get("LOCATION") or "").strip()})
+        for ev in page.get("items", []):
+            if ev.get("status") == "cancelled":
+                continue
+            if any(a.get("self") and a.get("responseStatus") == "declined" for a in ev.get("attendees", [])):
+                continue
+            s, all_day = _when(ev.get("start") or {}, tz)
+            e, _ = _when(ev.get("end") or ev.get("start") or {}, tz)
+            key = (ev.get("iCalUID") or ev.get("id"), str(s))
+            if key in seen:                     # the same event on two shared calendars
+                continue
+            seen.add(key)
+            out.append({"start": s, "end": e, "all_day": all_day,
+                        "title": (ev.get("summary") or "（無標題）").strip(),
+                        "location": (ev.get("location") or "").strip()})
+    privacy.mark()
     # By day; within a day, all-day events first, then by start time.
     day = lambda x: x["start"] if x["all_day"] else x["start"].date()
     return sorted(out, key=lambda x: (day(x), not x["all_day"], "" if x["all_day"] else x["start"].isoformat()))
 
 
-async def events_for_days(first: date, days: int = 1) -> List[Dict[str, Any]]:
+async def events_for_days(first: date, days: int = 1, person: Optional[str] = None) -> List[Dict[str, Any]]:
     tz = local_tz()
     start = datetime.combine(first, datetime.min.time(), tz)
-    return await events_between(start, start + timedelta(days=days))
+    return await events_between(start, start + timedelta(days=days), person)
 
 
 def describe_events(events: List[Dict[str, Any]], label: str, multi_day: bool = False) -> str:
@@ -127,56 +146,32 @@ def describe_events(events: List[Dict[str, Any]], label: str, multi_day: bool = 
 
 # ── Gmail ────────────────────────────────────────────────────────────────────
 
-def _decode(value: Optional[str]) -> str:
-    if not value:
-        return ""
-    try:
-        return str(make_header(decode_header(value))).strip()
-    except Exception:  # noqa: BLE001
-        return value.strip()
+def _sender(value: str) -> Tuple[str, str]:
+    from email.utils import parseaddr
+    name, addr = parseaddr(value or "")
+    return (name or addr).strip(), addr
 
 
-def _unread_blocking(query: str, limit: int) -> List[Dict[str, Any]]:
-    addr = (getattr(config, "gmail_address", "") or "").strip()
-    pw = (getattr(config, "gmail_app_password", "") or "").replace(" ", "")
-    if not addr or not pw:
-        raise PersonalError("還沒連接 Gmail：Settings → Google 填 Gmail 地址和應用程式密碼。")
-    try:
-        imap = imaplib.IMAP4_SSL("imap.gmail.com", 993, timeout=20)
-    except OSError as exc:
-        raise PersonalError(f"連不到 Gmail（{type(exc).__name__}）") from exc
-    try:
-        try:
-            imap.login(addr, pw)
-        except imaplib.IMAP4.error as exc:
-            raise PersonalError("Gmail 登入失敗：應用程式密碼不對，或 Gmail 的 IMAP 沒開。") from exc
-        imap.select("INBOX", readonly=True)            # read-only: nothing gets marked read
-        typ, data = imap.uid("SEARCH", "X-GM-RAW", f'"{query}"')
-        uids = (data[0] or b"").split() if typ == "OK" else []
-        out = []
-        for uid in reversed(uids[-limit:]):
-            typ, msg = imap.uid("FETCH", uid, "(BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE)])")
-            if typ != "OK" or not msg or not isinstance(msg[0], tuple):
-                continue
-            m = message_from_bytes(msg[0][1])
-            name, email_addr = parseaddr(_decode(m.get("From")))
-            try:
-                when = parsedate_to_datetime(m.get("Date")).astimezone(local_tz())
-            except Exception:  # noqa: BLE001
-                when = None
-            out.append({"from": name or email_addr, "email": email_addr,
-                        "subject": _decode(m.get("Subject")) or "（無主旨）", "date": when})
-        return out
-    finally:
-        try:
-            imap.logout()
-        except Exception:  # noqa: BLE001
-            pass
-
-
-async def unread(query: str = "category:primary is:unread newer_than:1d", limit: int = 8) -> List[Dict[str, Any]]:
-    """Unread mail matching a Gmail search (default: Primary tab, last 24 h), newest first."""
-    return await asyncio.to_thread(_unread_blocking, query, limit)
+async def unread(query: str = "category:primary is:unread newer_than:1d", limit: int = 8,
+                 person: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Messages matching a Gmail search (default: unread in Primary, last 24 h), newest first."""
+    who = person_or_raise(person)
+    listing = await _get(who, f"{GMAIL_BASE}/users/me/messages", {"q": query, "maxResults": str(limit)})
+    ids = [m["id"] for m in listing.get("messages", [])][:limit]
+    params = [("format", "metadata"), ("metadataHeaders", "From"), ("metadataHeaders", "Subject"),
+              ("metadataHeaders", "Date")]
+    msgs = await asyncio.gather(*(_get(who, f"{GMAIL_BASE}/users/me/messages/{i}", params) for i in ids))
+    out = []
+    for m in msgs:
+        h = {x.get("name", "").lower(): x.get("value", "") for x in (m.get("payload") or {}).get("headers", [])}
+        name, addr = _sender(h.get("from", ""))
+        when = None
+        if m.get("internalDate"):
+            when = datetime.fromtimestamp(int(m["internalDate"]) / 1000).astimezone(local_tz())
+        out.append({"from": name or addr, "email": addr, "subject": (h.get("subject") or "").strip() or "（無主旨）",
+                    "date": when})
+    privacy.mark()
+    return out
 
 
 def describe_mail(mails: List[Dict[str, Any]], label: str = "未讀的重要信") -> str:
@@ -191,21 +186,12 @@ def describe_mail(mails: List[Dict[str, Any]], label: str = "未讀的重要信"
 
 
 async def status() -> Dict[str, Any]:
-    """For Settings → Test connection."""
-    out: Dict[str, Any] = {"calendar": {"configured": calendar_configured()},
-                           "gmail": {"configured": gmail_configured()}}
-    if calendar_configured():
-        try:
-            evs = await events_for_days(datetime.now().date(), 7)
-            out["calendar"].update(ok=True, events_7d=len(evs))
-        except PersonalError as exc:
-            out["calendar"].update(ok=False, error=str(exc))
-    if gmail_configured():
-        try:
-            mails = await unread(limit=20)
-            out["gmail"].update(ok=True, unread_primary_24h=len(mails))
-        except PersonalError as exc:
-            out["gmail"].update(ok=False, error=str(exc))
+    """For Settings → Test: is the OAuth client set, how many people linked (no names)."""
+    out: Dict[str, Any] = {"configured": GA.configured()}
+    try:
+        out["linked"] = await GA.count()
+    except Exception:  # noqa: BLE001
+        out["linked"] = 0
     return out
 
 

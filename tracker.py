@@ -287,6 +287,9 @@ class Tracker:
         completed_at = datetime.utcnow().isoformat() if status in (
             TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.ESCALATED
         ) else None
+        import privacy
+        if summary and privacy.is_private(task_id):
+            summary = privacy.NOTE              # someone's calendar / mail: Telegram only
         await self.db.execute(
             "UPDATE tasks SET status=?, summary=?, completed_at=? WHERE id=?",
             (status.value, summary, completed_at, task_id),
@@ -1030,12 +1033,16 @@ class Tracker:
 
     async def update_subtask(self, subtask: SubTask) -> None:
         completed_at = subtask.completed_at.isoformat() if subtask.completed_at else None
+        import privacy
+        result = subtask.result
+        if result and privacy.is_private(subtask.parent_task_id):
+            result = privacy.NOTE
         await self.db.execute(
             "UPDATE subtasks SET status=?, result=?, confidence=?, error=?, "
             "completed_at=? WHERE id=?",
             (
                 subtask.status.value,
-                subtask.result,
+                result,
                 subtask.confidence,
                 subtask.error,
                 completed_at,

@@ -185,17 +185,23 @@ class _WSManager:
         # might have set one for testing).
         if "_ts" not in data:
             data["_ts"] = _time.time()
-        msg = _json.dumps(data, ensure_ascii=False)
-        # Buffer first so a slow client can't drop us — we want every
-        # broadcast captured for replay, even ones that fail to deliver.
-        self._buffer.append((data["_ts"], msg))
-        dead: set[WebSocket] = set()
-        for ws in list(self._connections):
-            try:
-                await ws.send_text(msg)
-            except Exception:  # noqa: BLE001
-                dead.add(ws)
-        self._connections -= dead
+        # Browsers (no login) never see a private task's content — someone's
+        # calendar or mail goes to their Telegram only (privacy.py). The
+        # in-process listeners below still get the full event.
+        import privacy as _privacy
+        shown = _privacy.scrub_event(data)
+        if shown is not None:
+            msg = _json.dumps(shown, ensure_ascii=False)
+            # Buffer first so a slow client can't drop us — we want every
+            # broadcast captured for replay, even ones that fail to deliver.
+            self._buffer.append((data["_ts"], msg))
+            dead: set[WebSocket] = set()
+            for ws in list(self._connections):
+                try:
+                    await ws.send_text(msg)
+                except Exception:  # noqa: BLE001
+                    dead.add(ws)
+            self._connections -= dead
 
         # In-process listeners last so a slow listener (Telegram API
         # round-trip, rate-limited editMessageText) can never delay the
@@ -546,6 +552,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:  # type: ignore[type-arg]
         await _start_reminders(tracker)
     except Exception as exc:  # noqa: BLE001
         logger.warning("Reminders startup failed (non-fatal): %s", exc)
+    # Per-person Google accounts (calendar + Gmail, read-only).
+    try:
+        from google_auth import start as _start_google
+        await _start_google(tracker)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Google accounts startup failed (non-fatal): %s", exc)
 
     # Pre-warm Ollama models in the background. First LLM call after a
     # cold start (or after Ollama's KEEP_ALIVE timeout expired) has to
@@ -1212,7 +1224,7 @@ async def admin_diagnostics() -> Response:
 
     SECRET_KEYS = {
         "anthropic_api_key", "telegram_bot_token", "smtp_password", "webhook_secret",
-        "ha_token", "google_ical_url", "gmail_app_password",
+        "ha_token", "google_client_secret",
     }
 
     def _redact(value: str) -> str:
@@ -3581,8 +3593,8 @@ async def self_review_endpoint(days: int = 7) -> dict:
 
 @app.get("/personal/status")
 async def personal_status_endpoint() -> dict:
-    """Settings → Google → Test: can the calendar and Gmail be read, and
-    how many events / unread mails there are. Never returns the secrets."""
+    """Settings → Google → Test: is the OAuth client set, and how many
+    people linked their account (a count — no names, no data)."""
     import google_personal as G
     return {"success": True, **(await G.status()), "error": None}
 

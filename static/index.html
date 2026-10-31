@@ -4986,8 +4986,9 @@
               </div>
             </div>
 
-            <!-- Google — calendar (secret iCal address) and Gmail (IMAP,
-                 app password), both read-only. Briefing, 行程, 新信. -->
+            <!-- Google — the install's OAuth client. Each person links their
+                 own account from their Telegram private chat ("連結我的
+                 Google"); calendar + Gmail, read-only, never in the web UI. -->
             <div class="settings-section collapsed">
               <h3 onclick="toggleSettingsSection(this)" data-i18n="google_heading">📅 Google Calendar &amp; Gmail</h3>
               <div class="settings-section-body">
@@ -4995,19 +4996,13 @@
                 Read-only: ask "今天有什麼行程" or "有什麼新信", or "早安簡報".
               </div>
               <div class="row" style="margin-bottom:0.85rem">
-                <div class="field" style="flex:3">
-                  <label data-i18n="google_ical_label">Calendar: secret address in iCal format</label>
-                  <input type="password" id="inp_google_ical_url" autocomplete="off" data-i18n-placeholder="google_ical_placeholder" placeholder="https://calendar.google.com/calendar/ical/…/private-…/basic.ics" />
-                </div>
-              </div>
-              <div class="row" style="margin-bottom:0.85rem">
-                <div class="field">
-                  <label data-i18n="gmail_address_label">Gmail address</label>
-                  <input type="text" id="inp_gmail_address" autocomplete="off" placeholder="you@gmail.com" />
+                <div class="field" style="flex:2">
+                  <label data-i18n="google_client_id_label">OAuth client ID</label>
+                  <input type="text" id="inp_google_client_id" autocomplete="off" placeholder="1234-abc.apps.googleusercontent.com" />
                 </div>
                 <div class="field">
-                  <label data-i18n="gmail_app_password_label">Gmail app password</label>
-                  <input type="password" id="inp_gmail_app_password" autocomplete="off" data-i18n-placeholder="gmail_app_password_placeholder" placeholder="16 letters" />
+                  <label data-i18n="google_client_secret_label">OAuth client secret</label>
+                  <input type="password" id="inp_google_client_secret" autocomplete="off" placeholder="GOCSPX-…" />
                 </div>
               </div>
               <div id="googleStatus" style="font-size:0.76rem;color:var(--text-secondary);line-height:1.6;margin-bottom:0.6rem"></div>
@@ -10273,9 +10268,8 @@
         _setInput('inp_ha_confirm_domains', s.ha_confirm_domains?.value ?? '');
         _setInput('inp_xiaoai_entity', s.xiaoai_entity?.value ?? '');
         if ((s.ha_token?.value || '').trim()) checkHomeAssistant();
-        _setInput('inp_google_ical_url', s.google_ical_url?.value ?? '');
-        _setInput('inp_gmail_address', s.gmail_address?.value ?? '');
-        _setInput('inp_gmail_app_password', s.gmail_app_password?.value ?? '');
+        _setInput('inp_google_client_id', s.google_client_id?.value ?? '');
+        _setInput('inp_google_client_secret', s.google_client_secret?.value ?? '');
         _printerSaved = s.printer_name?.value ?? '';
         _setInput('inp_print_max_copies', s.print_max_copies?.value || '20');
         refreshPrinters();
@@ -10356,14 +10350,8 @@
       box.textContent = t('google_checking');
       try {
         const r = await fetch(`${API}/personal/status`).then(res => res.json());
-        const c = r.calendar || {}, g = r.gmail || {};
-        const lines = [
-          !c.configured ? t('google_cal_missing')
-            : c.ok ? `✅ ${t('google_cal_ok')} · ${c.events_7d}` : `⚠️ ${c.error}`,
-          !g.configured ? t('google_mail_missing')
-            : g.ok ? `✅ Gmail · ${t('google_mail_ok')} ${g.unread_primary_24h}` : `⚠️ ${g.error}`,
-        ];
-        box.innerHTML = lines.map(escHtml).join('<br>');
+        box.textContent = !r.configured ? t('google_not_configured')
+          : `✅ ${t('google_ready')} · ${t('google_linked')} ${r.linked ?? 0}`;
       } catch (e) {
         box.textContent = '⚠️ ' + e;
       }
@@ -11256,9 +11244,8 @@
         ha_language:              document.getElementById('inp_ha_language')?.value.trim() ?? '',
         ha_confirm_domains:       document.getElementById('inp_ha_confirm_domains')?.value.trim() ?? '',
         xiaoai_entity:            document.getElementById('inp_xiaoai_entity')?.value.trim() ?? '',
-        google_ical_url:          document.getElementById('inp_google_ical_url')?.value.trim() ?? '',
-        gmail_address:            document.getElementById('inp_gmail_address')?.value.trim() ?? '',
-        gmail_app_password:       document.getElementById('inp_gmail_app_password')?.value.replace(/\s+/g, '') ?? '',
+        google_client_id:         document.getElementById('inp_google_client_id')?.value.trim() ?? '',
+        google_client_secret:     document.getElementById('inp_google_client_secret')?.value.trim() ?? '',
         print_max_copies:         document.getElementById('inp_print_max_copies')?.value || '20',
       };
       // Most settings shouldn't be overwritten with a blank on save
@@ -11273,7 +11260,7 @@
         'smtp_host', 'smtp_user', 'smtp_password', 'smtp_from',
         'webhook_secret', 'printer_name',
         'ha_token', 'ha_confirm_domains', 'xiaoai_entity',
-        'google_ical_url', 'gmail_address', 'gmail_app_password',
+        'google_client_id', 'google_client_secret',
       ]);
       Object.keys(payload).forEach(k => {
         if (payload[k] === '' && !ALLOW_EMPTY.has(k)) delete payload[k];

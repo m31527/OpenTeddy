@@ -468,19 +468,14 @@ SETTINGS_META: dict[str, dict[str, Any]] = {
         "description": "Optional path to `claude`; found automatically when empty.",
         "type":        "text",
     },
-    "google_ical_url": {
-        "label":       "Google Calendar secret iCal address",
-        "description": "Google Calendar → Settings → the calendar → Integrate calendar → Secret address in iCal format.",
-        "type":        "secret",
-    },
-    "gmail_address": {
-        "label":       "Gmail address",
-        "description": "The Gmail account to read (read-only, over IMAP).",
+    "google_client_id": {
+        "label":       "Google OAuth client ID",
+        "description": "Google Cloud → APIs & Services → Credentials → OAuth client (Desktop app). Each person then links their own account from Telegram.",
         "type":        "text",
     },
-    "gmail_app_password": {
-        "label":       "Gmail app password",
-        "description": "Google Account → Security → 2-Step Verification → App passwords.",
+    "google_client_secret": {
+        "label":       "Google OAuth client secret",
+        "description": "The same OAuth client's secret.",
         "type":        "secret",
     },
     "telegram_default_chat_id": {
@@ -606,9 +601,8 @@ def _defaults_from_config() -> dict[str, str]:
         "claude_code_allowed_tools": str(getattr(config, "claude_code_allowed_tools", "")),
         "claude_code_timeout":       str(getattr(config, "claude_code_timeout", 1800)),
         "claude_code_bin":           str(getattr(config, "claude_code_bin", "")),
-        "google_ical_url":           str(getattr(config, "google_ical_url", "")),
-        "gmail_address":             str(getattr(config, "gmail_address", "")),
-        "gmail_app_password":        str(getattr(config, "gmail_app_password", "")),
+        "google_client_id":          str(getattr(config, "google_client_id", "")),
+        "google_client_secret":      str(getattr(config, "google_client_secret", "")),
         "print_max_copies":          str(getattr(config, "print_max_copies", 20)),
         "telegram_inbound_enabled":  "true" if getattr(config, "telegram_inbound_enabled", False) else "false",
         "telegram_inbound_chat_id_whitelist": str(getattr(config, "telegram_inbound_chat_id_whitelist", "")),
@@ -984,7 +978,7 @@ class SettingsStore:
             config.printer_name = (settings["printer_name"] or "").strip()
         for k in ("ha_url", "ha_token", "ha_language", "ha_confirm_domains", "xiaoai_entity",
                   "claude_code_bin", "claude_code_default_dir", "claude_code_allowed_tools",
-                  "google_ical_url", "gmail_address", "gmail_app_password"):
+                  "google_client_id", "google_client_secret"):
             if k in settings:
                 setattr(config, k, (settings[k] or "").strip())
         vcc = _int("claude_code_timeout")

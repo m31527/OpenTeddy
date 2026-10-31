@@ -80,7 +80,5 @@ APScheduler>=3.10
 # OpenTeddy as an MCP server for Claude Code (`openteddy mcp`). Pinned below 2:
 # mcp 2.x renamed FastMCP and changed the server API.
 mcp>=1.10,<2
-# Google Calendar through its secret iCal address (google_personal.py):
-# parsing, and expanding recurring events into the days asked about.
-icalendar>=5
-recurring-ical-events>=2
+# Per-person Google refresh tokens are encrypted at rest (google_auth.py).
+cryptography>=41

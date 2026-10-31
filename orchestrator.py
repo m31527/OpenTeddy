@@ -978,6 +978,26 @@ class Orchestrator:
         # status" — so an event stream knows when to close.
         await self._emit_task_event("task.started", req, status="running")
 
+        # Whose personal data this task may read: the person behind a
+        # Telegram private chat, or nobody (web / CLI / MCP / group). Bound
+        # for every tool the task calls; see privacy.py.
+        import privacy as _privacy
+        try:
+            _person = await _privacy.resolve(req, self.tracker)
+        except Exception:  # noqa: BLE001
+            _person = None
+        _privacy.begin(req.id, _person)
+
+        # ── 0⁰. Google account: "連結我的 Google", the pasted-back address, "解除 Google" ──
+        try:
+            import google_auth as _ga
+            _g_cmd = _ga.parse_command(req.goal)
+            _g_cb = _ga.parse_callback(req.goal)
+        except Exception:  # noqa: BLE001
+            _g_cmd, _g_cb = None, None
+        if (_g_cmd or _g_cb) and (req.context or {}).get("triggered_by") != "schedule":
+            return await self._google_link(req, _person, _g_cmd, _g_cb)
+
         # ── 0. Direct print: an upload + "我要列印" → printer, no model ──
         # A message that only asks to print (print_intent.py) is done in
         # about a second instead of a planning round. Scheduled runs never
@@ -1046,9 +1066,10 @@ class Orchestrator:
         except Exception:  # noqa: BLE001
             _want_brief, _cal_q, _mail_q = False, None, False
         if _want_brief:          # scheduled 07:30 runs included; asking twice still gets it
-            return await self._finish_direct(req, await _brief.morning_briefing(req.session_id or ""), True)
+            return await self._finish_direct(
+                req, await _brief.morning_briefing(req.session_id or "", _person), True)
         if (_cal_q or _mail_q) and not _again:
-            return await self._personal(req, _cal_q, _mail_q)
+            return await self._personal(req, _cal_q, _mail_q, _person)
 
         # ── 0a‴. Typhoons: "最近有颱風靠近台灣嗎" → JMA's active storms, no model ──
         try:
@@ -1604,25 +1625,69 @@ class Orchestrator:
         except RuntimeError as exc:                     # reminders not started
             return await self._finish_direct(req, f"❌ 提醒功能沒有啟動：{exc}", False)
 
-    async def _personal(self, req: TaskRequest, cal_q: Any, mail_q: bool) -> TaskResult:
-        """今天有什麼行程 / 有什麼新信 — Google calendar and Gmail, read-only."""
+    async def _personal(self, req: TaskRequest, cal_q: Any, mail_q: bool,
+                        person: Optional[str] = None) -> TaskResult:
+        """今天有什麼行程 / 有什麼新信 — the asking person's own Google
+        calendar and Gmail, read-only. Nobody's in the web UI or a group."""
+        import google_auth as GA
         import google_personal as G
+        if not person:
+            return await self._finish_direct(req, G.ONLY_TELEGRAM, False)
+        if not GA.configured():
+            return await self._finish_direct(req, "📅 " + GA.NOT_CONFIGURED, False)
         try:
             if cal_q:
                 first, days, label = cal_q
-                if not G.calendar_configured():
-                    return await self._finish_direct(
-                        req, "📅 還沒連接 Google 行事曆：Google 日曆 → 設定 → 你的日曆 → 整合日曆 → "
-                             "複製「iCal 格式的私人網址」，貼到 OpenTeddy Settings → Google。", False)
-                evs = await G.events_for_days(first, days)
+                evs = await G.events_for_days(first, days, person)
                 return await self._finish_direct(req, G.describe_events(evs, label, multi_day=days > 1), True)
-            if not G.gmail_configured():
-                return await self._finish_direct(
-                    req, "✉️ 還沒連接 Gmail：Google 帳戶 → 安全性 → 兩步驟驗證 → 應用程式密碼，"
-                         "建立一組後和 Gmail 地址一起貼到 OpenTeddy Settings → Google。", False)
-            return await self._finish_direct(req, G.describe_mail(await G.unread()), True)
+            return await self._finish_direct(req, G.describe_mail(await G.unread(person=person)), True)
         except G.PersonalError as exc:
             return await self._finish_direct(req, f"❌ {exc}", False)
+
+    async def _google_link(self, req: TaskRequest, person: Optional[str],
+                           cmd: Optional[str], callback: Any) -> TaskResult:
+        """Link / unlink this person's Google account (google_auth.py)."""
+        import google_auth as GA
+        import google_personal as G
+        if not person:
+            return await self._finish_direct(req, G.ONLY_TELEGRAM, False)
+        try:
+            if callback:
+                res = await GA.finish(person, *callback)
+                miss = []
+                if GA.CAL_SCOPE in res["missing"]:
+                    miss.append("行事曆")
+                if GA.MAIL_SCOPE in res["missing"]:
+                    miss.append("Gmail")
+                msg = f"✅ 已連結 Google：{res['email'] or '你的帳號'}（唯讀）"
+                if miss:
+                    msg += (f"\n⚠️ 你沒有允許讀取{'和'.join(miss)}，這部分用不了。"
+                            "要補的話重新說「連結我的 Google」，兩項都勾選。")
+                msg += "\n現在可以問「今天有什麼行程」「有什麼新信」「早安簡報」。解除請說「解除 Google」。"
+                return await self._finish_direct(req, msg, True)
+            if cmd == "unlink":
+                email = await GA.unlink(person)
+                return await self._finish_direct(
+                    req, f"🗑 已解除 Google 連結（{email}），授權也已在 Google 撤銷。" if email
+                    else "你沒有連結 Google。", True)
+            if cmd == "status":
+                acct = await GA.account(person)
+                if not acct:
+                    return await self._finish_direct(req, "你還沒連結 Google。說「連結我的 Google」就可以開始。", True)
+                state = "正常" if acct["status"] == "ok" else "已失效，請重新說「連結我的 Google」"
+                return await self._finish_direct(req, f"🔗 已連結 {acct['email']}（{state}）", True)
+            url = GA.begin(person)
+            return await self._finish_direct(req, (
+                "🔗 連結你的 Google（唯讀：行事曆、Gmail）：\n"
+                f"1. 打開這個連結並登入：{url}\n"
+                "2. 出現「Google 尚未驗證這個應用程式」時，按「進階」→「前往」；同意畫面兩項都勾選。\n"
+                "3. 最後會停在一個打不開的頁面（127.0.0.1）。**複製那一頁的網址，貼回這裡**就完成了。\n"
+                "連結 15 分鐘內有效、只能用一次。若 Telegram 內建瀏覽器顯示「已封鎖」，請改用 Safari 或 Chrome 開啟。"
+            ), True)
+        except GA.GoogleAuthError as exc:
+            return await self._finish_direct(req, f"❌ {exc}", False)
+        except RuntimeError as exc:                     # google_auth not started
+            return await self._finish_direct(req, f"❌ Google 連結功能沒有啟動：{exc}", False)
 
     async def _typhoon(self, req: TaskRequest, zh: bool) -> TaskResult:
         import typhoon

@@ -1,6 +1,11 @@
 """
-OpenTeddy Personal Tools — your Google calendar and Gmail (read-only) and
-one-shot reminders.
+OpenTeddy Personal Tools — the asking person's own Google calendar and
+Gmail (read-only) and one-shot reminders.
+
+Whose data is never a tool argument: it is the person behind this task's
+Telegram private chat (privacy.py). From the web UI, CLI, MCP or a group
+the calendar and Gmail tools refuse, and a task that uses them is marked
+private (its answer isn't stored or shown in the web UI).
 
 Short questions ("今天有什麼行程", "有什麼新信", "明天 9 點提醒我…") are
 answered before planning. These tools are for the same data as one step
@@ -72,9 +77,10 @@ _SCHEMA_CAL: Dict[str, Any] = {
     "function": {
         "name": "calendar_events",
         "description": (
-            "The user's Google Calendar events (read-only): times, titles, locations, with "
-            "recurring events expanded. Use for anything that depends on what the user has "
-            "scheduled. Can't create or change events."
+            "The asking person's Google Calendar events (read-only, all calendars they show): "
+            "times, titles, locations, recurring events expanded. Use for anything that depends "
+            "on their schedule. Only works in their Telegram private chat. Can't create or "
+            "change events."
         ),
         "parameters": {"type": "object", "properties": {
             "start_date": {"type": "string", "description": "YYYY-MM-DD; empty = today"},
@@ -88,9 +94,10 @@ _SCHEMA_MAIL: Dict[str, Any] = {
     "function": {
         "name": "gmail_unread",
         "description": (
-            "Senders, subjects and times of the user's Gmail messages (read-only; nothing is "
-            "marked read). `query` is Gmail search syntax; default = unread in Primary from the "
-            "last 24 hours. Can't send, reply or delete."
+            "Senders, subjects and times of the asking person's Gmail messages (read-only; "
+            "nothing is marked read). `query` is Gmail search syntax; default = unread in "
+            "Primary from the last 24 hours. Only works in their Telegram private chat. "
+            "Can't send, reply or delete."
         ),
         "parameters": {"type": "object", "properties": {
             "query": {"type": "string", "description": "Gmail search, e.g. 'is:unread from:bank newer_than:7d'"},

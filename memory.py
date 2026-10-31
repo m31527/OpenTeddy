@@ -328,7 +328,11 @@ class MemoryManager:
         Called automatically after a task completes.
         Stores a task-result summary and any detected user preferences,
         tagged with *session_id* so retrieval is scoped to the same thread.
+        A task that read someone's calendar or mail is not kept (privacy.py).
         """
+        import privacy
+        if privacy.is_private(task_id):
+            return
         if not self.is_available:
             return
 

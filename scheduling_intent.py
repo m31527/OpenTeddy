@@ -351,6 +351,10 @@ async def detect_scheduling_intent(
     """
     if not regex_might_be_schedule(text):
         return None
+    # A pasted-back Google sign-in address ("127.0.0.1:8749/?…code=…")
+    # matches the clock pattern; it is never a schedule.
+    if "code=" in text and "state=" in text:
+        return None
     # "明天 9 點提醒我…" happens once: reminders.py, not a cron job.
     try:
         from reminders import parse_reminder
