@@ -234,7 +234,7 @@ async def test_data() -> None:
     try:
         await G.events_for_days(TODAY, 1, BOB); raise AssertionError("not linked")
     except G.PersonalError as exc:
-        assert "還沒連結 Google" in str(exc)
+        assert "要連結你的 Google" in str(exc) and "不連結也沒關係" in str(exc)
     pm = G.parse_mail_question
     for t in ("有什麼新信", "有重要的信嗎", "gmail 有沒有新信", "check my email"):
         assert pm(t), t
@@ -445,7 +445,8 @@ async def test_briefing() -> None:
     text = await briefing.morning_briefing("s-web", None)
     assert "看牙醫" not in text and "信用卡" not in text and "連結我的 Google" not in text, "web: nobody's data"
     text = await briefing.morning_briefing("s2", BOB)
-    assert "看牙醫" not in text and "說「連結我的 Google」" in text, "not linked → how to add it"
+    assert "看牙醫" not in text and "Google" not in text and "☀️ 早安" in text, \
+        "no Google: a complete briefing, no nagging"
     async def boom(place=""): raise RuntimeError("Open-Meteo down")
     weather.brief = boom
     async def calm(): return [{"name": "FAR", "distance": 2500, "forecast": [(24, (30, 150), 2900)]}]
@@ -457,7 +458,7 @@ async def test_briefing() -> None:
     assert briefing.parse_briefing_request("早安簡報") and briefing.parse_briefing_request("產生早安簡報")
     for t in ("幫我做一份簡報", "每天早上 7:30 給我早安簡報", "早安簡報怎麼設定"):
         assert not briefing.parse_briefing_request(t), t
-    print("  ✓ web: nobody's data; not linked: a hint; a failing part is one line; requests parsed")
+    print("  ✓ web: nobody's data; no Google: complete, no nagging; a failing part is one line; requests parsed")
 
 
 async def test_orchestrator() -> None:
@@ -508,7 +509,7 @@ async def test_orchestrator() -> None:
     print("  ✓ reminder: create (with the chat), ask for a time, list, cancel; scheduled goals skip it")
 
     res = await run("今天有什麼行程", origin="", chat="777")
-    assert res.status == TaskStatus.FAILED and "只在本人的 Telegram 私訊" in res.summary, "web: refused"
+    assert res.status == TaskStatus.COMPLETED and "只在本人的 Telegram 私訊" in res.summary, "web: not here"
     res = await run("連結我的 Google", origin="telegram", chat="-55")
     assert "只在本人的 Telegram 私訊" in res.summary, "group: refused"
     res = await run("連結我的 Google")
@@ -531,13 +532,18 @@ async def test_orchestrator() -> None:
     res = await run("解除 Google")
     assert res.summary.startswith("🗑 已解除") and "rt-secret-123" in GOOG["revoked"]
     res = await run("今天有什麼行程")
-    assert res.status == TaskStatus.FAILED and "還沒連結 Google" in res.summary
+    assert res.status == TaskStatus.COMPLETED and "不連結也沒關係" in res.summary, \
+        "not linked is an answer, not a failure"
+    res = await run("明天早上8點提醒我倒垃圾")
+    assert res.status == TaskStatus.COMPLETED and "倒垃圾" in res.summary, "everything else works without Google"
+    res = await run("早安簡報")
+    assert res.summary.startswith("☀️ 早安！") and "看牙醫" not in res.summary
     saved = config.google_client_secret
     config.google_client_secret = ""
     res = await run("今天有什麼行程")
-    assert "還沒設定 Google 登入" in res.summary
+    assert "沒有開啟 Google" in res.summary and "Google Cloud" not in res.summary, "no setup steps for a family member"
     config.google_client_secret = saved
-    print("  ✓ link from Telegram, paste back, calendar / mail / briefing; web and groups refused; unlink")
+    print("  ✓ link from Telegram, paste back, calendar / mail / briefing; web, groups, unlinked: told, not failed")
 
     import scheduling_intent
     async def no_llm(text): raise AssertionError("LLM called")
@@ -573,6 +579,45 @@ async def test_tools_and_logs() -> None:
     print("  ✓ agent tools follow the person (refused from the web); sign-in codes masked in logs")
 
 
+async def test_tool_list() -> None:
+    """The agent only sees calendar / Gmail tools when this person can use them."""
+    import executor as EX
+    from tool_registry import tool_registry
+    tool_registry.auto_register_all()
+    names = [t["function"]["name"] for t in tool_registry.get_schemas()]
+    assert set(names[-3:]) == {"calendar_events", "gmail_unread", "reminder_create"}, \
+        "personal tools are registered last, so hiding them keeps the cached prompt prefix"
+
+    class _Http:
+        def __init__(self): self.tools = None
+        async def post(self, url, json=None, **k):
+            self.tools = [t["function"]["name"] for t in (json.get("tools") or [])]
+            class _R:
+                def raise_for_status(self): pass
+                def json(self): return {"message": {"content": '{"result": "ok", "confidence": 0.9}'},
+                                        "prompt_eval_count": 10, "eval_count": 5}
+            return _R()
+        async def aclose(self): pass
+
+    class _Tr:
+        async def record_usage(self, **k): pass
+    config.streaming_enabled = False
+    seen = {}
+    for label, person in (("web", None), ("linked", ALICE), ("unlinked", BOB)):
+        ex = EX.Executor(tracker=_Tr(), skill_factory=None)
+        await ex._http.aclose()
+        ex._http = _Http()
+        privacy.begin(f"tl-{label}", person)
+        await ex._qwen_execute("x", {}, task_id=f"tl-{label}", mode="code")
+        seen[label] = set(ex._http.tools)
+    personal = {"calendar_events", "gmail_unread"}
+    assert personal <= seen["linked"], seen["linked"] & personal
+    assert not personal & seen["web"] and not personal & seen["unlinked"]
+    assert "reminder_create" in seen["unlinked"] and "web_search" in seen["unlinked"], "everything else stays"
+    assert await GA.granted(BOB) == set() and GA.MAIL_SCOPE in await GA.granted(ALICE)
+    print("  ✓ calendar / Gmail tools only for a person who linked them; others keep every other tool")
+
+
 async def main() -> None:
     from tracker import Tracker
     srv = ThreadingHTTPServer(("127.0.0.1", 0), _Google)
@@ -589,7 +634,7 @@ async def main() -> None:
         print("D. privacy"); await test_storage(tracker)
         print("E. reminders"); test_parse_reminders(); await test_reminder_store(tracker)
         print("F. briefing / orchestrator / tools"); await test_briefing(); await test_orchestrator()
-        await test_tools_and_logs()
+        await test_tools_and_logs(); await test_tool_list()
     finally:
         await R.stop()
         await tracker.close()

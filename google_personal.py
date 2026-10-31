@@ -36,6 +36,19 @@ ONLY_TELEGRAM = ("🔒 個人的行事曆和信件只在本人的 Telegram 私�
                  "在 Telegram 私訊 bot 說「連結我的 Google」就可以開始。")
 
 
+# Agent tools that need the person's Google, and the grant each needs. They
+# are left out of the tool list for anyone without it, so a person who
+# never linked Google doesn't see tools that can only fail for them.
+TOOL_SCOPES = {"calendar_events": GA.CAL_SCOPE, "gmail_unread": GA.MAIL_SCOPE}
+
+
+async def unusable_tools() -> set:
+    """Names of TOOL_SCOPES this task's person can't use (all of them for
+    nobody / not linked)."""
+    have = await GA.granted(privacy.current_person())
+    return {name for name, scope in TOOL_SCOPES.items() if scope not in have}
+
+
 class PersonalError(Exception):
     """A Google read that failed, with a message for the person."""
 

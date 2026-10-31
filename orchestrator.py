@@ -1631,10 +1631,15 @@ class Orchestrator:
         calendar and Gmail, read-only. Nobody's in the web UI or a group."""
         import google_auth as GA
         import google_personal as G
+        # Not available here is an answer, not a failure: someone without
+        # Google (or on the web UI) uses everything else as usual.
         if not person:
-            return await self._finish_direct(req, G.ONLY_TELEGRAM, False)
+            return await self._finish_direct(req, G.ONLY_TELEGRAM, True)
         if not GA.configured():
-            return await self._finish_direct(req, "📅 " + GA.NOT_CONFIGURED, False)
+            return await self._finish_direct(req, "📅 " + GA.NOT_CONFIGURED, True)
+        acct = await GA.account(person)
+        if not acct:
+            return await self._finish_direct(req, GA.NOT_LINKED, True)
         try:
             if cal_q:
                 first, days, label = cal_q
@@ -1650,7 +1655,7 @@ class Orchestrator:
         import google_auth as GA
         import google_personal as G
         if not person:
-            return await self._finish_direct(req, G.ONLY_TELEGRAM, False)
+            return await self._finish_direct(req, G.ONLY_TELEGRAM, True)
         try:
             if callback:
                 res = await GA.finish(person, *callback)
@@ -1673,7 +1678,7 @@ class Orchestrator:
             if cmd == "status":
                 acct = await GA.account(person)
                 if not acct:
-                    return await self._finish_direct(req, "你還沒連結 Google。說「連結我的 Google」就可以開始。", True)
+                    return await self._finish_direct(req, "你沒有連結 Google（不連結也可以照常使用其他功能）。", True)
                 state = "正常" if acct["status"] == "ok" else "已失效，請重新說「連結我的 Google」"
                 return await self._finish_direct(req, f"🔗 已連結 {acct['email']}（{state}）", True)
             url = GA.begin(person)

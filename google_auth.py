@@ -68,8 +68,11 @@ def configured() -> bool:
                 and (getattr(config, "google_client_secret", "") or "").strip())
 
 
-NOT_CONFIGURED = ("OpenTeddy 還沒設定 Google 登入：管理者要先在 Google Cloud 建立 OAuth 用戶端，"
-                  "把用戶端 ID 和密鑰貼到 Settings → 📅 Google（步驟見 README「個人助理」）。")
+# Said to a person: the feature just isn't on here. Setup steps are for the
+# owner (Settings → 📅 Google, README "Personal assistant"), not for them.
+NOT_CONFIGURED = "這台 OpenTeddy 沒有開啟 Google 行事曆／Gmail 功能（管理者可以在 Settings → 📅 Google 開啟）。"
+NOT_LINKED = ("📅 這要連結你的 Google 帳號才查得到。想用的話說「連結我的 Google」；"
+              "不連結也沒關係，其他功能都照常可以用。")
 
 
 # ── Encryption at rest ───────────────────────────────────────────────────────
@@ -116,6 +119,21 @@ async def account(person: str) -> Optional[Dict[str, Any]]:
                           (person,)) as cur:
         row = await cur.fetchone()
     return dict(row) if row else None
+
+
+async def granted(person: Optional[str]) -> set:
+    """The scopes this person granted and can still use; empty when they
+    never linked, unlinked, or the link expired. Linking is optional:
+    without it they just don't get calendar and mail."""
+    if not person or not configured():
+        return set()
+    try:
+        acct = await account(person)
+    except Exception:  # noqa: BLE001
+        return set()
+    if not acct or acct.get("status") != "ok":
+        return set()
+    return set((acct.get("scopes") or "").split())
 
 
 async def count() -> int:
@@ -252,7 +270,7 @@ async def access_token(person: str, force: bool = False) -> str:
     async with db.execute("SELECT refresh_token, status FROM google_accounts WHERE person=?", (person,)) as cur:
         row = await cur.fetchone()
     if not row:
-        raise GoogleAuthError("你還沒連結 Google。在這裡說「連結我的 Google」就可以開始。")
+        raise GoogleAuthError(NOT_LINKED)
     if row["status"] != "ok":
         raise GoogleAuthError("你的 Google 連結已失效，請重新說「連結我的 Google」。")
     async with httpx.AsyncClient(timeout=20.0) as client:

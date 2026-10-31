@@ -808,6 +808,16 @@ class Executor:
             tools = self.registry.get_schemas_by_names(_scope)
         else:
             tools = self.registry.get_schemas()
+        # Calendar / Gmail only for a person who linked Google (privacy.py);
+        # for everyone else those tools don't exist. They are registered
+        # last, so leaving them out doesn't change the cached prompt prefix.
+        try:
+            from google_personal import unusable_tools as _unusable
+            _hide = await _unusable()
+            if _hide and tools:
+                tools = [t for t in tools if (t.get("function") or {}).get("name") not in _hide]
+        except Exception:  # noqa: BLE001
+            pass
         objective_failure_seen = False
 
         # Duplicate-call tracker. Small local models (Qwen 2.5 3B) routinely

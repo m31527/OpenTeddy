@@ -102,7 +102,8 @@ async def _home() -> Optional[str]:
 
 async def morning_briefing(session_id: str = "", person: Optional[str] = None) -> str:
     """The briefing for one conversation: its reminders, and — for a person
-    in their Telegram private chat who linked Google — their calendar and mail."""
+    in their Telegram private chat who linked Google — their calendar and
+    mail. Without Google it's weather, typhoons, reminders and the house."""
     import google_auth as GA
     today = datetime.now().date()
     linked = None
@@ -117,7 +118,7 @@ async def morning_briefing(session_id: str = "", person: Optional[str] = None) -
         _part("提醒", _reminders(session_id)), _part("Gmail", _mail(linked)), _part("家裡設備", _home()),
     )
     lines: List[str] = [f"☀️ 早安！今天是 {today.month}/{today.day}（週{_WEEKDAY[today.weekday()]}）"]
+    # No Google linked = no calendar / mail parts, and no reminder about it
+    # either: linking is optional, the briefing is complete without it.
     lines += [p for p in parts if p]
-    if person and not linked:
-        lines.append("（說「連結我的 Google」，簡報就會加上你的行程和未讀信）")
     return "\n\n".join(lines)

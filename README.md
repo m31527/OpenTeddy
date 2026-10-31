@@ -1136,6 +1136,11 @@ client can't fake it). A person is that chat.
   database, mode 600) and never shown anywhere.
 - Reminders, and the morning briefing's reminders, belong to the
   conversation that set them.
+- Linking is optional. Someone who never links Google uses everything
+  else as usual: their briefing is weather, typhoons, reminders and the
+  house, with no prompt to link; asking for their calendar gets a short
+  answer instead of a failure; and the agent doesn't even see the
+  calendar / Gmail tools for them.
 - The web UI itself still has no login: anyone who can open it sees
   other sessions' non-personal history. Keep it on your LAN / tailnet.
 
