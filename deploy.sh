@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # deploy.sh — ship what's on GitHub main to a machine that runs OpenTeddy.
 #
-#   ./deploy.sh home                    # m31527@192.168.50.86:/home/m31527/OpenTeddy
+#   ./deploy.sh home                    # m31527@10.255.147.17:/home/m31527/OpenTeddy (NetBird)
+#   ./deploy.sh demo                    # m31527@10.255.131.73:/home/m31527/OpenTeddy (NetBird)
 #   ./deploy.sh user@host[:/path]       # any other machine (default path ~/OpenTeddy)
 #   ./deploy.sh home --system           # the service was installed with --system
 #   ./deploy.sh home --restart          # restart even when nothing changed
@@ -18,18 +19,20 @@
 # Add a target: one more line in the case block below.
 set -euo pipefail
 
-usage() { sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+usage() { sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
 
 [[ $# -ge 1 ]] || usage 1
 case "$1" in
   -h|--help) usage 0 ;;
-  home) HOST="m31527@192.168.50.86"; REMOTE_DIR="/home/m31527/OpenTeddy" ;;
+  # NetBird addresses: reachable from anywhere on the mesh, not only the home LAN.
+  home) HOST="m31527@10.255.147.17"; REMOTE_DIR="/home/m31527/OpenTeddy" ;;
+  demo) HOST="m31527@10.255.131.73"; REMOTE_DIR="/home/m31527/OpenTeddy" ;;
   *@*)
     HOST="${1%%:*}"
     REMOTE_DIR="${1#*:}"
     [[ "$REMOTE_DIR" == "$1" ]] && REMOTE_DIR="OpenTeddy"   # no ":path" given
     ;;
-  *) echo "unknown target '$1' (use home, or user@host[:/path])" >&2; exit 1 ;;
+  *) echo "unknown target '$1' (use home, demo, or user@host[:/path])" >&2; exit 1 ;;
 esac
 shift
 SYSTEM=0; RESTART=0; AUTOSTASH=0

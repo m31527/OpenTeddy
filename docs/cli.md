@@ -143,7 +143,8 @@ openteddy update                             # git pull → 需要時裝依賴 �
 從開發機一鍵部署到另一台機器(先 `git push`,目標機會從 GitHub 拉):
 
 ```bash
-./deploy.sh home                 # m31527@192.168.50.86:/home/m31527/OpenTeddy
+./deploy.sh home                 # m31527@10.255.147.17:/home/m31527/OpenTeddy（NetBird）
+./deploy.sh demo                 # m31527@10.255.131.73:/home/m31527/OpenTeddy（NetBird）
 ./deploy.sh user@host:/path      # 其他機器
 ./deploy.sh home --autostash     # 目標機有本地修改、而這次更新剛好動到同一個檔案
 ```
