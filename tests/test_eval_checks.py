@@ -123,6 +123,41 @@ def test_approvals_and_summary() -> None:
     print("  ✓ deletes refused, other approvals granted; pass / false-success / stability summarized")
 
 
+def test_executor_switch() -> None:
+    import httpx
+    settings = {"executor_model": "qwen3.8:27b"}
+    posted = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET" and request.url.path == "/settings":
+            return httpx.Response(200, json={"data": {"executor_model": {"value": settings["executor_model"]}}})
+        if request.method == "POST" and request.url.path == "/settings":
+            body = json.loads(request.content)
+            settings.update(body)
+            posted.append(body["executor_model"])
+            return httpx.Response(200, json={"success": True})
+        return httpx.Response(404)
+    client = httpx.Client(base_url="http://ot", transport=httpx.MockTransport(handler))
+    warm = []
+    real_get, real_post = RE.httpx.get, RE.httpx.post
+    RE.httpx.get = lambda url, **k: httpx.Response(200, json={"models": [{"name": "qwen3.6:35b"}]},
+                                                   request=httpx.Request("GET", url))
+    RE.httpx.post = lambda url, **k: warm.append(k["json"]["model"]) or httpx.Response(200, request=httpx.Request("POST", url))
+    try:
+        try:
+            RE.switch_executor(client, "qwen9:999b", "http://ollama"); raise AssertionError("missing model")
+        except SystemExit as exc:
+            assert "doesn't have qwen9:999b" in str(exc) and settings["executor_model"] == "qwen3.8:27b"
+        before = RE.switch_executor(client, "qwen3.6:35b", "http://ollama")
+        assert before == "qwen3.8:27b" and settings["executor_model"] == "qwen3.6:35b" and warm == ["qwen3.6:35b"]
+        RE.restore_executor(client, before)
+        assert settings["executor_model"] == "qwen3.8:27b" and posted == ["qwen3.6:35b", "qwen3.8:27b"]
+    finally:
+        RE.httpx.get, RE.httpx.post = real_get, real_post
+    print("  ✓ --executor: refuses a model Ollama lacks, loads it first, and puts the old one back")
+
+
 test_tasks()
 test_approvals_and_summary()
+test_executor_switch()
 print("\nALL EVAL CHECK TESTS PASS")

@@ -10,6 +10,7 @@ the per-call timings from there.
     .venv/bin/python tests/eval/run_eval.py                    # all tasks, once
     .venv/bin/python tests/eval/run_eval.py --runs 3           # stability: 3 runs each
     .venv/bin/python tests/eval/run_eval.py --only code_slugify,doc_contract
+    .venv/bin/python tests/eval/run_eval.py --executor qwen3.6:35b   # this model for the run, then back
     .venv/bin/python tests/eval/run_eval.py --compare results/a.json results/b.json
 
 Approvals are answered automatically, except deletes and other dangerous
@@ -26,6 +27,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import sqlite3
 import statistics
 import subprocess
@@ -70,6 +72,41 @@ def cool_down(max_temp: int, cool_to: int) -> float:
         if t is None or t <= cool_to:
             break
     return time.monotonic() - t0
+
+
+# ── Trying another executor model ────────────────────────────────────────────
+
+def switch_executor(client: httpx.Client, model: str, ollama: str) -> str:
+    """Make `model` the executor for this run; returns the one to put back.
+    Refuses a model Ollama doesn't have, and loads it before the first task
+    so the first task's time isn't the model loading."""
+    tags = httpx.get(f"{ollama}/api/tags", timeout=15).json().get("models", [])
+    if model not in {m.get("name") for m in tags}:
+        raise SystemExit(f"✗ Ollama doesn't have {model} — pull it first (ollama pull {model})")
+    before = ((client.get("/settings", timeout=15).json().get("data") or {}).get("executor_model") or {}).get("value", "")
+    r = client.post("/settings", json={"executor_model": model}, timeout=30).json()
+    if not r.get("success"):
+        raise SystemExit(f"✗ couldn't switch the executor: {r.get('error')}")
+    print(f"   executor {before} → {model} (put back afterwards); loading it…", flush=True)
+    try:
+        httpx.post(f"{ollama}/api/chat", timeout=600, json={
+            "model": model, "messages": [{"role": "user", "content": "hi"}], "stream": False,
+            "keep_alive": "24h", "options": {"num_predict": 1, "num_ctx": 16384}})
+    except httpx.HTTPError as exc:
+        print(f"   (warm-up failed: {exc})")
+    return before
+
+
+def restore_executor(client: httpx.Client, model: str) -> None:
+    for _ in range(5):
+        try:
+            if client.post("/settings", json={"executor_model": model}, timeout=30).json().get("success"):
+                print(f"   executor put back to {model}")
+                return
+        except httpx.HTTPError:
+            pass
+        time.sleep(10)
+    print(f"⚠ couldn't put the executor back to {model} — set it in Settings")
 
 
 # ── One task ─────────────────────────────────────────────────────────────────
@@ -276,6 +313,8 @@ def main() -> int:
     ap.add_argument("--max-temp", type=int, default=80)
     ap.add_argument("--cool-to", type=int, default=65)
     ap.add_argument("--keep-sessions", action="store_true", help="don't delete the eval sessions afterwards")
+    ap.add_argument("--executor", default="", help="run with this executor model, then put the previous one back")
+    ap.add_argument("--ollama", default=os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434"))
     ap.add_argument("--compare", nargs=2, metavar=("A.json", "B.json"))
     args = ap.parse_args()
     if args.compare:
@@ -298,8 +337,22 @@ def main() -> int:
     except Exception as exc:  # noqa: BLE001
         print(f"✗ OpenTeddy not reachable at {args.server}: {exc}")
         return 1
+    # A stop (timer, Ctrl+C) still puts the executor back: SIGTERM → finally.
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
+    restore = ""
+    if args.executor and args.executor != meta["executor"]:
+        restore = switch_executor(client, args.executor, args.ollama.rstrip("/"))
+        meta["executor"] = args.executor
     print(f"Eval {stamp}: {len(tasks)} tasks × {args.runs} on {meta['executor']} / {meta['planner']}")
+    try:
+        return _run_all(client, tasks, args, meta, stamp)
+    finally:
+        if restore:
+            restore_executor(client, restore)
 
+
+def _run_all(client: httpx.Client, tasks: List[Dict[str, Any]], args: argparse.Namespace,
+             meta: Dict[str, Any], stamp: str) -> int:
     results: List[Dict[str, Any]] = []
     cooled = 0.0
     for run in range(1, args.runs + 1):
@@ -318,10 +371,11 @@ def main() -> int:
     s = summarize(results)
     out_dir = os.path.join(HERE, "results")
     os.makedirs(out_dir, exist_ok=True)
-    with open(os.path.join(out_dir, f"{stamp}.json"), "w", encoding="utf-8") as fh:
+    name = f"{stamp}-{(meta.get('executor') or 'model').replace(':', '_').replace('/', '_')}"
+    with open(os.path.join(out_dir, f"{name}.json"), "w", encoding="utf-8") as fh:
         json.dump({"meta": meta, "summary": s, "results": results}, fh, ensure_ascii=False, indent=2)
     md = markdown(meta, s, results)
-    with open(os.path.join(out_dir, f"{stamp}.md"), "w", encoding="utf-8") as fh:
+    with open(os.path.join(out_dir, f"{name}.md"), "w", encoding="utf-8") as fh:
         fh.write(md)
     if not args.keep_sessions:
         for r in results:
@@ -331,7 +385,7 @@ def main() -> int:
                 except httpx.HTTPError:
                     pass
     print("\n" + md)
-    print(f"→ {os.path.join(out_dir, stamp + '.md')}")
+    print(f"→ {os.path.join(out_dir, name + '.md')}")
     return 0
 
 
