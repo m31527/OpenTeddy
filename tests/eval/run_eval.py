@@ -170,6 +170,16 @@ def usage(db_path: str, task_id: str) -> Dict[str, Any]:
     return {k: round(v, 2) if isinstance(v, float) else v for k, v in out.items()}
 
 
+def ensure_fixtures(tasks: List[Dict[str, Any]]) -> None:
+    """Rebuild the inputs if any is missing (they're generated, and a
+    *.db ignore rule once kept shop.db off a machine)."""
+    need = {n for t in tasks for n in t.get("files", [])}
+    if any(not os.path.exists(os.path.join(HERE, "fixtures", n)) for n in need):
+        print("   rebuilding fixtures (make_fixtures.py)", flush=True)
+        subprocess.run([sys.executable, os.path.join(HERE, "make_fixtures.py")], check=True,
+                       capture_output=True)
+
+
 def run_task(client: httpx.Client, task: Dict[str, Any], ws: str, args: argparse.Namespace) -> Dict[str, Any]:
     os.makedirs(ws, exist_ok=True)
     for name in task.get("files", []):
@@ -237,7 +247,7 @@ def summarize(results: List[Dict[str, Any]]) -> Dict[str, Any]:
     by_cat: Dict[str, List[bool]] = {}
     by_task: Dict[str, List[bool]] = {}
     for r in results:
-        by_cat.setdefault(r.get("category", "?"), []).append(r["passed"])
+        by_cat.setdefault(r.get("category") or "?", []).append(r["passed"])
         by_task.setdefault(r["id"], []).append(r["passed"])
     return {
         "runs": len(results),
@@ -283,6 +293,22 @@ def markdown(meta: Dict[str, Any], s: Dict[str, Any], results: List[Dict[str, An
         L.append(f"| {r['id']} | {mark} | {r.get('status')}{' ⌛' if r.get('timed_out') else ''} | "
                  f"{r['seconds']}{' 🐢' if r.get('slow') else ''} | {r.get('llm_calls', 0)} | {bad.replace('|', '/')[:200]} |")
     return "\n".join(L) + "\n"
+
+
+def _save(meta: Dict[str, Any], results: List[Dict[str, Any]], stamp: str, partial: bool = False):
+    out_dir = os.path.join(HERE, "results")
+    os.makedirs(out_dir, exist_ok=True)
+    name = f"{stamp}-{(meta.get('executor') or 'model').replace(':', '_').replace('/', '_')}"
+    s = summarize(results)
+    with open(os.path.join(out_dir, f"{name}.json"), "w", encoding="utf-8") as fh:
+        json.dump({"meta": dict(meta, partial=partial), "summary": s, "results": results}, fh,
+                  ensure_ascii=False, indent=2)
+    md = markdown(meta, s, results)
+    if partial:
+        md = md.replace("\n", f"\n> 進行中：已完成 {len(results)} / {meta['tasks'] * meta['runs']} 題\n", 1)
+    with open(os.path.join(out_dir, f"{name}.md"), "w", encoding="utf-8") as fh:
+        fh.write(md)
+    return name, md
 
 
 def compare(a_path: str, b_path: str) -> None:
@@ -337,9 +363,19 @@ def main() -> int:
     except Exception as exc:  # noqa: BLE001
         print(f"✗ OpenTeddy not reachable at {args.server}: {exc}")
         return 1
+    # One eval at a time: two would fight over the executor setting and the GPU.
+    import fcntl
+    os.makedirs(os.path.join(HERE, "results"), exist_ok=True)
+    lock = open(os.path.join(HERE, "results", ".lock"), "w")
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        print("✗ another eval is running")
+        return 1
     # A stop (timer, Ctrl+C) still puts the executor back: SIGTERM → finally.
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
     restore = ""
+    ensure_fixtures(tasks)
     if args.executor and args.executor != meta["executor"]:
         restore = switch_executor(client, args.executor, args.ollama.rstrip("/"))
         meta["executor"] = args.executor
@@ -360,23 +396,21 @@ def _run_all(client: httpx.Client, tasks: List[Dict[str, Any]], args: argparse.N
             cooled += cool_down(args.max_temp, args.cool_to)
             ws = os.path.join(args.workspace, stamp, f"{task['id']}-r{run}")
             print(f"▸ [{run}/{args.runs}] {task['id']:<24}", end="", flush=True)
-            r = run_task(client, task, ws, args)
+            try:
+                r = run_task(client, task, ws, args)
+            except Exception as exc:  # noqa: BLE001 — one broken task never ends the run
+                r = {"id": task["id"], "category": task.get("category"), "passed": False, "seconds": 0,
+                     "status": "harness-error", "error": f"{type(exc).__name__}: {exc}", "checks": []}
             r["run"] = run
             results.append(r)
             mark = "✅" if r["passed"] else ("⚠️ false success" if r.get("false_success") else "❌")
             print(f" {mark}  {r['seconds']:>6}s  calls={r.get('llm_calls', 0)}"
                   + ("" if r["passed"] else f"  — {next((c['detail'] for c in r.get('checks', []) if not c['ok']), r.get('error', ''))[:90]}"),
                   flush=True)
+            _save(meta, results, stamp, partial=True)    # a crash still leaves a report
     meta["cooldown_seconds"] = round(cooled)
-    s = summarize(results)
+    name, md = _save(meta, results, stamp)
     out_dir = os.path.join(HERE, "results")
-    os.makedirs(out_dir, exist_ok=True)
-    name = f"{stamp}-{(meta.get('executor') or 'model').replace(':', '_').replace('/', '_')}"
-    with open(os.path.join(out_dir, f"{name}.json"), "w", encoding="utf-8") as fh:
-        json.dump({"meta": meta, "summary": s, "results": results}, fh, ensure_ascii=False, indent=2)
-    md = markdown(meta, s, results)
-    with open(os.path.join(out_dir, f"{name}.md"), "w", encoding="utf-8") as fh:
-        fh.write(md)
     if not args.keep_sessions:
         for r in results:
             if r.get("session_id"):

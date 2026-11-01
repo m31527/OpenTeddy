@@ -157,7 +157,36 @@ def test_executor_switch() -> None:
     print("  ✓ --executor: refuses a model Ollama lacks, loads it first, and puts the old one back")
 
 
+def test_partial_and_errors() -> None:
+    import argparse
+    tmp = tempfile.mkdtemp(prefix="ot-evalrun-")
+    real_here, real_run = RE.HERE, RE.run_task
+    RE.HERE = tmp
+    calls = []
+
+    def fake_run(client, task, ws, args):
+        calls.append(task["id"])
+        if task["id"] == "b":
+            raise FileNotFoundError("fixtures/shop.db")
+        return {"id": task["id"], "category": "x", "passed": True, "seconds": 1, "status": "completed", "checks": []}
+    RE.run_task = fake_run
+    try:
+        args = argparse.Namespace(runs=1, workspace=tmp, max_temp=999, cool_to=0, keep_sessions=True)
+        meta = {"stamp": "t", "tasks": 3, "runs": 1, "executor": "m:1"}
+        RE._run_all(None, [{"id": "a"}, {"id": "b"}, {"id": "c"}], args, meta, "t")
+        assert calls == ["a", "b", "c"], "a broken task doesn't end the run"
+        doc = json.load(open(os.path.join(tmp, "results", "t-m_1.json")))
+        assert [r["status"] for r in doc["results"]] == ["completed", "harness-error", "completed"]
+        assert "shop.db" in doc["results"][1]["error"] and doc["meta"]["partial"] is False
+        RE._save(meta, doc["results"][:1], "p", partial=True)
+        assert "進行中：已完成 1 / 3 題" in open(os.path.join(tmp, "results", "p-m_1.md")).read()
+    finally:
+        RE.HERE, RE.run_task = real_here, real_run
+    print("  ✓ a broken task is recorded, the run goes on; partial results are saved as it goes")
+
+
 test_tasks()
 test_approvals_and_summary()
 test_executor_switch()
+test_partial_and_errors()
 print("\nALL EVAL CHECK TESTS PASS")

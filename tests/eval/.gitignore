@@ -1,0 +1,3 @@
+# The eval keeps its own SQLite fixture (the root .gitignore drops *.db).
+!fixtures/shop.db
+results/
