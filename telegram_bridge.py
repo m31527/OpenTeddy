@@ -120,6 +120,9 @@ _task: Optional[asyncio.Task] = None
 # message handler closures don't have to thread them through every call.
 _tracker: Any = None        # type: tracker.Tracker
 _orchestrator: Any = None   # type: orchestrator.Orchestrator
+# task_id → the asyncio task running it, so POST /tasks/{id}/cancel (and
+# `openteddy task cancel`) can stop a Telegram-started task too.
+RUNNING: Dict[str, "asyncio.Task"] = {}
 
 # Per-chat concurrency guard. Maps chat_id → the asyncio.Task currently
 # running orchestrator.run() for that chat. While an entry exists, new
@@ -762,6 +765,16 @@ _STATUS_FRAMES = ("●○○", "○●○", "○○●", "○●○")
 _TELEGRAM_RUN_TIMEOUT_S = 600
 
 
+async def _mark_stopped(task_id: str, msg: str) -> None:
+    """Record a task the bridge stopped (timeout / cancel) as failed."""
+    try:
+        from models import TaskStatus
+        if _tracker is not None:
+            await _tracker.update_task_status(task_id, TaskStatus.FAILED, msg)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("Telegram bridge: couldn't record stopped task %s: %s", task_id, exc)
+
+
 async def _send_chat_action(chat_id: str, action: str = "typing") -> None:
     """Fire-and-forget sendChatAction. Telegram-side this surfaces the
     native typing indicator. Errors are swallowed: an indicator failure
@@ -1323,12 +1336,13 @@ async def _run_goal_for_chat(chat_id: str, goal_text: str) -> None:
     # in the finally to guarantee no state leaks across tasks.
     from tools._context import set_triggered_by, reset_triggered_by
     origin_token = set_triggered_by("telegram")
+    run_task = asyncio.ensure_future(_orchestrator.run(req))
+    RUNNING[req.id] = run_task
     try:
         try:
-            result = await asyncio.wait_for(
-                _orchestrator.run(req), timeout=_TELEGRAM_RUN_TIMEOUT_S,
-            )
+            result = await asyncio.wait_for(run_task, timeout=_TELEGRAM_RUN_TIMEOUT_S)
         finally:
+            RUNNING.pop(req.id, None)
             reset_triggered_by(origin_token)
             if ws_listener_token is not None:
                 try:
@@ -1347,6 +1361,8 @@ async def _run_goal_for_chat(chat_id: str, goal_text: str) -> None:
             "chat=%s session=%s — aborted.",
             _TELEGRAM_RUN_TIMEOUT_S, chat_id, session_id,
         )
+        # Otherwise the row says "running" forever.
+        await _mark_stopped(req.id, f"⌛ 超過 {_TELEGRAM_RUN_TIMEOUT_S // 60} 分鐘，已強制中止")
         await _stop_status(progress_state, anim_task, typing_task)
         await _send_reply(
             chat_id,
@@ -1356,6 +1372,17 @@ async def _run_goal_for_chat(chat_id: str, goal_text: str) -> None:
             "deadlock, or a plan loop. Try a simpler goal, or /new "
             "for a fresh session.",
         )
+        _running_chats.pop(chat_id, None)
+        return
+    except asyncio.CancelledError:
+        cur = asyncio.current_task()
+        if cur is not None and cur.cancelling():
+            raise                                   # the bridge itself is shutting down
+        # Stopped from outside (openteddy task cancel / the web UI's Stop).
+        logger.info("Telegram bridge: task %s cancelled for chat=%s", req.id, chat_id)
+        await _mark_stopped(req.id, "⏹️ 任務已被中止")
+        await _stop_status(progress_state, anim_task, typing_task)
+        await _send_reply(chat_id, "⏹️ 這個任務已被中止。")
         _running_chats.pop(chat_id, None)
         return
     except Exception as exc:  # noqa: BLE001

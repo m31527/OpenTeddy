@@ -24,10 +24,12 @@ expire after 5 minutes and work once.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
+import re
 import secrets
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 
@@ -275,6 +277,104 @@ async def confirm(code: str) -> Dict[str, Any]:
     if not held:
         raise HAError("這個確認碼不存在或已過期（5 分鐘），請重新下指令。")
     return await control(held["entity_id"], held["service"], held["data"], confirmed=True)
+
+
+# ── Names the way people say them ────────────────────────────────────────────
+# Assist matches names and aliases exactly, so "幫我把皓房間檯燈打開" missed a
+# lamp called 皓檯燈 and the agent spent eight minutes writing shell scripts.
+# For a plain on / off, match the spoken name ourselves: every character of
+# a device's name (or alias), in order, inside what was said — 皓檯燈 in
+# 皓房間檯燈 — and pick it only when exactly one device fits best.
+
+_ON = re.compile(r"(打開|開啟|啟動|開|turn\s+on|switch\s+on)", re.I)
+_OFF = re.compile(r"(關掉|關閉|關上|關|turn\s+off|switch\s+off)", re.I)
+_ONOFF_DOMAINS = ("light", "switch", "fan", "humidifier", "input_boolean", "media_player")
+_FILLER = re.compile(r"(幫我|幫忙|請|麻煩|把|將|給我|一下|吧|啦|喔|哦|呢|的|全部|可以|嗎|"
+                     r"打開|開啟|啟動|關掉|關閉|關上|開|關|turn\s+on|turn\s+off|switch\s+on|switch\s+off|"
+                     r"please|the|[\s，,。！!？?])", re.I)
+_names_cache: Tuple[float, Dict[str, List[str]]] = (0.0, {})
+
+
+def _norm(s: str) -> str:
+    return re.sub(r"\s+", "", (s or "").lower().replace("臺", "台"))
+
+
+def _in_order(small: str, big: str) -> bool:
+    it = iter(big)
+    return all(ch in it for ch in small)
+
+
+def _name_score(name: str, said: str) -> int:
+    if len(name) < 2 or len(said) < 2:
+        return 0
+    if name == said:
+        return 100
+    if _in_order(name, said):          # 皓檯燈 inside 皓房間檯燈
+        return 50 + len(name)
+    if _in_order(said, name):          # 房間燈 inside 皓房間檯燈
+        return 40 + len(said)
+    return 0
+
+
+async def _registry_names(entity_ids: List[str]) -> Dict[str, List[str]]:
+    """Registry names and aliases (WebSocket; REST doesn't expose aliases).
+    Cached five minutes; {} when unavailable — friendly names still work."""
+    global _names_cache
+    if _names_cache[1] and time.monotonic() - _names_cache[0] < 300:
+        return _names_cache[1]
+    import json as _json
+    try:
+        import websockets
+        url = re.sub(r"^http", "ws", _url()) + "/api/websocket"
+        async with websockets.connect(url, open_timeout=5, close_timeout=2, max_size=2 ** 24) as ws:
+            await asyncio.wait_for(ws.recv(), 5)
+            await ws.send(_json.dumps({"type": "auth", "access_token": _token()}))
+            if _json.loads(await asyncio.wait_for(ws.recv(), 5)).get("type") != "auth_ok":
+                return {}
+            await ws.send(_json.dumps({"id": 1, "type": "config/entity_registry/get_entries",
+                                       "entity_ids": entity_ids}))
+            while True:
+                msg = _json.loads(await asyncio.wait_for(ws.recv(), 10))
+                if msg.get("id") == 1:
+                    break
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("Home: registry names unavailable: %s", exc)
+        return {}
+    out: Dict[str, List[str]] = {}
+    for eid, e in ((msg.get("result") or {}).items() if isinstance(msg.get("result"), dict) else []):
+        if isinstance(e, dict):
+            out[eid] = [n for n in [e.get("name"), e.get("original_name"), *(e.get("aliases") or [])] if n]
+    _names_cache = (time.monotonic(), out)
+    return out
+
+
+async def find_on_off(text: str) -> Optional[Dict[str, Any]]:
+    """{entity_id, name, service} for a plain on / off of one named device,
+    or None (not on / off, a number in it, no clear single match)."""
+    t = (text or "").strip()
+    verbs = t.replace("開關", "")                       # the noun 開關 is not 開 + 關
+    on, off = bool(_ON.search(verbs)), bool(_OFF.search(verbs))
+    if on == off or re.search(r"\d", t):
+        return None
+    said = _norm(_FILLER.sub("", t))
+    if len(said) < 2:
+        return None
+    states = [s for s in (await _request("GET", "/api/states") or [])
+              if s.get("entity_id", "").split(".", 1)[0] in _ONOFF_DOMAINS]
+    extra = await _registry_names([s["entity_id"] for s in states])
+    scored: List[Tuple[int, str, str]] = []
+    for s in states:
+        eid = s["entity_id"]
+        names = [(s.get("attributes") or {}).get("friendly_name") or ""] + extra.get(eid, [])
+        best = max(((_name_score(_norm(n), said), n) for n in names if n), default=(0, ""))
+        if best[0] and "燈" in said and eid.startswith("light."):
+            best = (best[0] + 3, best[1])
+        if best[0]:
+            scored.append((best[0], eid, best[1]))
+    scored.sort(reverse=True)
+    if not scored or scored[0][0] < 42 or (len(scored) > 1 and scored[1][0] == scored[0][0]):
+        return None
+    return {"entity_id": scored[0][1], "name": scored[0][2], "service": "turn_on" if on else "turn_off"}
 
 
 async def assist(text: str, language: Optional[str] = None) -> Dict[str, Any]:

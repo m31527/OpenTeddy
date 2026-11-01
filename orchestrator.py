@@ -1098,11 +1098,17 @@ class Orchestrator:
         # from a scheduled run.
         try:
             import home_assistant as _HA
-            from home_intent import parse_home_command, parse_confirmation
+            from home_intent import parse_home_command, parse_confirmation, is_remark
             _home_on = _HA.configured()
+            # "燈真的打開了，但你好像執行非常久" comments on what happened; it
+            # gets a reply, not another ten-minute device run.
+            _remark = is_remark(req.goal) and (req.context or {}).get("triggered_by") != "schedule"
         except Exception:  # noqa: BLE001
-            _home_on = False
-        if _home_on:
+            _home_on, _remark = False, False
+        if _remark:
+            logger.info("Task %s is a remark about a past action — chat lane", req.id)
+            session_mode = "chat"
+        if _home_on and not _remark:
             _code = (parse_confirmation(req.goal)
                      if (req.context or {}).get("triggered_by") != "schedule" else None)
             if _code:
@@ -1516,6 +1522,24 @@ class Orchestrator:
         except HA.HAError as exc:
             return await self._finish_direct(req, f"❌ {exc}", False)
         if not res["ok"]:
+            # Assist matches names exactly; "皓房間檯燈" for a lamp named
+            # 皓檯燈 is still a one-second on / off when one device fits.
+            try:
+                hit = await HA.find_on_off(text)
+            except HA.HAError:
+                hit = None
+            if hit:
+                try:
+                    done = await HA.control(hit["entity_id"], hit["service"])
+                except HA.HAError as exc:
+                    return await self._finish_direct(req, f"❌ {exc}", False)
+                if done.get("needs_confirmation"):
+                    return await self._finish_direct(req, f"🔐 {done['message']}", True)
+                verb = "打開" if hit["service"] == "turn_on" else "關掉"
+                logger.info("Home fast path: %r matched %s by name — %s", text, hit["entity_id"], hit["service"])
+                return await self._finish_direct(
+                    req, f"🏠 已{verb}「{hit['name']}」" if zh else
+                    f"🏠 Turned {'on' if hit['service'] == 'turn_on' else 'off'} {hit['name']}", True)
             logger.info("Home fast path: Assist didn't handle %r (%s) — using the agent", text, res.get("code"))
             return None
         speech = res["speech"] or ("好了。" if zh else "Done.")
@@ -2239,8 +2263,15 @@ class Orchestrator:
                 import time as _t
                 from tools._context import new_approval_budget
                 _budget = new_approval_budget()
+                # A retry carries what went wrong, so it isn't the same prompt again.
+                _attempt_ctx = context
+                if attempt:
+                    _prev = (st.error or "").strip() or (
+                        f"low confidence ({float(getattr(st, 'confidence', 0) or 0):.2f}); "
+                        f"answer was: {(st.result or '')[:300]}")
+                    _attempt_ctx = {**(context or {}), "previous_attempt_failed": _prev}
                 _exec_task = asyncio.create_task(
-                    self.executor.execute(st, context, mode=mode)
+                    self.executor.execute(st, _attempt_ctx, mode=mode)
                 )
                 _deadline = _t.monotonic() + float(effective_sub_timeout)
                 while True:
@@ -2404,6 +2435,17 @@ class Orchestrator:
                 # request that never drains; stop here and let the
                 # failure surface with the operator message.
                 logger.warning("Subtask %s: Ollama queue full — not retrying.", st.id)
+                break
+            # The loop detector or the round limit ended this attempt: the
+            # model went round in circles. Two more local runs of the same
+            # step did exactly the same (a lamp command: 3 × 10 rounds, ten
+            # minutes of GPU). Hand it on instead.
+            _why = getattr(self.executor, "pop_exit_reason", lambda _sid: None)(st.id)
+            if _why in ("loop", "max_rounds"):
+                logger.warning(
+                    "Subtask %s attempt %d ended by the %s guard — not retrying it locally.",
+                    st.id, attempt + 1, _why,
+                )
                 break
             logger.info(
                 "Subtask %s local attempt %d/%d failed (conf=%.2f), retrying...",

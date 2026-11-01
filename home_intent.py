@@ -36,7 +36,7 @@ def parse_home_command(goal: str) -> Optional[str]:
     limit = _MAX_TEXT if _CJK.search(t) else _MAX_TEXT * 2
     if (not t or t.startswith("[Attachments in workspace") or len(t) > limit
             or _SENSITIVE.search(t) or _NOT_COMMAND.search(t) or _MULTI.search(t)
-            or not _VERB.search(t) or not _DEVICE.search(t)):
+            or not _VERB.search(t) or not _DEVICE.search(t) or is_remark(t)):
         return None
     return t
 
@@ -113,11 +113,32 @@ def parse_xiaoai(goal: str) -> Optional[tuple]:
     return None
 
 
+# A remark about what already happened — "燈真的打開了，但你好像執行非常久"
+# — is not a command. Treated as one, it ran the whole device pipeline
+# again for ten minutes. A request word, a question, or "didn't work"
+# (沒打開 / 不亮) keeps it a command.
+_REMARK = re.compile(r"(你好像|好像|怎麼這麼|為什麼這麼|為什麼要|太慢|好慢|很慢|很久|好久|非常久|有點久|"
+                     r"謝謝|感謝|不錯|很棒|太好了|成功了|可以了|剛剛|剛才)")
+_DONE = re.compile(r"(?:打開|開啟|開|關掉|關閉|關上|關|亮)(?:好)?了(?![嗎沒？?])")
+_REQUEST = re.compile(r"(幫我|幫忙|請|麻煩|再|重新|能不能|可不可以|可以.{0,8}嗎|要不要|試試)")
+_FAILED = re.compile(r"(沒|不|未)(?:有)?(?:打開|開啟|開|關|亮|反應|成功|動)")
+
+
+def is_remark(goal: str) -> bool:
+    """A comment on a device action that already happened, not a new command."""
+    t = (goal or "").strip()
+    if not t or len(t) > 60 or _REQUEST.search(t) or _FAILED.search(t) or re.search(r"[嗎？?]\s*$", t):
+        return False
+    return bool(_REMARK.search(t) or _DONE.search(t))
+
+
 def looks_home_related(goal: str) -> bool:
     """Mentions a device or the speaker: such a request must keep its tools
     (the intent classifier once sent 「小米音箱播放音樂」 to the no-tools chat
-    lane because "the LLM can't control devices")."""
+    lane because "the LLM can't control devices"). A remark doesn't."""
     t = goal or ""
+    if is_remark(t):
+        return False
     return bool(_DEVICE.search(t) or re.search(_XIAOAI, t, re.I))
 
 

@@ -2293,8 +2293,15 @@ tool_registry.on_approval = ws_manager.broadcast
 
 @app.post("/tasks/{task_id}/cancel")
 async def cancel_task(task_id: str) -> dict:
-    """Cancel an in-flight task (Stop button from the UI)."""
+    """Cancel an in-flight task (Stop button from the UI), including one
+    started from Telegram."""
     t = _running_tasks.get(task_id)
+    if not t:
+        try:
+            from telegram_bridge import RUNNING as _tg_running
+            t = _tg_running.get(task_id)
+        except Exception:  # noqa: BLE001
+            t = None
     if not t:
         raise HTTPException(
             status_code=404,

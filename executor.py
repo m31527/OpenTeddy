@@ -554,6 +554,10 @@ class Executor:
         # Populated by _push_event when an artifact event flows; drained
         # by orchestrator's deliverable verifier (#2). See pop_subtask_artifacts.
         self._subtask_artifacts: Dict[str, List[Dict[str, Any]]] = {}
+        # subtask_id → how the last attempt ended when a guard stopped it:
+        # "loop" (loop detector) or "max_rounds". The orchestrator doesn't
+        # retry such an attempt with the same prompt (pop_exit_reason).
+        self._exit_reason: Dict[str, str] = {}
 
     async def close(self) -> None:
         await self._http.aclose()
@@ -760,13 +764,23 @@ class Executor:
         # the system prompt (persona, db context/schema) are excluded from
         # the Context json dump — duplicating them here would waste most
         # of its 2000-char budget.
+        self._exit_reason.pop(subtask_id, None)
         _internal_ctx_keys = (
             "agent_persona", "db_context", "db_schema", "prior_results",
+            "previous_attempt_failed",
         )
         prior_block = ""
+        # A retry says what went wrong last time. Without it every retry
+        # sent the identical prompt and got the identical result.
+        _prev_fail = str((context or {}).get("previous_attempt_failed") or "").strip()
+        if _prev_fail:
+            prior_block += (
+                "PREVIOUS ATTEMPT AT THIS STEP FAILED — do something different, "
+                "don't repeat it:\n" + _prev_fail[:600] + "\n\n"
+            )
         _prior = (context or {}).get("prior_results") or []
         if _prior:
-            prior_block = (
+            prior_block += (
                 "EARLIER SUBTASK RESULTS (already done in THIS task — "
                 "build on them, do NOT redo or re-ask for them):\n"
                 + "\n---\n".join(_prior) + "\n\n"
@@ -1704,9 +1718,11 @@ class Executor:
                     "Forcing final answer for task %s — loop detector fired.",
                     task_id,
                 )
+                self._exit_reason[subtask_id] = "loop"
                 break
 
         # Hit max rounds — ask for a final forced answer
+        self._exit_reason.setdefault(subtask_id, "max_rounds")
         logger.warning(
             "Reached max tool rounds (%d) for task %s — forcing final answer.",
             max_rounds, task_id,
@@ -1849,6 +1865,10 @@ class Executor:
                 await self.ws_callback(event)
             except Exception as exc:  # noqa: BLE001
                 logger.debug("ws_callback error: %s", exc)
+
+    def pop_exit_reason(self, subtask_id: str) -> Optional[str]:
+        """'loop' / 'max_rounds' when a guard ended the last attempt, else None."""
+        return self._exit_reason.pop(subtask_id, None)
 
     def pop_subtask_artifacts(self, subtask_id: str) -> List[Dict[str, Any]]:
         """Return + clear the artifact list collected for a given subtask."""

@@ -1088,6 +1088,14 @@ is never played on the spot — it becomes a schedule. Requests that mention
 the TV, or creative ones such as *"我要製作睡眠音樂"*, are not sent to the
 speaker.
 
+Names don't have to be exact. When Assist misses one (*"幫我把皓房間檯燈打開"*
+for a lamp named 皓檯燈), a plain on / off is matched by name and alias:
+every character of the device's name, in order, inside what was said. It
+is used only when exactly one device fits best, and never for locks,
+alarms or anything with a number in the request. A remark about what
+just happened (*"燈真的打開了，但你好像很久"*) gets a reply, not another
+device run.
+
 A message that mentions a device or the speaker always keeps its tools:
 when Assist can't handle it, the agent takes it with the `home_*` and
 `xiaoai` tools. It never lands on the chat lane, which has no tools and
