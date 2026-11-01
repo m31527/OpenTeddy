@@ -77,3 +77,6 @@ memory_db/
 # the "rebuild on first launch" approach earlier — it failed on macOS
 # desktop builds (PyInstaller bundles can't subprocess update.py) and
 # on servers with no `gh` auth (GitHub API 401 + 60/hr rate limit).
+
+# delivery eval output
+tests/eval/results/
