@@ -235,6 +235,19 @@ class Tracker:
         except Exception:  # noqa: BLE001
             pass
 
+    async def fail_interrupted_tasks(self) -> int:
+        """At startup nothing can still be running: a row that says
+        "running" / "pending" lost its process (a restart, or a Telegram
+        timeout before that was recorded). Mark them failed, so lists,
+        the CLI and the self-review don't show tasks running for months."""
+        cur = await self.db.execute(
+            "UPDATE tasks SET status='failed', completed_at=COALESCE(completed_at, ?), "
+            "summary=COALESCE(NULLIF(summary, ''), ?) WHERE status IN ('running', 'pending')",
+            (datetime.utcnow().isoformat(), "⚠️ 中斷：OpenTeddy 重新啟動或逾時，這個任務沒有完成。"),
+        )
+        await self.db.commit()
+        return cur.rowcount or 0
+
     async def close(self) -> None:
         if self._db:
             await self._db.close()

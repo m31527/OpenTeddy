@@ -238,13 +238,32 @@ async def test_telegram_stop() -> None:
     print("  ✓ a timed-out Telegram task is recorded as failed; cancel reaches Telegram tasks")
 
 
+async def test_sweep() -> None:
+    import tempfile
+    from tracker import Tracker
+    from models import TaskRequest, TaskStatus
+    tr = Tracker(os.path.join(tempfile.mkdtemp(prefix="ot-sweep-"), "t.db"))
+    await tr.open()
+    try:
+        for tid, st in (("a", TaskStatus.RUNNING), ("b", TaskStatus.PENDING), ("c", TaskStatus.COMPLETED)):
+            await tr.create_task(TaskRequest(id=tid, goal=tid, session_id="s"))
+            await tr.update_task_status(tid, st, "done" if tid == "c" else None)
+        assert await tr.fail_interrupted_tasks() == 2
+        a, c = await tr.get_task("a"), await tr.get_task("c")
+        assert a["status"] == "failed" and "中斷" in a["summary"] and c["status"] == "completed"
+        assert await tr.fail_interrupted_tasks() == 0
+    finally:
+        await tr.close()
+    print("  ✓ at startup, tasks a previous run left 'running' are marked interrupted")
+
+
 async def main_() -> None:
     print("A. remarks"); test_remarks()
     print("B. names"); await test_names()
     print("C. home fast path"); await test_home_fast()
     print("D. remark lane"); await test_remark_lane()
     print("E. retries"); await test_retries(); await test_executor_reason()
-    print("F. Telegram"); await test_telegram_stop()
+    print("F. Telegram"); await test_telegram_stop(); await test_sweep()
     print("\nALL RUNAWAY TESTS PASS")
 
 

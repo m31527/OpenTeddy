@@ -474,6 +474,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:  # type: ignore[type-arg]
 
     tracker = Tracker()
     await tracker.open()
+    try:
+        _swept = await tracker.fail_interrupted_tasks()
+        if _swept:
+            logger.info("Marked %d task(s) left 'running' by a previous run as interrupted", _swept)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Interrupted-task sweep failed (non-fatal): %s", exc)
 
     # Long-term memory (ChromaDB — gracefully degrades if not installed)
     memory_manager = MemoryManager(db_path=config.memory_db_path)
