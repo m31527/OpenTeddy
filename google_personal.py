@@ -181,8 +181,9 @@ async def unread(query: str = "category:primary is:unread newer_than:1d", limit:
         when = None
         if m.get("internalDate"):
             when = datetime.fromtimestamp(int(m["internalDate"]) / 1000).astimezone(local_tz())
-        out.append({"from": name or addr, "email": addr, "subject": (h.get("subject") or "").strip() or "（無主旨）",
-                    "date": when})
+        out.append({"id": m.get("id", ""), "from": name or addr, "email": addr,
+                    "subject": (h.get("subject") or "").strip() or "（無主旨）", "date": when,
+                    "ts": int(m.get("internalDate") or 0)})
     privacy.mark()
     return out
 

@@ -564,6 +564,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:  # type: ignore[type-arg]
         await _start_google(tracker)
     except Exception as exc:  # noqa: BLE001
         logger.warning("Google accounts startup failed (non-fatal): %s", exc)
+    # Event triggers: typhoon, upcoming meeting, device offline, important mail.
+    try:
+        from watchers import start as _start_watchers
+        await _start_watchers(tracker)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Watchers startup failed (non-fatal): %s", exc)
 
     # Pre-warm Ollama models in the background. First LLM call after a
     # cold start (or after Ollama's KEEP_ALIVE timeout expired) has to
@@ -650,6 +656,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:  # type: ignore[type-arg]
         await _stop_reminders()
     except Exception as exc:  # noqa: BLE001
         logger.warning("Reminders shutdown saw: %s", exc)
+    try:
+        from watchers import stop as _stop_watchers
+        await _stop_watchers()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Watchers shutdown saw: %s", exc)
 
     await executor.close()
     await orchestrator.close()

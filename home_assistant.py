@@ -192,7 +192,8 @@ async def devices() -> List[Dict[str, Any]]:
         online = real or "unavailable" not in g["states"]
         out.append({"name": g["name"], "area": g["area"], "online": online,
                     "entities": len(g["states"]),
-                    "offline_for": "" if online or not g["changed"] else _ago(max(g["changed"]))})
+                    "offline_for": "" if online or not g["changed"] else _ago(max(g["changed"])),
+                    "offline_since": "" if online or not g["changed"] else max(g["changed"])})
     out.sort(key=lambda d: (d["online"], d["area"], d["name"]))
     return out
 

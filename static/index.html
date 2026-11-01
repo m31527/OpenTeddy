@@ -5012,6 +5012,62 @@
               </div>
             </div>
 
+            <!-- Alerts — watchers.py tells the right person on Telegram without being asked. -->
+            <div class="settings-section collapsed">
+              <h3 onclick="toggleSettingsSection(this)" data-i18n="watch_heading">🔔 Proactive alerts</h3>
+              <div class="settings-section-body">
+              <div style="font-size:0.78rem;color:var(--text-secondary);margin-bottom:0.9rem;line-height:1.5" data-i18n="watch_desc">
+                OpenTeddy tells the right person on Telegram without being asked.
+              </div>
+              <div class="row" style="margin-bottom:0.85rem;flex-wrap:wrap;gap:1rem">
+                <div class="field" style="flex:0 0 auto">
+                  <label style="display:flex;align-items:center;gap:0.5rem;cursor:pointer">
+                    <input type="checkbox" id="inp_watch_typhoon" />
+                    <span data-i18n="watch_typhoon_label">Typhoon heading for Taiwan</span>
+                  </label>
+                </div>
+                <div class="field" style="flex:0 0 auto">
+                  <label style="display:flex;align-items:center;gap:0.5rem;cursor:pointer">
+                    <input type="checkbox" id="inp_watch_meeting" />
+                    <span data-i18n="watch_meeting_label">Upcoming meeting</span>
+                  </label>
+                </div>
+                <div class="field" style="flex:0 0 auto">
+                  <label style="display:flex;align-items:center;gap:0.5rem;cursor:pointer">
+                    <input type="checkbox" id="inp_watch_offline" />
+                    <span data-i18n="watch_offline_label">Device offline</span>
+                  </label>
+                </div>
+                <div class="field" style="flex:0 0 auto">
+                  <label style="display:flex;align-items:center;gap:0.5rem;cursor:pointer">
+                    <input type="checkbox" id="inp_watch_mail" />
+                    <span data-i18n="watch_mail_label">Important new mail</span>
+                  </label>
+                </div>
+              </div>
+              <div class="row" style="margin-bottom:0.85rem">
+                <div class="field">
+                  <label data-i18n="watch_quiet_hours_label">Quiet hours</label>
+                  <input type="text" id="inp_watch_quiet_hours" placeholder="23-7" />
+                </div>
+                <div class="field">
+                  <label data-i18n="watch_meeting_minutes_label">Minutes before a meeting</label>
+                  <input type="number" min="1" max="240" id="inp_watch_meeting_minutes" placeholder="15" />
+                </div>
+                <div class="field">
+                  <label data-i18n="watch_offline_minutes_label">Offline for (minutes)</label>
+                  <input type="number" min="5" max="10080" id="inp_watch_offline_minutes" placeholder="60" />
+                </div>
+              </div>
+              <div class="row" style="margin-bottom:0.4rem">
+                <div class="field" style="flex:1">
+                  <label data-i18n="watch_offline_ignore_label">Never alert about these devices</label>
+                  <input type="text" id="inp_watch_offline_ignore" placeholder="Mi Control Hub, Roborock S5" />
+                </div>
+              </div>
+              </div>
+            </div>
+
             <!-- Printer — "upload + 列印" and the print_file tool use the
                  default printer here (CUPS on this machine). -->
             <div class="settings-section collapsed">
@@ -10269,6 +10325,14 @@
         _setInput('inp_xiaoai_entity', s.xiaoai_entity?.value ?? '');
         if ((s.ha_token?.value || '').trim()) checkHomeAssistant();
         _setInput('inp_google_client_id', s.google_client_id?.value ?? '');
+        ['watch_typhoon', 'watch_meeting', 'watch_offline', 'watch_mail'].forEach(k => {
+          const el = document.getElementById('inp_' + k);
+          if (el) el.checked = !['false', '0', 'off', 'no'].includes((s[k]?.value ?? 'true').toString().trim().toLowerCase());
+        });
+        _setInput('inp_watch_quiet_hours', s.watch_quiet_hours?.value ?? '23-7');
+        _setInput('inp_watch_meeting_minutes', s.watch_meeting_minutes?.value || '15');
+        _setInput('inp_watch_offline_minutes', s.watch_offline_minutes?.value || '60');
+        _setInput('inp_watch_offline_ignore', s.watch_offline_ignore?.value ?? '');
         _setInput('inp_google_client_secret', s.google_client_secret?.value ?? '');
         _printerSaved = s.printer_name?.value ?? '';
         _setInput('inp_print_max_copies', s.print_max_copies?.value || '20');
@@ -11245,6 +11309,14 @@
         ha_confirm_domains:       document.getElementById('inp_ha_confirm_domains')?.value.trim() ?? '',
         xiaoai_entity:            document.getElementById('inp_xiaoai_entity')?.value.trim() ?? '',
         google_client_id:         document.getElementById('inp_google_client_id')?.value.trim() ?? '',
+        watch_typhoon:            document.getElementById('inp_watch_typhoon')?.checked ? 'true' : 'false',
+        watch_meeting:            document.getElementById('inp_watch_meeting')?.checked ? 'true' : 'false',
+        watch_offline:            document.getElementById('inp_watch_offline')?.checked ? 'true' : 'false',
+        watch_mail:               document.getElementById('inp_watch_mail')?.checked ? 'true' : 'false',
+        watch_quiet_hours:        document.getElementById('inp_watch_quiet_hours')?.value.trim() ?? '',
+        watch_meeting_minutes:    document.getElementById('inp_watch_meeting_minutes')?.value || '15',
+        watch_offline_minutes:    document.getElementById('inp_watch_offline_minutes')?.value || '60',
+        watch_offline_ignore:     document.getElementById('inp_watch_offline_ignore')?.value.trim() ?? '',
         google_client_secret:     document.getElementById('inp_google_client_secret')?.value.trim() ?? '',
         print_max_copies:         document.getElementById('inp_print_max_copies')?.value || '20',
       };
@@ -11260,7 +11332,7 @@
         'smtp_host', 'smtp_user', 'smtp_password', 'smtp_from',
         'webhook_secret', 'printer_name',
         'ha_token', 'ha_confirm_domains', 'xiaoai_entity',
-        'google_client_id', 'google_client_secret',
+        'google_client_id', 'google_client_secret', 'watch_quiet_hours', 'watch_offline_ignore',
       ]);
       Object.keys(payload).forEach(k => {
         if (payload[k] === '' && !ALLOW_EMPTY.has(k)) delete payload[k];

@@ -1204,6 +1204,24 @@ questioned rather than set. Each part of the briefing is optional and
 fetched at the same time; a part that fails says so in one line and the
 rest still arrives.
 
+### Proactive alerts
+
+OpenTeddy also speaks first. Four checks run in the background (no model
+calls) and tell the right person on Telegram:
+
+| Alert | Who hears it | When |
+|---|---|---|
+| Typhoon heading for Taiwan | everyone's private chat | once when it heads this way, once more when within 300 km |
+| Meeting coming up | only that person (linked Google) | 15 minutes before (configurable) |
+| Device offline | the owner | offline for over an hour (configurable); once per outage |
+| Important new mail | only that person (linked Google) | mail Gmail marks important, in Primary |
+
+Each alert is sent once, and what was sent is remembered across restarts.
+On the first look, mail and outages that were already there aren't
+announced. Offline and mail alerts wait out quiet hours (default 23–7).
+Turn each one on or off, set the timings, or name devices to ignore in
+**Settings → 🔔 Proactive alerts**.
+
 ## Claude Code ↔ OpenTeddy
 
 Claude Code is the better engineer; OpenTeddy is the one that is always on

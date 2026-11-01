@@ -469,6 +469,15 @@ class Config:
     # links their own account from their Telegram private chat.
     google_client_id: str = field(default_factory=lambda: os.getenv("GOOGLE_CLIENT_ID", ""))
     google_client_secret: str = field(default_factory=lambda: os.getenv("GOOGLE_CLIENT_SECRET", ""))
+    # Event triggers (watchers.py): each on / off, plus their thresholds.
+    watch_typhoon: str = field(default_factory=lambda: os.getenv("WATCH_TYPHOON", "true"))
+    watch_meeting: str = field(default_factory=lambda: os.getenv("WATCH_MEETING", "true"))
+    watch_offline: str = field(default_factory=lambda: os.getenv("WATCH_OFFLINE", "true"))
+    watch_mail: str = field(default_factory=lambda: os.getenv("WATCH_MAIL", "true"))
+    watch_quiet_hours: str = field(default_factory=lambda: os.getenv("WATCH_QUIET_HOURS", "23-7"))
+    watch_meeting_minutes: str = field(default_factory=lambda: os.getenv("WATCH_MEETING_MINUTES", "15"))
+    watch_offline_minutes: str = field(default_factory=lambda: os.getenv("WATCH_OFFLINE_MINUTES", "60"))
+    watch_offline_ignore: str = field(default_factory=lambda: os.getenv("WATCH_OFFLINE_IGNORE", ""))
     # Inbound (Telegram → OpenTeddy) — long-polling bridge.
     # When `telegram_inbound_enabled` is True AND `telegram_bot_token`
     # is set AND `telegram_inbound_chat_id_whitelist` is non-empty,
@@ -983,7 +992,9 @@ class Config:
             self.printer_name = (settings["printer_name"] or "").strip()
         for k in ("ha_url", "ha_token", "ha_language", "ha_confirm_domains", "xiaoai_entity",
                   "claude_code_bin", "claude_code_default_dir", "claude_code_allowed_tools",
-                  "google_client_id", "google_client_secret"):
+                  "google_client_id", "google_client_secret",
+                  "watch_typhoon", "watch_meeting", "watch_offline", "watch_mail",
+                  "watch_quiet_hours", "watch_meeting_minutes", "watch_offline_minutes", "watch_offline_ignore"):
             if k in settings:
                 setattr(self, k, (settings[k] or "").strip())
         if (settings.get("claude_code_timeout") or "").strip().isdigit():

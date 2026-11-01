@@ -468,6 +468,14 @@ SETTINGS_META: dict[str, dict[str, Any]] = {
         "description": "Optional path to `claude`; found automatically when empty.",
         "type":        "text",
     },
+    "watch_typhoon": {"label": "Alert: typhoon heading for Taiwan", "description": "Tell everyone on Telegram.", "type": "bool"},
+    "watch_meeting": {"label": "Alert: upcoming meeting", "description": "Before an event on a linked person's Google Calendar, to that person.", "type": "bool"},
+    "watch_offline": {"label": "Alert: device offline", "description": "A Home Assistant device offline for a while, to the owner.", "type": "bool"},
+    "watch_mail": {"label": "Alert: important new mail", "description": "Mail Gmail marks important, to that person.", "type": "bool"},
+    "watch_quiet_hours": {"label": "Quiet hours", "description": "e.g. 23-7. Offline and mail alerts wait until they end. Empty = never quiet.", "type": "text"},
+    "watch_meeting_minutes": {"label": "Meeting alert lead (min)", "description": "How long before an event.", "type": "int"},
+    "watch_offline_minutes": {"label": "Offline alert after (min)", "description": "How long a device must be offline.", "type": "int"},
+    "watch_offline_ignore": {"label": "Ignore these devices", "description": "Comma-separated device names never to alert about.", "type": "text"},
     "google_client_id": {
         "label":       "Google OAuth client ID",
         "description": "Google Cloud → APIs & Services → Credentials → OAuth client (Desktop app). Each person then links their own account from Telegram.",
@@ -601,6 +609,14 @@ def _defaults_from_config() -> dict[str, str]:
         "claude_code_allowed_tools": str(getattr(config, "claude_code_allowed_tools", "")),
         "claude_code_timeout":       str(getattr(config, "claude_code_timeout", 1800)),
         "claude_code_bin":           str(getattr(config, "claude_code_bin", "")),
+        "watch_typhoon":             str(getattr(config, "watch_typhoon", "true")),
+        "watch_meeting":             str(getattr(config, "watch_meeting", "true")),
+        "watch_offline":             str(getattr(config, "watch_offline", "true")),
+        "watch_mail":                str(getattr(config, "watch_mail", "true")),
+        "watch_quiet_hours":         str(getattr(config, "watch_quiet_hours", "23-7")),
+        "watch_meeting_minutes":     str(getattr(config, "watch_meeting_minutes", "15")),
+        "watch_offline_minutes":     str(getattr(config, "watch_offline_minutes", "60")),
+        "watch_offline_ignore":      str(getattr(config, "watch_offline_ignore", "")),
         "google_client_id":          str(getattr(config, "google_client_id", "")),
         "google_client_secret":      str(getattr(config, "google_client_secret", "")),
         "print_max_copies":          str(getattr(config, "print_max_copies", 20)),
@@ -978,7 +994,9 @@ class SettingsStore:
             config.printer_name = (settings["printer_name"] or "").strip()
         for k in ("ha_url", "ha_token", "ha_language", "ha_confirm_domains", "xiaoai_entity",
                   "claude_code_bin", "claude_code_default_dir", "claude_code_allowed_tools",
-                  "google_client_id", "google_client_secret"):
+                  "google_client_id", "google_client_secret",
+                  "watch_typhoon", "watch_meeting", "watch_offline", "watch_mail",
+                  "watch_quiet_hours", "watch_meeting_minutes", "watch_offline_minutes", "watch_offline_ignore"):
             if k in settings:
                 setattr(config, k, (settings[k] or "").strip())
         vcc = _int("claude_code_timeout")
