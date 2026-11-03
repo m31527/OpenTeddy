@@ -585,8 +585,11 @@ async def test_tool_list() -> None:
     from tool_registry import tool_registry
     tool_registry.auto_register_all()
     names = [t["function"]["name"] for t in tool_registry.get_schemas()]
-    assert set(names[-3:]) == {"calendar_events", "gmail_unread", "reminder_create"}, \
-        "personal tools are registered last, so hiding them keeps the cached prompt prefix"
+    import browser_bridge
+    nb = len(browser_bridge.TOOL_NAMES)
+    assert set(names[-nb - 3:-nb]) == {"calendar_events", "gmail_unread", "reminder_create"} \
+        and set(names[-nb:]) == browser_bridge.TOOL_NAMES, \
+        "personal and browser tools are registered last, so hiding them keeps the cached prompt prefix"
 
     class _Http:
         def __init__(self): self.tools = None

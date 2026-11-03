@@ -27,6 +27,7 @@ MAX_CHAT_CHARS = 60
 _WORK = re.compile(
     r"(幫我|請你|請幫|幫忙|去查|查一下|查詢|統計|分析|產生|生成|做一份|寫一|寫個|建立|新增|刪除|修改|更新|"
     r"安裝|部署|執行|跑一下|下載|上傳|寄|發送|傳給|通知|排程|每天|每週|每月|報告|報表|圖表|檔案|"
+    r"瀏覽器|分頁|網頁|頁面|chrome|點一下|按一下|填寫|填入|"
     r"\b(do|make|create|build|write|generate|analy[sz]e|deploy|install|run|fetch|download|upload|send|"
     r"email|schedule|every|report|chart|file|script|query|search|find|fix|update|delete|refactor)\b)",
     re.IGNORECASE,

@@ -153,9 +153,20 @@ docker compose 也可以用 `-f /path/to/docker-compose.yml` 取代 cd。
 **絕對不要**只在 synthesizer 寫「📎 產出：xxx.html」當作交付 —
 那只是文字，不是真的有檔案。實際 `write_file` 才會在 workspace 存在。
 
+【特殊：使用者自己的瀏覽器（OpenTeddy 擴充功能）】
+若目標提到「我的瀏覽器／我的 Chrome／這個分頁／開著的網頁」，或要在網站上
+幫他點、填、搜尋、查他登入後才看得到的東西 → **1 個 subtask**，描述寫清楚
+網站和要做的事，例如：
+    [{"description": "用 browser_open 打開 https://www.momo.com.tw，用 browser_type 在搜尋框輸入「電風扇」並送出，用 browser_read 列出前 5 個商品和價格",
+      "skill_hint": null, "order": 0}]
+工具：browser_tabs（列出分頁）、browser_open、browser_read（頁面文字，元素有編號）、
+browser_click / browser_type（照編號操作）。不要拆成多個 subtask — 編號只在
+同一個 subtask 裡有效。送出／購買／刪除會先問本人，被拒絕就停。
+
 【特殊：其他登入態必需網站】
 若目標需要存取使用者已登入的網站（公司內網 dashboard、付費 SaaS、
-私人 wiki 等） → **用 `chrome_attached_browse(url)` 工具**。
+私人 wiki 等） → 優先用上面的 browser_* 工具；沒有連接瀏覽器時才
+**用 `chrome_attached_browse(url)` 工具**。
 不要試圖讓 OpenTeddy 自己登入或記憶密碼 — 借用 Chrome session 就好。
 
   ✅ 首選（90% 案例）：1 個 python_exec subtask 內聯做完所有事
@@ -998,6 +1009,15 @@ class Orchestrator:
         if (_g_cmd or _g_cb) and (req.context or {}).get("triggered_by") != "schedule":
             return await self._google_link(req, _person, _g_cmd, _g_cb)
 
+        # ── 0⁰ᵇ. Browser: 「連接瀏覽器」 / 「解除瀏覽器」 / 「瀏覽器狀態」 ──
+        try:
+            import browser_bridge as _bb
+            _b_cmd = _bb.parse_command(req.goal)
+        except Exception:  # noqa: BLE001
+            _b_cmd = None
+        if _b_cmd and (req.context or {}).get("triggered_by") != "schedule":
+            return await self._browser_link(req, _person, _b_cmd)
+
         # ── 0. Direct print: an upload + "我要列印" → printer, no model ──
         # A message that only asks to print (print_intent.py) is done in
         # about a second instead of a planning round. Scheduled runs never
@@ -1717,6 +1737,41 @@ class Orchestrator:
             return await self._finish_direct(req, f"❌ {exc}", False)
         except RuntimeError as exc:                     # google_auth not started
             return await self._finish_direct(req, f"❌ Google 連結功能沒有啟動：{exc}", False)
+
+    async def _browser_link(self, req: TaskRequest, person: Optional[str], cmd: str) -> TaskResult:
+        """Pair / unpair / check this person's browser (browser_bridge.py)."""
+        import browser_bridge as BB
+        if not person:
+            return await self._finish_direct(req, BB.ONLY_TELEGRAM, True)
+        try:
+            if cmd == "unlink":
+                n = await BB.unlink(person)
+                return await self._finish_direct(
+                    req, "🗑 已解除，OpenTeddy 不會再使用你的瀏覽器。" if n else "你沒有連接瀏覽器。", True)
+            if cmd == "status":
+                st = await BB.status(person)
+                if not st["linked"]:
+                    return await self._finish_direct(req, BB.NOT_LINKED, True)
+                if not st["online"]:
+                    return await self._finish_direct(req, "🔗 瀏覽器已配對，但現在沒有連上（Chrome 沒開或電腦關機）。", True)
+                state = "（你按了暫停）" if st["paused"] else ""
+                return await self._finish_direct(req, f"🟢 已連上：{'、'.join(st['online'])}{state}", True)
+            code = BB.begin(person)
+        except RuntimeError as exc:                     # browser_bridge not started
+            return await self._finish_direct(req, f"❌ 瀏覽器連接功能沒有啟動：{exc}", False)
+        addr = BB.server_address()
+        return await self._finish_direct(req, (
+            "🔗 連接你的瀏覽器\n"
+            "1. 在電腦的 Chrome 裝 OpenTeddy 擴充功能（還沒裝的話：下載 "
+            f"{addr or '<OpenTeddy 網址>'}/browser/extension.zip 並解壓縮，打開 chrome://extensions，"
+            "開啟右上角「開發人員模式」，按「載入未封裝項目」選那個資料夾）。\n"
+            "2. 按 Chrome 右上角的 OpenTeddy 圖示，填入：\n"
+            f"   OpenTeddy 網址：{addr or '你平常打開 OpenTeddy 網頁的網址'}\n"
+            f"   配對碼：{code}\n"
+            f"配對碼 {BB.CODE_TTL_S // 60} 分鐘內有效、只能用一次。\n\n"
+            "連上之後可以說「看一下我 Chrome 開著的頁面」或「幫我在 momo 搜尋電風扇」。"
+            "送出、購買、刪除之前我都會先問你；密碼和信用卡我不會幫你填。"
+        ), True)
 
     async def _typhoon(self, req: TaskRequest, zh: bool) -> TaskResult:
         import typhoon

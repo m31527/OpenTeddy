@@ -564,6 +564,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:  # type: ignore[type-arg]
         await _start_google(tracker)
     except Exception as exc:  # noqa: BLE001
         logger.warning("Google accounts startup failed (non-fatal): %s", exc)
+    # Per-person browsers paired through the OpenTeddy extension.
+    try:
+        from browser_bridge import start as _start_browser
+        await _start_browser(tracker)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Browser pairing startup failed (non-fatal): %s", exc)
     # Event triggers: typhoon, upcoming meeting, device offline, important mail.
     try:
         from watchers import start as _start_watchers
@@ -714,6 +720,47 @@ async def websocket_endpoint(ws: WebSocket) -> None:
         ws_manager.disconnect(ws)
     except Exception:  # noqa: BLE001
         ws_manager.disconnect(ws)
+
+
+# ── The person's own browser (OpenTeddy extension, browser_bridge.py) ─────────
+
+@app.post("/browser/pair")
+async def browser_pair(request: Request) -> dict:
+    """Pairing code (from 「連接瀏覽器」 in Telegram) → this browser's token.
+    Only the extension may call it (Origin chrome-extension://…)."""
+    import browser_bridge
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        body = {}
+    try:
+        token = await browser_bridge.pair(str(body.get("code") or ""), str(body.get("label") or ""),
+                                          request.headers.get("origin", ""))
+    except browser_bridge.BrowserError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+    return {"token": token}
+
+
+@app.websocket("/browser/ws")
+async def browser_ws(ws: WebSocket) -> None:
+    import browser_bridge
+    await browser_bridge.serve(ws)
+
+
+@app.get("/browser/extension.zip")
+async def browser_extension_zip() -> Response:
+    """The extension folder, zipped, for 「載入未封裝項目」 on another computer."""
+    import io
+    import zipfile
+    root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "browser_ext")
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for base, _dirs, files in os.walk(root):
+            for name in files:
+                full = os.path.join(base, name)
+                zf.write(full, os.path.join("openteddy-extension", os.path.relpath(full, root)))
+    return Response(buf.getvalue(), media_type="application/zip",
+                    headers={"Content-Disposition": 'attachment; filename="openteddy-extension.zip"'})
 
 
 _NO_CACHE_HEADERS = {

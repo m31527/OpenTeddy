@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<title>OpenTeddy</title>
+<style>
+  :root { color-scheme: light dark; --fg: #1f2328; --muted: #59636e; --line: #d0d7de; --bg: #fff;
+          --field: #f6f8fa; --accent: #c2410c; --err: #cf222e; }
+  @media (prefers-color-scheme: dark) {
+    :root { --fg: #e6edf3; --muted: #9198a1; --line: #3d444d; --bg: #151b23; --field: #0d1117; --err: #ff7b72; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; width: 320px; padding: 16px; background: var(--bg); color: var(--fg);
+         font: 13px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang TC", "Noto Sans TC", sans-serif; }
+  header { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
+  header img { width: 40px; height: 40px; border-radius: 10px; }
+  h1 { margin: 0; font-size: 15px; }
+  #state { margin: 2px 0 0; color: var(--muted); }
+  label { display: block; margin-bottom: 10px; font-weight: 600; }
+  input { display: block; width: 100%; margin-top: 4px; padding: 8px 10px; border: 1px solid var(--line);
+          border-radius: 8px; background: var(--field); color: var(--fg); font: inherit; font-weight: 400; }
+  input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  button { width: 100%; padding: 9px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--field);
+           color: var(--fg); font: inherit; font-weight: 600; cursor: pointer; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button:disabled { opacity: .6; cursor: default; }
+  button.link { width: auto; padding: 0; border: 0; background: none; color: var(--muted); font-weight: 400;
+                text-decoration: underline; }
+  .hint { margin: 12px 0 0; color: var(--muted); }
+  .err { margin: 12px 0 0; color: var(--err); }
+  #detail { margin: 8px 0 0; color: var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <img src="icons/48.png" alt="">
+  <div>
+    <h1>OpenTeddy</h1>
+    <p id="state">…</p>
+  </div>
+</header>
+
+<section id="pair" hidden>
+  <label>OpenTeddy 網址<input id="server" placeholder="http://192.168.1.10:8000" autocomplete="off" spellcheck="false"></label>
+  <label>配對碼<input id="code" inputmode="numeric" maxlength="7" placeholder="6 位數字" autocomplete="off"></label>
+  <button id="go" class="primary" type="button">連接</button>
+  <p class="hint">在 Telegram 私訊 OpenTeddy 說「連接瀏覽器」，就會收到網址和配對碼。</p>
+</section>
+
+<section id="paired" hidden>
+  <button id="pause" type="button"></button>
+  <p id="detail" hidden></p>
+  <p class="hint">OpenTeddy 只會在你從 Telegram 叫它時使用這個瀏覽器。送出、購買、刪除之前會先問你；密碼和信用卡不會幫你填。</p>
+  <p class="hint"><button id="unpair" class="link" type="button">解除配對</button></p>
+</section>
+
+<p id="err" class="err" hidden></p>
+<script src="popup.js"></script>
+</body>
+</html>

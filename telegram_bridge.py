@@ -1156,8 +1156,23 @@ async def _dispatch(update: Dict[str, Any]) -> None:
         )
         return
 
+    # ── 好／不要 to a browser action waiting for this person's OK ─────────────
+    # Has to come before the in-flight guard below: the task that asked is
+    # the one still running.
+    try:
+        import browser_bridge
+        from privacy import person_for_chat
+        _said = browser_bridge.answer_from_chat(person_for_chat(chat_id), text)
+    except Exception:  # noqa: BLE001
+        _said = None
+    if _said:
+        await _send_reply(chat_id, _said)
+        return
+
     # ── Commands ──────────────────────────────────────────────────────────────
-    if text.startswith("/"):
+    # /browser, /browser_status, /browser_unlink go to the orchestrator like
+    # 「連接瀏覽器」 does.
+    if text.startswith("/") and not text.lower().startswith("/browser"):
         await _handle_command(chat_id, text)
         return
 
@@ -1661,6 +1676,7 @@ async def _handle_command(chat_id: str, text: str) -> None:
             "/help   — this message\n"
             "/cancel — abort the currently-running task\n"
             "/new    — start a fresh session for this chat (old one stays in history)\n"
+            "/browser — pair your own Chrome (OpenTeddy extension); /browser_unlink to undo\n"
             "/cron   — list scheduled tasks for this chat\n"
             "          /cron cancel <id>  — cancel a schedule\n"
             "          /cron run <id>     — fire immediately (test)\n"

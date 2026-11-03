@@ -832,6 +832,14 @@ class Executor:
                 tools = [t for t in tools if (t.get("function") or {}).get("name") not in _hide]
         except Exception:  # noqa: BLE001
             pass
+        # Same for the person's own browser: only once they paired one.
+        try:
+            from browser_bridge import unusable_tools as _b_unusable
+            _hide = await _b_unusable()
+            if _hide and tools:
+                tools = [t for t in tools if (t.get("function") or {}).get("name") not in _hide]
+        except Exception:  # noqa: BLE001
+            pass
         objective_failure_seen = False
 
         # Duplicate-call tracker. Small local models (Qwen 2.5 3B) routinely
@@ -902,6 +910,11 @@ class Executor:
             # 8 calls = ~30 s, which is a sensible upper bound before
             # we want the model to step back and rethink.
             "browser_fetch":       8,
+            # The person's own browser: a web chore is many small steps
+            # (read, click, read, type …), each one cheap.
+            "browser_read":       10,
+            "browser_click":      12,
+            "browser_type":        8,
             # Shell read-only commands the user reported hitting the cap
             # on (ls, cat, grep …). Idempotent; multiple distinct calls
             # are fine, just not the same one repeatedly (that's caught
@@ -1301,6 +1314,16 @@ class Executor:
                 tn_prev = tool_name_counts.get(tool_name, 0)
                 tool_name_counts[tool_name] = tn_prev + 1
 
+                # What's in someone's own browser is theirs: mark the task
+                # private before the first call's address / typed text is
+                # broadcast (privacy.scrub_event).
+                if tool_name.startswith("browser_") and tool_name != "browser_fetch":
+                    try:
+                        import privacy as _privacy
+                        _privacy.mark(task_id)
+                    except Exception:  # noqa: BLE001
+                        pass
+
                 # Push event to Web UI. call_idx disambiguates multiple calls
                 # of the same tool within a single round so each gets its own
                 # card instead of sharing a DOM id.
@@ -1492,6 +1515,8 @@ class Executor:
                     # a stray "command not found" inside scraped article
                     # text trigger objective_failure.
                     "browser_fetch",
+                    # Same for pages read in the person's own browser.
+                    "browser_open", "browser_read", "browser_click", "browser_type",
                     # doc_to_markdown is markitdown-backed; its output is
                     # *the document content itself*, identical signal
                     # shape to read_file. A user's invoice PDF that

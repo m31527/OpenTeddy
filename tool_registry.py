@@ -535,6 +535,10 @@ class ToolRegistry:
         from tools.claude_code_tool import CLAUDE_CODE_TOOLS
         # Google calendar + Gmail (read-only) and one-shot reminders.
         from tools.personal_tool import PERSONAL_TOOLS
+        # The person's own Chrome through the OpenTeddy extension
+        # (browser_bridge.py). Last, like PERSONAL_TOOLS: hidden from anyone
+        # who hasn't paired a browser without moving the cached prompt prefix.
+        from tools.browser_ext_tool import BROWSER_EXT_TOOLS
 
         for fn, schema, risk in (
             SHELL_TOOLS + FILE_TOOLS + HTTP_TOOLS
@@ -544,7 +548,7 @@ class ToolRegistry:
             + CYBER_SKILLS_TOOLS + GITHUB_TRENDING_TOOLS
             + CHROME_ATTACHED_TOOLS + THREADS_TOOLS + DIGEST_TOOLS
             + PRINT_TOOLS + HOME_TOOLS + WEATHER_TOOLS + CLAUDE_CODE_TOOLS
-            + PERSONAL_TOOLS
+            + PERSONAL_TOOLS + BROWSER_EXT_TOOLS
         ):
             self.register(fn, schema, risk)
 

@@ -1222,6 +1222,50 @@ announced. Offline and mail alerts wait out quiet hours (default 23–7).
 Turn each one on or off, set the timings, or name devices to ignore in
 **Settings → 🔔 Proactive alerts**.
 
+## Your own browser (Chrome extension)
+
+With the OpenTeddy extension installed, OpenTeddy can read pages, click
+and fill in fields in **your everyday Chrome**, including sites you're
+logged in to. Like Google, a browser belongs to the one person who paired
+it, and only their Telegram private chat can drive it.
+
+**How it works.** The extension turns the page into text in which every
+link, button and field has a number (`[12] button "Search"`); the model
+answers "click 12". No screenshots and no guessed coordinates, so the
+local model can drive it and nothing gets clicked off-target. After every
+click or typing step the page is read again, so OpenTeddy can see whether
+it worked. Edge and Brave take the same extension.
+
+**Install and pair**
+1. In your Telegram private chat say **「連接瀏覽器」** (or `/browser`). You
+   get the OpenTeddy address and a 6-digit code (10 minutes, one use).
+2. Download `http://<openteddy>/browser/extension.zip` and unzip it (or use
+   `browser_ext/` from the repo), open `chrome://extensions`, turn on
+   Developer mode, **Load unpacked**, pick the folder.
+3. Click the OpenTeddy icon in the toolbar, enter the address and the code.
+
+「瀏覽器狀態」 shows whether it's connected; 「解除瀏覽器」 (or *Unpair* in the
+extension) removes it.
+
+**Safety**
+- Sending, buying, paying, deleting, posting, accepting terms and
+  submitting forms always ask first — an Allow / Don't card on the page and
+  a question in Telegram; either answer counts, no answer in 3 minutes is
+  a no. The card only takes a real click (page scripts can't press it).
+  Searches don't ask.
+- Password, card-number and verification-code fields are never filled.
+- Page text is data, never instructions.
+- While OpenTeddy works, the page shows "OpenTeddy is using this tab" with
+  a Stop button; it pauses everything until you press Resume in the
+  extension.
+- Only the extension can pair or connect (web pages can't); five wrong
+  codes void every pending code; the server keeps only a hash of the token.
+- Tasks that used the browser are private: no content on the web UI or in
+  memory.
+
+Not yet: pages drawn on a canvas (maps, Figma) and icon-only buttons need a
+vision model (planned: Qwen3-VL); cross-origin iframes aren't read.
+
 ## Claude Code ↔ OpenTeddy
 
 Claude Code is the better engineer; OpenTeddy is the one that is always on

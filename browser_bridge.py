@@ -1,0 +1,458 @@
+"""
+The person's own browser, through the OpenTeddy browser extension
+(browser_ext/). Like Google (google_auth.py) it belongs to one person —
+privacy.py — and is linked from that person's Telegram private chat:
+
+  1. 「連接瀏覽器」 → a 6-digit pairing code (one use, 10 minutes)
+  2. in the extension: this server's address + the code → POST /browser/pair
+     returns a token; only its SHA-256 is kept here
+  3. the extension holds a WebSocket to /browser/ws (token in the first
+     message) and reconnects by itself; tools (tools/browser_ext_tool.py)
+     send it one request at a time and wait for the answer
+
+Only extension pages may pair or connect (Origin chrome-extension://…), so
+a web page the person visits can't. Five wrong codes void every pending
+code. Clicks that send, buy, delete … wait for the person's OK — a real
+click on the card the extension shows on the page, or 好／不要 in Telegram.
+「解除瀏覽器」 forgets every token of that person and closes the connection.
+"""
+from __future__ import annotations
+
+import asyncio
+import hashlib
+import logging
+import re
+import secrets
+import socket
+import time
+from datetime import datetime, timezone
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
+
+import privacy
+
+logger = logging.getLogger(__name__)
+
+CODE_TTL_S = 600
+MAX_BAD_CODES = 5
+AUTH_TIMEOUT_S = 10.0
+PING_EVERY_S = 20.0
+CONFIRM_TTL_S = 180.0
+EXT_ORIGINS = ("chrome-extension://", "moz-extension://")
+
+TOOL_NAMES = frozenset({"browser_tabs", "browser_open", "browser_read", "browser_click", "browser_type"})
+
+# Said to the person (the model passes these on as they are).
+ONLY_TELEGRAM = ("🔒 瀏覽器只能連到你自己的帳號：請在 Telegram 私訊 OpenTeddy 說「連接瀏覽器」，"
+                 "之後也從 Telegram 叫我操作。")
+NOT_LINKED = "你還沒有連接瀏覽器。想用的話在 Telegram 私訊說「連接瀏覽器」，我會給你配對碼。"
+NOT_CONNECTED = "你的瀏覽器現在沒有連上（電腦關機、Chrome 沒開，或網路不通）。打開 Chrome 後再試一次。"
+PAUSED = "你在擴充功能按了「暫停」，OpenTeddy 現在不能操作瀏覽器。要繼續請在擴充功能按「繼續」。"
+
+_TABLE = (
+    "CREATE TABLE IF NOT EXISTS browser_links ("
+    "  token_hash TEXT PRIMARY KEY, person TEXT NOT NULL, label TEXT NOT NULL DEFAULT '',"
+    "  paired_at TEXT NOT NULL, last_seen TEXT NOT NULL DEFAULT ''"
+    ")"
+)
+
+_tracker: Any = None
+_codes: Dict[str, Dict[str, Any]] = {}            # code → {person, expires}
+_bad_codes = 0
+_conns: Dict[str, List["_Conn"]] = {}             # person → live connections, newest last
+_confirms: Dict[str, Dict[str, Any]] = {}         # person → {id, future}
+_task_tab: Dict[str, Tuple[int, float]] = {}      # task_id → (tab it works in, when)
+
+# Telegram message to a chat id; telegram_bridge._send_reply unless a test swaps it.
+say_in_chat: Optional[Callable[[str, str], Awaitable[None]]] = None
+
+
+class BrowserError(Exception):
+    """Something to tell the person (or the model) as it is."""
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _hash(token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+def origin_ok(origin: str) -> bool:
+    return (origin or "").startswith(EXT_ORIGINS)
+
+
+# ── Storage ──────────────────────────────────────────────────────────────────
+
+async def _db():
+    if _tracker is None:
+        raise RuntimeError("browser_bridge not started")
+    await _tracker.db.execute(_TABLE)
+    return _tracker.db
+
+
+async def start(tracker: Any) -> None:
+    global _tracker
+    _tracker = tracker
+    await _db()
+    await tracker.db.commit()
+
+
+async def linked(person: Optional[str]) -> int:
+    """How many browsers this person paired (0 = none)."""
+    if not person:
+        return 0
+    db = await _db()
+    async with db.execute("SELECT COUNT(*) FROM browser_links WHERE person=?", (person,)) as cur:
+        row = await cur.fetchone()
+    return int(row[0]) if row else 0
+
+
+async def unusable_tools() -> set:
+    """Browser tools are only there for a person who paired a browser."""
+    try:
+        return set() if await linked(privacy.current_person()) else set(TOOL_NAMES)
+    except RuntimeError:                               # not started (tests, CLI)
+        return set(TOOL_NAMES)
+
+
+async def _person_for_token(token: str) -> Tuple[Optional[str], str]:
+    if not token:
+        return None, ""
+    db = await _db()
+    async with db.execute("SELECT person, label FROM browser_links WHERE token_hash=?", (_hash(token),)) as cur:
+        row = await cur.fetchone()
+    if not row:
+        return None, ""
+    await db.execute("UPDATE browser_links SET last_seen=? WHERE token_hash=?", (_now(), _hash(token)))
+    await db.commit()
+    return row[0], row[1]
+
+
+# ── Pairing ──────────────────────────────────────────────────────────────────
+
+_LINK = re.compile(
+    r"^\s*(?:/browser\b|(?:請|幫我)?\s*(?:連接|連結|綁定|配對|connect|pair)\s*(?:我的|my)?\s*"
+    r"(?:瀏覽器|chrome|browser|擴充功能))", re.I)
+_UNLINK = re.compile(
+    r"^\s*(?:/browser_unlink\b|(?:請|幫我)?\s*(?:解除|取消|移除|中斷|斷開)\s*(?:連接|連結|綁定|配對)?\s*"
+    r"(?:我的)?\s*(?:瀏覽器|chrome)|(?:unpair|disconnect)\s+(?:my\s+)?browser)", re.I)
+_STATUS = re.compile(r"^\s*(?:/browser_status\b|(?:我的)?\s*(?:瀏覽器|chrome)\s*(?:連線|配對)?\s*狀態)", re.I)
+
+
+def parse_command(text: str) -> Optional[str]:
+    """'link' | 'unlink' | 'status' | None — only for a short message."""
+    t = (text or "").strip()
+    if not t or len(t) > 40:
+        return None
+    if _UNLINK.search(t):
+        return "unlink"
+    if _STATUS.search(t):
+        return "status"
+    if _LINK.search(t):
+        return "link"
+    return None
+
+
+def _sweep() -> None:
+    now = time.time()
+    for c in [c for c, e in _codes.items() if e["expires"] < now]:
+        _codes.pop(c, None)
+
+
+def begin(person: str) -> str:
+    """A one-use pairing code for this person (their older ones stop working)."""
+    _sweep()
+    for c in [c for c, e in _codes.items() if e["person"] == person]:
+        _codes.pop(c, None)
+    code = f"{secrets.randbelow(10**6):06d}"
+    while code in _codes:
+        code = f"{secrets.randbelow(10**6):06d}"
+    _codes[code] = {"person": person, "expires": time.time() + CODE_TTL_S}
+    return code
+
+
+async def pair(code: str, label: str, origin: str) -> str:
+    """Trade a pairing code for this browser's token."""
+    global _bad_codes
+    if not origin_ok(origin):
+        raise BrowserError("只有 OpenTeddy 擴充功能可以配對。")
+    _sweep()
+    entry = _codes.pop(re.sub(r"\D", "", code or ""), None)
+    if not entry:
+        _bad_codes += 1
+        if _bad_codes >= MAX_BAD_CODES:
+            logger.warning("browser pairing: %d wrong codes — every pending code voided", _bad_codes)
+            _codes.clear()
+            _bad_codes = 0
+        raise BrowserError("配對碼不對或已過期。請在 Telegram 重新說「連接瀏覽器」拿新的配對碼。")
+    _bad_codes = 0
+    token = secrets.token_urlsafe(32)
+    db = await _db()
+    await db.execute(
+        "INSERT INTO browser_links(token_hash, person, label, paired_at, last_seen) VALUES (?,?,?,?,?)",
+        (_hash(token), entry["person"], (label or "").strip()[:60], _now(), ""))
+    await db.commit()
+    logger.info("Browser paired for %s (%s)", entry["person"], label)
+    return token
+
+
+async def unlink(person: str) -> int:
+    """Forget every browser of this person and hang up on them."""
+    db = await _db()
+    cur = await db.execute("DELETE FROM browser_links WHERE person=?", (person,))
+    await db.commit()
+    for conn in list(_conns.get(person, [])):
+        await conn.close("unpaired")
+    return cur.rowcount or 0
+
+
+async def _forget_token(token_hash: str) -> None:
+    db = await _db()
+    await db.execute("DELETE FROM browser_links WHERE token_hash=?", (token_hash,))
+    await db.commit()
+
+
+async def status(person: str) -> Dict[str, Any]:
+    live = _conns.get(person, [])
+    return {"linked": await linked(person),
+            "online": [c.label or "瀏覽器" for c in live],
+            "paused": any(c.paused for c in live)}
+
+
+def server_address() -> str:
+    """This machine's address on its main network, for the pairing message."""
+    import os
+    port = os.environ.get("OPENTEDDY_PORT", "8000")
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("192.0.2.1", 80))               # no packet is sent; picks the outbound address
+        ip = s.getsockname()[0]
+        s.close()
+    except OSError:
+        return ""
+    return f"http://{ip}:{port}"
+
+
+# ── The connection ───────────────────────────────────────────────────────────
+
+class _Conn:
+    def __init__(self, ws: Any, person: str, token_hash: str, label: str, paused: bool) -> None:
+        self.ws, self.person, self.token_hash = ws, person, token_hash
+        self.label, self.paused = label, paused
+        self.pending: Dict[str, asyncio.Future] = {}
+        self._lock = asyncio.Lock()
+
+    async def send(self, obj: Dict[str, Any]) -> None:
+        async with self._lock:
+            await self.ws.send_json(obj)
+
+    async def request(self, op: str, params: Dict[str, Any], timeout: float) -> Dict[str, Any]:
+        rid = secrets.token_hex(6)
+        fut = asyncio.get_running_loop().create_future()
+        self.pending[rid] = fut
+        try:
+            await self.send({"type": "call", "id": rid, "op": op, "params": params})
+            return await asyncio.wait_for(fut, timeout)
+        except asyncio.TimeoutError:
+            raise BrowserError("瀏覽器太久沒有回應，可能那一頁還在載入。") from None
+        except BrowserError:
+            raise
+        except Exception:  # noqa: BLE001 — the socket went away mid-send
+            raise BrowserError(NOT_CONNECTED) from None
+        finally:
+            self.pending.pop(rid, None)
+
+    def fail_all(self, why: str) -> None:
+        for fut in self.pending.values():
+            if not fut.done():
+                fut.set_exception(BrowserError(why))
+
+    async def handle(self, msg: Dict[str, Any]) -> None:
+        kind = msg.get("type")
+        if kind == "result":
+            fut = self.pending.get(str(msg.get("id")))
+            if fut and not fut.done():
+                fut.set_result(msg)
+        elif kind == "paused":
+            self.paused = bool(msg.get("value"))
+            if self.paused:
+                self.fail_all(PAUSED)
+                _resolve_confirm(self.person, None, False)
+        elif kind == "confirm":
+            _resolve_confirm(self.person, str(msg.get("id") or ""), bool(msg.get("allow")))
+        elif kind == "forget":                     # 「解除配對」 pressed in the extension
+            await _forget_token(self.token_hash)
+            await self.close("unpaired")
+
+    async def close(self, kind: str) -> None:
+        try:
+            await self.send({"type": kind})
+            await self.ws.close(code=4401 if kind == "unpaired" else 1000)
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def _live(person: str) -> Optional[_Conn]:
+    live = _conns.get(person) or []
+    return live[-1] if live else None
+
+
+async def serve(ws: Any) -> None:
+    """The extension's WebSocket (/browser/ws)."""
+    if not origin_ok(ws.headers.get("origin", "")):
+        await ws.close(code=4403)
+        return
+    await ws.accept()
+    try:
+        hello = await asyncio.wait_for(ws.receive_json(), AUTH_TIMEOUT_S)
+        token = str(hello.get("token") or "") if hello.get("type") == "hello" else ""
+        person, label = await _person_for_token(token)
+    except Exception:  # noqa: BLE001
+        person, label, hello, token = None, "", {}, ""
+    if not person:
+        try:
+            await ws.send_json({"type": "unpaired"})
+            await ws.close(code=4401)
+        except Exception:  # noqa: BLE001
+            pass
+        return
+    conn = _Conn(ws, person, _hash(token), str(hello.get("label") or label or "")[:60],
+                 bool(hello.get("paused")))
+    _conns.setdefault(person, []).append(conn)
+    logger.info("Browser online for %s (%s)", person, conn.label)
+
+    async def _ping() -> None:
+        while True:
+            await asyncio.sleep(PING_EVERY_S)
+            await conn.send({"type": "ping"})      # also keeps the extension's worker awake
+
+    pinger = asyncio.create_task(_ping())
+    try:
+        await conn.send({"type": "welcome"})
+        while True:
+            await conn.handle(await ws.receive_json())
+    except Exception:  # noqa: BLE001 — disconnect, bad frame
+        pass
+    finally:
+        pinger.cancel()
+        live = _conns.get(person, [])
+        if conn in live:
+            live.remove(conn)
+        if not live:
+            _conns.pop(person, None)
+        conn.fail_all(NOT_CONNECTED)
+        logger.info("Browser offline for %s (%s)", person, conn.label)
+
+
+# ── Calls from tools ─────────────────────────────────────────────────────────
+
+async def call(op: str, params: Optional[Dict[str, Any]] = None, timeout: float = 20.0,
+               person: Optional[str] = None) -> Dict[str, Any]:
+    """Run one operation in this task's person's browser; returns its result."""
+    person = person or privacy.current_person()
+    if not person:
+        raise BrowserError(ONLY_TELEGRAM)
+    conn = _live(person)
+    if not conn:
+        raise BrowserError(NOT_CONNECTED if await linked(person) else NOT_LINKED)
+    if conn.paused:
+        raise BrowserError(PAUSED)
+    reply = await conn.request(op, params or {}, timeout)
+    if not reply.get("ok"):
+        raise BrowserError(str(reply.get("error") or "瀏覽器回報失敗"))
+    return reply.get("result") or {}
+
+
+def task_tab(task_id: Optional[str]) -> Optional[int]:
+    hit = _task_tab.get(task_id or "")
+    return hit[0] if hit else None
+
+
+def set_task_tab(task_id: Optional[str], tab: Any) -> None:
+    if not task_id or not isinstance(tab, int):
+        return
+    now = time.time()
+    _task_tab[task_id] = (tab, now)
+    if len(_task_tab) > 500:
+        for k in [k for k, (_, t) in _task_tab.items() if now - t > 86400]:
+            _task_tab.pop(k, None)
+
+
+# ── Asking the person first ──────────────────────────────────────────────────
+
+_YES = re.compile(r"^\s*(好|好的|好啊|可以|允許|同意|確定|按吧|照做|ok|okay|yes|y|sure)\s*[!！。.～~]*\s*$", re.I)
+_NO = re.compile(r"^\s*(不要|不用|不行|不可以|不准|取消|拒絕|算了|別按|no|n|nope|cancel)\s*[!！。.～~]*\s*$", re.I)
+
+
+def _resolve_confirm(person: str, cid: Optional[str], allow: bool) -> bool:
+    c = _confirms.get(person)
+    if not c or (cid is not None and c["id"] != cid) or c["future"].done():
+        return False
+    c["future"].set_result(allow)
+    return True
+
+
+def answer_from_chat(person: Optional[str], text: str) -> Optional[str]:
+    """A Telegram reply to a pending question; returns what to say back, or
+    None when the message isn't an answer (it then goes on as usual)."""
+    if not person or person not in _confirms:
+        return None
+    if _YES.match(text or ""):
+        return "👍 好，照做。" if _resolve_confirm(person, None, True) else None
+    if _NO.match(text or ""):
+        return "👌 好，不按。" if _resolve_confirm(person, None, False) else None
+    return None
+
+
+async def _say(chat_id: str, text: str) -> None:
+    fn = say_in_chat
+    if fn is None:
+        from telegram_bridge import _send_reply as fn  # type: ignore[no-redef]
+    await fn(chat_id, text)
+
+
+async def confirm(question: str, tab: Optional[int] = None, person: Optional[str] = None) -> bool:
+    """Ask the person before an action that can't be taken back. Asked on
+    the page and in their Telegram chat; the first answer wins, silence
+    for CONFIRM_TTL_S is a no. The wait isn't billed to the subtask."""
+    person = person or privacy.current_person()
+    if not person:
+        return False
+    old = _confirms.get(person)
+    if old and not old["future"].done():
+        old["future"].set_result(False)
+    cid = secrets.token_hex(4)
+    fut = asyncio.get_running_loop().create_future()
+    _confirms[person] = {"id": cid, "future": fut}
+    conn = _live(person)
+    started = time.monotonic()
+    try:
+        if conn:
+            try:
+                await conn.send({"type": "confirm", "id": cid, "text": question, "tab": tab})
+            except Exception:  # noqa: BLE001
+                pass
+        if person.startswith("tg:"):
+            try:
+                await _say(person[3:], f"🐻 {question}\n回覆「好」我就照做，回覆「不要」就取消"
+                                       f"（{int(CONFIRM_TTL_S // 60)} 分鐘內）。在電腦上也可以直接按「允許」。")
+            except Exception as exc:  # noqa: BLE001
+                logger.info("browser confirm: Telegram ask failed: %s", exc)
+        try:
+            return bool(await asyncio.wait_for(asyncio.shield(fut), CONFIRM_TTL_S))
+        except asyncio.TimeoutError:
+            return False
+    finally:
+        if _confirms.get(person, {}).get("id") == cid:
+            _confirms.pop(person, None)
+        try:
+            from tools._context import add_approval_pause
+            add_approval_pause(time.monotonic() - started)
+        except Exception:  # noqa: BLE001
+            pass
+        if conn:
+            try:
+                await conn.send({"type": "confirm_done", "id": cid})
+            except Exception:  # noqa: BLE001
+                pass

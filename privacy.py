@@ -57,6 +57,11 @@ def current_person() -> Optional[str]:
     return (s or {}).get("person")
 
 
+def current_task() -> Optional[str]:
+    s = _scope.get()
+    return (s or {}).get("task_id")
+
+
 def mark(task_id: Optional[str] = None) -> None:
     """This task now carries personal data."""
     tid = task_id or (_scope.get() or {}).get("task_id")
