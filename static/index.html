@@ -1440,15 +1440,34 @@
       align-self: stretch;
     }
     .approval-card .approval-header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
       font-size: 0.95rem;
       font-weight: 600;
       color: var(--text-primary);
-      margin-bottom: 10px;
+      line-height: 1.4;
     }
-    .approval-card .approval-header .approval-tool-name {
-      font-family: 'Courier New', monospace;
-      color: var(--purple);
+    .approval-card .approval-icon {
+      flex-shrink: 0;
+      width: 32px; height: 32px;
+      display: inline-flex; align-items: center; justify-content: center;
+      border-radius: 10px;
+      background: #fbf0dc;
+      font-size: 0.95rem;
     }
+    .approval-card .approval-details > summary {
+      list-style: none;
+      cursor: pointer;
+      font-size: 0.78rem;
+      color: var(--text-secondary);
+      margin-top: 6px;
+    }
+    .approval-card .approval-details > summary::-webkit-details-marker { display: none; }
+    .approval-card .approval-details > summary::after { content: ' ▾'; font-size: 0.7rem; }
+    .approval-card .approval-details[open] > summary::after { content: ' ▴'; }
+    /* Keyboard hints mean nothing on a phone. */
+    @media (hover: none) { .approval-card .btn-approval kbd { display: none; } }
     .approval-card .approval-command {
       background: var(--bg-secondary);
       color: var(--text-primary);
@@ -1464,10 +1483,12 @@
       overflow-y: auto;
     }
     .approval-card .approval-subtext {
-      font-size: 0.78rem;
-      color: var(--text-muted);
-      margin: 10px 0 4px;
+      font-size: 0.8rem;
+      color: var(--text-secondary);
+      margin: 6px 0 0 42px;
+      line-height: 1.45;
     }
+    .approval-card .approval-details { margin-left: 42px; }
     /* Auto-approve countdown — amber so it reads as "heads up something
        is about to fire" without being as alarming as the red Deny
        button. Sits between subtext and the action row. */
@@ -2371,15 +2392,41 @@
       line-height: 1.55;
     }
 
+    /* A quiet note from the app, not an alarm. */
     .msg-system {
-      background: #fff0f0;
-      border: 1px solid #fca5a5;
-      color: var(--error);
-      border-radius: 10px;
-      padding: 9px 14px;
+      background: var(--bg-secondary);
+      border: 1px solid transparent;
+      color: var(--text-secondary);
+      border-radius: 999px;
+      padding: 6px 14px;
       align-self: center;
-      font-size: 0.82rem;
+      font-size: 0.8rem;
       font-weight: 500;
+    }
+
+    .msg-user-files { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+    .msg-user-file {
+      max-width: 100%;
+      padding: 3px 10px;
+      border-radius: 999px;
+      background: rgba(255,255,255,0.14);
+      font-size: 0.76rem;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    /* Phones: answers and cards use the full width; file actions keep
+       their size so they stay easy to tap. */
+    @media (max-width: 600px) {
+      .chat-messages { padding: 1rem 0.85rem; }
+      .msg-agent { max-width: 92%; }
+      .msg-agent:has(.file-cards, .result-foot) { max-width: 100%; align-self: stretch; }
+      .run-card { padding: 12px 10px 6px; border-radius: 14px; }
+      .file-card { gap: 10px; padding: 9px 8px 9px 10px; }
+      .file-btn { padding: 7px 11px; }
+      .approval-card .approval-subtext,
+      .approval-card .approval-details { margin-left: 0; }
     }
 
     /* Permanent mode-change marker dropped into the chat when the
@@ -2414,131 +2461,268 @@
       font-weight: 600;
     }
 
-    /* Tool execution card — collapsed = subtle chip, expanded = full card */
-    .tool-call-card {
-      background: transparent;
-      border: 1px solid transparent;
-      border-left: 2px solid var(--purple);
-      border-radius: 6px;
-      padding: 3px 10px;
-      font-size: 0.78rem;
+    /* ── Run card ────────────────────────────────────────────────────────
+       One calm card per running task: what it's doing now (plain words),
+       a progress bar, and the last few steps. Each step opens to its
+       technical detail. The same step list reappears, folded, under the
+       finished answer ("How it got there"). */
+    .msg-agent.run-hidden { display: none; }
+    .run-card {
       align-self: stretch;
-      transition: background 0.2s ease, border-color 0.2s ease, padding 0.18s ease;
+      max-width: 640px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 14px 14px 8px;
+      box-shadow: 0 1px 2px rgba(26,26,26,0.04), 0 6px 20px rgba(26,26,26,0.04);
+      animation: run-in 0.25s ease-out;
     }
-    .tool-call-card:hover { background: var(--bg-secondary); }
-    .tool-call-card.expanded {
-      background: var(--bg-secondary);
-      border-color: var(--border);
-      padding: 7px 12px;
-      font-size: 0.82rem;
+    @keyframes run-in {
+      from { opacity: 0; transform: translateY(4px); }
+      to   { opacity: 1; transform: none; }
     }
-    .tool-call-card:not(.expanded) .tool-call-name { opacity: 0.85; }
-    .tool-call-card.success { border-left-color: var(--success); }
-    .tool-call-card.failure { border-left-color: var(--error); }
-    .tool-call-header {
-      display: flex;
-      align-items: center;
-      gap: 0.45rem;
+    .run-head { display: flex; align-items: center; gap: 12px; padding: 0 2px; }
+    .run-orb {
+      position: relative;
+      flex-shrink: 0;
+      width: 10px; height: 10px;
+      border-radius: 50%;
+      background: var(--accent);
+    }
+    .run-orb::after {
+      content: '';
+      position: absolute; inset: -5px;
+      border-radius: 50%;
+      border: 2px solid var(--accent);
+      opacity: 0;
+      animation: run-ping 1.8s ease-out infinite;
+    }
+    @keyframes run-ping {
+      0%   { transform: scale(0.5); opacity: 0.55; }
+      100% { transform: scale(1.4); opacity: 0; }
+    }
+    .run-card.is-waiting .run-orb,
+    .run-card.is-waiting .run-orb::after { background: #d99a2b; border-color: #d99a2b; }
+    .run-head-text { flex: 1; min-width: 0; }
+    .run-title {
+      font-size: 0.95rem;
       font-weight: 600;
-      color: var(--text-secondary);
-      font-size: inherit;
-      cursor: pointer;
-      user-select: none;
-    }
-    .tool-call-chevron {
-      display: inline-block;
-      font-size: 0.7rem;
-      color: var(--text-muted);
-      transition: transform 0.18s ease-out;
-      width: 10px;
-      text-align: center;
-    }
-    .tool-call-card.expanded .tool-call-chevron { transform: rotate(90deg); }
-    .tool-call-name { color: var(--purple); font-family: 'Courier New', monospace; }
-    .tool-call-summary {
-      color: var(--text-muted);
-      font-weight: 400;
-      font-size: 0.75rem;
-      font-family: 'Courier New', monospace;
-      margin-left: auto;
+      color: var(--text-primary);
+      line-height: 1.35;
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
-      max-width: 50%;
     }
-    .tool-call-card.success .tool-call-summary { color: var(--success); }
-    .tool-call-card.failure .tool-call-summary { color: var(--error); }
-    .tool-call-body { display: none; margin-top: 0.4rem; }
-    .tool-call-card.expanded .tool-call-body { display: block; }
-
-    /* Group wrapper: when a task finishes, all of its tool-call-cards are
-       moved into this <details> so the chat is tidy by default but the
-       full trace is still one click away. */
-    .tool-calls-group {
-      align-self: stretch;
-      margin: 2px 0;
-    }
-    .tool-calls-group > summary {
-      cursor: pointer;
+    .run-meta {
+      font-size: 0.75rem;
       color: var(--text-muted);
+      margin-top: 2px;
+      font-variant-numeric: tabular-nums;
+    }
+    .run-bar {
+      position: relative;
+      height: 4px;
+      margin: 12px 2px 6px;
+      border-radius: 999px;
+      background: var(--bg-secondary);
+      overflow: hidden;
+    }
+    .run-bar > i {
+      position: absolute; inset: 0 auto 0 0;
+      width: 6%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, #e8a184, var(--accent));
+      transition: width 0.5s ease;
+    }
+    .run-bar.is-indeterminate > i {
+      width: 35%;
+      animation: run-slide 1.6s ease-in-out infinite;
+    }
+    @keyframes run-slide {
+      from { transform: translateX(-100%); }
+      to   { transform: translateX(290%); }
+    }
+    .run-more {
+      display: block;
+      margin: 4px 2px 0;
+      padding: 4px 0;
+      background: none;
+      border: none;
+      font: inherit;
       font-size: 0.78rem;
-      padding: 4px 10px;
-      border-left: 2px solid var(--text-muted);
-      border-radius: 6px;
-      list-style: none;
+      color: var(--text-secondary);
+      cursor: pointer;
+    }
+    .run-more:hover { color: var(--text-primary); }
+    .run-steps { list-style: none; margin: 2px 0 0; padding: 0; }
+    .run-step > details > summary {
       display: flex;
       align-items: center;
-      gap: 0.45rem;
-      user-select: none;
-      font-weight: 500;
+      gap: 10px;
+      padding: 7px 4px;
+      border-radius: 10px;
+      list-style: none;
+      cursor: pointer;
+      font-size: 0.86rem;
+      color: var(--text-primary);
+      -webkit-tap-highlight-color: transparent;
     }
-    .tool-calls-group > summary::marker,
-    .tool-calls-group > summary::-webkit-details-marker { display: none; }
-    .tool-calls-group > summary::before {
-      content: '▸';
+    .run-step > details > summary::-webkit-details-marker { display: none; }
+    .run-step > details > summary:hover { background: var(--bg-primary); }
+    .run-step-ico {
+      flex-shrink: 0;
+      width: 28px; height: 28px;
+      display: inline-flex; align-items: center; justify-content: center;
+      border-radius: 9px;
+      background: var(--bg-secondary);
+      font-size: 0.85rem;
+    }
+    .run-step-text {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .run-step-note {
+      flex-shrink: 0;
+      font-size: 0.74rem;
+      color: var(--text-muted);
+      white-space: nowrap;
+    }
+    .run-step-note:empty { display: none; }
+    .run-step-state {
+      margin-left: auto;
+      flex-shrink: 0;
+      width: 18px; height: 18px;
+      display: inline-flex; align-items: center; justify-content: center;
+      font-size: 0.72rem;
+      font-weight: 700;
+      border-radius: 50%;
+    }
+    .run-step.is-running .run-step-state {
+      border: 2px solid var(--border);
+      border-top-color: var(--accent);
+      animation: spin 0.8s linear infinite;
+    }
+    .run-step.is-done .run-step-state::before    { content: '✓'; }
+    .run-step.is-done .run-step-state            { color: var(--success); background: #e7f3eb; }
+    .run-step.is-retry .run-step-state::before   { content: '↻'; }
+    .run-step.is-retry .run-step-state           { color: #b4741e; background: #fbf0dc; }
+    .run-step.is-retry .run-step-note            { color: #b4741e; }
+    .run-step.is-waiting .run-step-state::before { content: '•'; font-size: 1.1rem; }
+    .run-step.is-waiting .run-step-state         { color: #d99a2b; background: #fbf0dc; }
+    .run-step.is-waiting .run-step-note          { color: #b4741e; font-weight: 600; }
+    .run-step.is-skipped .run-step-state::before,
+    .run-step.is-stopped .run-step-state::before { content: '–'; }
+    .run-step.is-denied .run-step-state::before  { content: '✕'; }
+    .run-step.is-skipped .run-step-state,
+    .run-step.is-stopped .run-step-state,
+    .run-step.is-denied .run-step-state          { color: var(--text-muted); background: var(--bg-secondary); }
+    .run-step.is-skipped .run-step-text,
+    .run-step.is-stopped .run-step-text          { color: var(--text-secondary); }
+    .run-step-detail {
+      margin: 0 4px 8px 42px;
+      padding: 10px 12px;
+      border-radius: 10px;
+      background: var(--bg-primary);
+      border: 1px solid var(--border);
+    }
+    .run-step-tool {
+      font-family: "SF Mono", Menlo, Consolas, monospace;
+      font-size: 0.72rem;
+      color: var(--purple);
+    }
+    .run-step-label {
+      margin-top: 8px;
       font-size: 0.7rem;
+      font-weight: 600;
+      letter-spacing: 0.04em;
       color: var(--text-muted);
-      width: 10px;
-      text-align: center;
-      display: inline-block;
-      transition: transform 0.18s ease-out;
+      text-transform: uppercase;
     }
-    .tool-calls-group[open] > summary::before { transform: rotate(90deg); }
-    .tool-calls-group > summary:hover { background: var(--bg-secondary); }
-    .tool-calls-group.has-failure > summary { border-left-color: var(--error); }
-    .tool-calls-group[open] > summary { margin-bottom: 4px; }
-    .tool-call-args {
-      font-family: 'Courier New', monospace;
-      font-size: 0.75rem;
-      color: var(--text-muted);
-      white-space: pre-wrap;
-      word-break: break-all;
-      background: var(--surface);
-      border-radius: 4px;
-      padding: 0.3rem 0.55rem;
-      max-height: 120px;
-      overflow-y: auto;
-    }
-    .tool-result-row {
-      display: flex;
-      align-items: flex-start;
-      gap: 0.4rem;
-      margin-top: 0.35rem;
-    }
-    .tool-result-icon { font-size: 0.85rem; flex-shrink: 0; line-height: 1.6; }
-    .tool-result-output {
-      font-family: 'Courier New', monospace;
-      font-size: 0.75rem;
+    .run-step-detail pre {
+      margin-top: 3px;
+      font-family: "SF Mono", Menlo, Consolas, monospace;
+      font-size: 0.72rem;
+      line-height: 1.5;
       color: var(--text-secondary);
       white-space: pre-wrap;
-      word-break: break-all;
-      background: var(--surface);
-      border-radius: 4px;
-      padding: 0.3rem 0.55rem;
-      flex: 1;
-      max-height: 220px;
+      word-break: break-word;
+      max-height: 180px;
       overflow-y: auto;
     }
+
+    /* ── Answer footer ─────────────────────────────────────────────────
+       Under a finished answer: a status word, time and action count; then
+       "How it got there" folds out the plan and every step. */
+    .result-foot {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 6px 12px;
+      margin-top: 12px;
+      padding-top: 10px;
+      border-top: 1px solid rgba(26,26,26,0.07);
+      font-size: 0.76rem;
+      color: var(--text-muted);
+    }
+    .result-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+    .result-meta .dot { opacity: 0.5; }
+    .result-badge { font-weight: 600; }
+    .result-badge.tone-ok    { color: var(--success); }
+    .result-badge.tone-warn  { color: #b4741e; }
+    .result-badge.tone-fail  { color: var(--error); }
+    .result-badge.tone-muted { color: var(--text-secondary); }
+    .result-badge.tone-ok::before    { content: '✓ '; }
+    .result-badge.tone-warn::before  { content: '! '; }
+    .result-badge.tone-fail::before  { content: '✕ '; }
+    .result-process > summary {
+      list-style: none;
+      cursor: pointer;
+      color: var(--text-secondary);
+      font-weight: 500;
+      padding: 2px 0;
+      user-select: none;
+    }
+    .result-process > summary::-webkit-details-marker { display: none; }
+    .result-process > summary::after { content: ' ▾'; font-size: 0.7rem; }
+    .result-process[open] { flex-basis: 100%; }
+    .result-process[open] > summary::after { content: ' ▴'; }
+    .process-label {
+      margin: 10px 0 2px;
+      font-size: 0.7rem;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--text-muted);
+    }
+    .process-plan { list-style: none; margin: 0; padding: 0; }
+    .process-plan li {
+      display: flex;
+      gap: 10px;
+      padding: 5px 4px;
+      font-size: 0.84rem;
+      color: var(--text-primary);
+      line-height: 1.45;
+    }
+    .process-mark {
+      flex-shrink: 0;
+      width: 18px; height: 18px;
+      margin-top: 1px;
+      border-radius: 50%;
+      display: inline-flex; align-items: center; justify-content: center;
+      font-size: 0.68rem; font-weight: 700;
+      color: var(--text-muted);
+      background: var(--bg-secondary);
+    }
+    .process-plan li.is-completed .process-mark { color: var(--success); background: #e7f3eb; }
+    .process-plan li.is-completed .process-mark::before { content: '✓'; }
+    .process-plan li.is-failed .process-mark,
+    .process-plan li.is-escalated .process-mark { color: #b4741e; background: #fbf0dc; }
+    .process-plan li.is-failed .process-mark::before { content: '!'; }
+    .process-plan li.is-escalated .process-mark::before { content: '↗'; }
+    .result-process .run-steps { margin-left: -4px; }
 
     /* Markdown */
     .md-body {
@@ -2590,24 +2774,6 @@
       font-weight: 600;
     }
 
-    /* Plan-phase streaming preview — faded, tabular-numbers, capped
-       height. Lives INSIDE the "Working on it…" bubble while Gemma
-       is still planning, so the user sees the agent thinking instead
-       of staring at a static spinner for 5–15 s. */
-    .plan-stream-preview {
-      margin-top: 6px;
-      padding-top: 6px;
-      border-top: 1px dashed var(--border);
-      font-family: "SF Mono", Menlo, monospace;
-      font-size: 0.72rem;
-      line-height: 1.45;
-      color: var(--text-muted);
-      max-height: 110px;
-      overflow: hidden;
-      white-space: pre-wrap;
-      word-break: break-all;
-      transition: opacity 0.25s ease;
-    }
     .msg-agent.planning {
       /* Subtle pulse so the user knows planning is in progress. */
       animation: plan-pulse 1.6s ease-in-out infinite;
@@ -2617,16 +2783,6 @@
       50%      { background: rgba(196,109,79,0.07); }
     }
 
-    /* Subtle "took 1m 23s" stamp shown beneath the agent's final answer
-       so the user can see how long the round-trip took at a glance. */
-    .task-elapsed-footer {
-      margin-top: 0.5rem;
-      font-size: 0.72rem;
-      color: var(--text-muted);
-      font-variant-numeric: tabular-nums;
-      letter-spacing: 0.02em;
-      opacity: 0.85;
-    }
     .md-body h2, .md-body h3, .md-body h4 {
       margin: 0.8rem 0 0.35rem;
       font-weight: 600;
@@ -2674,97 +2830,59 @@
       margin: 0.7rem 0;
     }
 
-    /* Artifact download chips shown inside a task's result message */
-    .artifact-row {
+    /* Files a task produced: one card each — a type badge, the name and
+       size, and Open / Download. */
+    .file-cards { display: grid; gap: 8px; margin: 12px 0 2px; }
+    .file-card {
       display: flex;
-      flex-wrap: wrap;
-      gap: 6px;
-      margin: 0.6rem 0 0.2rem;
-    }
-    .artifact-chip {
-      display: inline-flex;
       align-items: center;
-      gap: 6px;
+      gap: 12px;
+      padding: 10px 10px 10px 12px;
       background: var(--surface);
       border: 1px solid var(--border);
-      border-radius: 999px;
-      padding: 5px 12px;
-      font-size: 0.82rem;
+      border-radius: 14px;
+    }
+    .file-card-badge {
+      flex-shrink: 0;
+      width: 40px; height: 40px;
+      border-radius: 11px;
+      display: inline-flex; align-items: center; justify-content: center;
+      font-size: 0.62rem;
+      font-weight: 800;
+      letter-spacing: 0.04em;
+    }
+    .file-card-badge.tone-web   { background: var(--accent-light); color: var(--accent-hover); }
+    .file-card-badge.tone-image { background: var(--purple-light); color: var(--purple); }
+    .file-card-badge.tone-data  { background: #e7f3eb; color: var(--success); }
+    .file-card-badge.tone-doc   { background: #e8eef8; color: #3b5b8f; }
+    .file-card-badge.tone-code  { background: #eceae6; color: #4a4a4a; }
+    .file-card-badge.tone-other { background: var(--bg-secondary); color: var(--text-secondary); }
+    .file-card-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+    .file-card-name {
+      font-size: 0.88rem;
+      font-weight: 600;
       color: var(--text-primary);
-      text-decoration: none;
-      font-family: inherit;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .file-card-sub { font-size: 0.75rem; color: var(--text-muted); }
+    .file-card-actions { display: flex; gap: 6px; flex-shrink: 0; }
+    .file-btn {
+      padding: 7px 12px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--text-primary);
+      font: inherit;
+      font-size: 0.8rem;
+      font-weight: 500;
       cursor: pointer;
       transition: background 0.12s, border-color 0.12s;
     }
-    .artifact-chip:hover {
-      background: var(--bg-secondary);
-      border-color: var(--text-secondary);
-    }
-    /* Wraps the download chip + inline preview eye so they read as one unit */
-    .artifact-chip-wrap {
-      display: inline-flex;
-      align-items: stretch;
-      border-radius: 999px;
-      overflow: hidden;
-    }
-    .artifact-chip-wrap .artifact-chip {
-      border-top-right-radius: 0;
-      border-bottom-right-radius: 0;
-      border-right: none;
-    }
-    .artifact-preview {
-      display: inline-flex;
-      align-items: center;
-      padding: 5px 10px;
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-left: 1px solid var(--border);
-      border-top-right-radius: 999px;
-      border-bottom-right-radius: 999px;
-      font-size: 0.82rem;
-      color: var(--text-secondary);
-      text-decoration: none;
-      font-family: inherit;
-      cursor: pointer;
-      transition: background 0.12s, color 0.12s;
-    }
-    .artifact-preview:hover {
-      background: var(--bg-secondary);
-      color: var(--text-primary);
-    }
-
-    /* Collapsible "N steps" block under each task result */
-    .chat-steps-details {
-      margin-top: 0.6rem;
-      border-top: 1px solid var(--border);
-      padding-top: 0.45rem;
-    }
-    .chat-steps-summary {
-      cursor: pointer;
-      user-select: none;
-      font-size: 0.78rem;
-      color: var(--text-secondary);
-      padding: 2px 0;
-      list-style: none;
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-    }
-    .chat-steps-summary::-webkit-details-marker { display: none; }
-    .chat-steps-summary::before {
-      content: '▸';
-      color: var(--text-muted);
-      transition: transform 0.15s;
-      display: inline-block;
-      width: 10px;
-    }
-    .chat-steps-details[open] > .chat-steps-summary::before { transform: rotate(90deg); }
-
-    .chat-subtasks {
-      margin-top: 0.5rem;
-      list-style: none;
-      padding-top: 0.3rem;
-    }
+    .file-btn:hover { background: var(--bg-secondary); }
+    .file-btn.primary { background: var(--text-primary); border-color: var(--text-primary); color: #fff; }
+    .file-btn.primary:hover { background: #333; }
 
     /* "Let Claude fix" button — shown inside a failed task's result
        card. Deliberately uses Claude's brand-ish purple so it visually
@@ -2805,15 +2923,6 @@
       color: var(--text-muted);
       line-height: 1.4;
     }
-    .chat-subtasks li {
-      display: flex;
-      align-items: flex-start;
-      gap: 0.5rem;
-      padding: 0.3rem 0;
-      font-size: 0.82rem;
-      color: var(--text-secondary);
-    }
-
     .chat-input-area {
       background: var(--surface);
       border-top: 1px solid var(--border);
@@ -3156,42 +3265,6 @@
     }
     .attach-chips:empty { display: none; }
 
-    /* ── Live task progress pill (Sprint 2B) ────────────────────────
-       Shown above the input row while a task is running. Aggregates
-       state from subtask.progress events + tool_call counts so the
-       user sees the agent's heartbeat instead of staring at a static
-       "thinking…" bubble. Compact, single-row, fade-in. */
-    .task-progress-pill {
-      display: inline-flex;
-      align-items: center;
-      gap: 0.85rem;
-      max-width: 800px;
-      margin: 0 auto 6px;
-      padding: 0.4rem 0.9rem;
-      background: linear-gradient(135deg, rgba(102, 126, 234, 0.10), rgba(118, 75, 162, 0.10));
-      border: 1px solid rgba(102, 126, 234, 0.25);
-      border-radius: 999px;
-      font-size: 0.72rem;
-      color: var(--text-secondary);
-      font-variant-numeric: tabular-nums;
-      animation: pill-fade-in 0.2s ease-out;
-    }
-    @keyframes pill-fade-in {
-      from { opacity: 0; transform: translateY(4px); }
-      to   { opacity: 1; transform: translateY(0); }
-    }
-    .task-progress-pill[hidden] { display: none; }
-    .task-progress-pill > span { white-space: nowrap; }
-    .task-progress-pill .pill-label { color: var(--text-muted); }
-    .task-progress-pill .pill-strong {
-      color: var(--text-primary);
-      font-weight: 600;
-    }
-    /* Confidence colour-coded so 0.65 doesn't read as scary —
-       green ≥ 0.7, amber 0.4-0.7, red < 0.4. */
-    .task-progress-pill .pill-conf-good   { color: #2f9c5e; font-weight: 600; }
-    .task-progress-pill .pill-conf-medium { color: #b4821e; font-weight: 600; }
-    .task-progress-pill .pill-conf-low    { color: #c0392b; font-weight: 600; }
     .attach-chip {
       display: inline-flex;
       align-items: center;
@@ -3702,12 +3775,6 @@
               </div>
             </div>
           </div>
-          <!-- Live task progress pill (Sprint 2B). Hidden when no task
-               is running; populated by handleSubtaskProgress() +
-               handleToolCall(). Sits above the input area so it doesn't
-               crowd the chat history but stays in the user's eye line. -->
-          <div id="taskProgressPill" class="task-progress-pill" hidden></div>
-
           <div class="chat-input-area">
             <!-- Session-context row: workspace path + (optional) DB chip
                  share a single flex line so they read as one cohesive
@@ -5493,9 +5560,7 @@
 
     // ── WebSocket ───────────────────────────────────────────────────────────
     let _ws = null;
-    let _activeCalls = {};
     let _currentTaskId = null;
-    let _stuckTimers = {};
 
     // Running-task state for the Stop button:
     // _runAbort lets clicking Stop abort the client-side fetch immediately,
@@ -5509,11 +5574,6 @@
     // into the task result message so the user gets clickable download
     // chips without having to find the paths on disk.
     let _currentArtifacts = [];
-    // Tool-call cards that streamed during the current run. When the task
-    // finishes we move them all into a single collapsed <details> so the
-    // final chat reads clean while still letting the user dig into the
-    // trace (reasoning + tools).
-    let _currentRunToolCards = [];
 
     // Session state
     let _currentSessionId = localStorage.getItem('teddy.session_id') || null;
@@ -5633,14 +5693,9 @@
           if (data.type  === 'plan.stream.delta') handlePlanStreamDelta(data);
           if (data.type  === 'plan.stream.end')   handlePlanStreamEnd(data);
           if (data.type  === 'update.progress')   handleUpdateProgress(data);
-          if (data.type  === 'context.compressed') handleContextCompressed(data);
           if (data.event === 'circuit_breaker')   handleCircuitBreaker(data);
           if (data.type  === 'subtask.progress')  handleSubtaskProgress(data);
           if (data.event === 'cyber_skills.progress') handleCyberSkillsProgress(data);
-          // Side effect on the live pill: every tool_call bumps the
-          // tool counter so the user sees activity even between
-          // subtask boundaries.
-          if (data.event === 'tool_call')         bumpPillToolCount();
         } catch (e) { /* ignore */ }
       };
     }
@@ -6375,7 +6430,7 @@
         // Skip the divider for truly-empty sessions — it'd just add
         // noise before any real message.
         const hasContent = chat && chat.querySelector(
-          '.msg-user, .msg-agent:not(:only-child), .msg-system, .tool-call-card'
+          '.msg-user, .msg-agent:not(:only-child), .msg-system, .run-card'
         );
         if (hasContent) {
           const div = document.createElement('div');
@@ -6566,9 +6621,10 @@
       el.innerHTML =
         '<span class="msg-spinner" aria-hidden="true"><span></span><span></span><span></span></span>' +
         '<span class="msg-thinking-text"></span>';
+      el.dataset.startMs = String(startMs);   // a run card for it starts here
       const tick = () => {
         const elapsed = Date.now() - startMs;
-        setThinkingText(el, _THINKING_BASE_EN + ' · ' + fmtElapsed(elapsed));
+        setThinkingText(el, t('run_thinking') + ' · ' + fmtElapsed(elapsed));
       };
       tick();
       const tickId = setInterval(tick, 1000);
@@ -6587,12 +6643,8 @@
             // Prefer server-side completed_at over wall-clock now() so the
             // final footer agrees with what /tasks returns on reload.
             const endMs = data.completed_at ? parseServerTs(data.completed_at) : Date.now();
-            const elapsedMs = endMs - startMs;
-            let html = data.summary
-              ? `<div class="md-body">${renderMarkdown(data.summary)}</div>`
-              : `<span style="color:var(--text-muted)">(${escHtml(data.status)})</span>`;
-            html += `<div class="task-elapsed-footer">⏱ ${escHtml(fmtElapsed(elapsedMs))}</div>`;
-            el.innerHTML = html;
+            const steps = _run && _run.taskId === taskId ? finishRun() : [];
+            el.innerHTML = _historyAnswerHTML(data, endMs - startMs, steps);
             renderPendingCharts(el);
           }
         } catch (_) {}
@@ -6636,10 +6688,8 @@
         const ordered = tasks.slice().reverse();
         for (const tk of ordered) {
           if (tk.goal) {
-            const u = document.createElement('div');
-            u.className = 'msg-user';
-            u.textContent = tk.goal;
-            chat.appendChild(u);
+            const { text, files } = _splitAttachments(tk.goal);
+            chat.appendChild(_userMessageEl(text, files));
           }
           const a = document.createElement('div');
           a.className = 'msg-agent';
@@ -6651,29 +6701,10 @@
             bindRunningHistoryTimer(a, tk.id, tk.created_at);
             continue;   // skip the static-render branch below
           }
-          const elapsedFooter = (tk.created_at && tk.completed_at)
-            ? `<div class="task-elapsed-footer">⏱ ${escHtml(fmtElapsed(
-                parseServerTs(tk.completed_at) - parseServerTs(tk.created_at)
-              ))}</div>`
-            : '';
-          // Restore the artifact chip row from the persisted JSON column.
-          // Before this fix the chips were only kept in an in-memory JS
-          // array, so switching sessions / closing the tab / opening from
-          // another device wiped them — and with them the 👁 preview
-          // button. Now they round-trip through tasks.artifacts.
-          const artifactsHTML = (Array.isArray(tk.artifacts) && tk.artifacts.length)
-            ? renderArtifactList(tk.artifacts.map(x => ({
-                path:  x.path,
-                rel:   x.relative_path || x.name || x.path,
-                name:  x.name || (x.path || '').split('/').pop(),
-                size:  x.size_bytes || 0,
-                tool:  x.tool || '',
-              })))
-            : '';
-          const body = tk.summary
-            ? `<div class="md-body">${renderMarkdown(tk.summary)}</div>${artifactsHTML}${elapsedFooter}`
-            : `<span style="color:var(--text-muted)">(${escHtml(tk.status || 'no summary')})</span>${artifactsHTML}${elapsedFooter}`;
-          a.innerHTML = body;
+          const elapsedMs = (tk.created_at && tk.completed_at)
+            ? parseServerTs(tk.completed_at) - parseServerTs(tk.created_at)
+            : null;
+          a.innerHTML = _historyAnswerHTML(tk, elapsedMs);
           chat.appendChild(a);
           // Re-render any ```chart blocks that were in the saved summary.
           renderPendingCharts(a);
@@ -6684,11 +6715,53 @@
       }
     }
 
-    function addUserMessage(text) {
+    // A saved task as an answer. Its files come from the persisted
+    // tasks.artifacts column, so the cards survive a reload or another
+    // device; `steps` exist only when it finished while on screen.
+    function _historyAnswerHTML(tk, elapsedMs, steps = []) {
+      const files = (Array.isArray(tk.artifacts) ? tk.artifacts : []).map(x => ({
+        path:  x.path,
+        rel:   x.relative_path || x.name || x.path,
+        name:  x.name || (x.path || '').split('/').pop(),
+        size:  x.size_bytes || 0,
+        tool:  x.tool || '',
+      }));
+      const summary = tk.summary
+        ? renderMarkdown(_summaryWithoutOutputLine(tk.summary, files))
+        : escHtml(t('result_no_summary'));
+      return `<div class="md-body">${summary}</div>` + renderArtifactList(files) +
+        _resultFootHTML({ status: tk.status, elapsedMs, steps, quiet: currentMode() === 'chat' });
+    }
+
+    // Goals sent with files start with an "[Attachments in workspace …]"
+    // block written for the agent. People see their words and file names.
+    function _splitAttachments(goal) {
+      const m = /^\[Attachments in workspace[^\n]*\n([\s\S]*?)\n\]\s*/.exec(goal || '');
+      if (!m) return { text: goal || '', files: [] };
+      const files = [...m[1].matchAll(/^\s*-\s+(.+?)\s+\(/gm)].map(x => x[1]);
+      return { text: goal.slice(m[0].length), files };
+    }
+
+    function _userMessageEl(text, files = []) {
       const el = document.createElement('div');
       el.className = 'msg-user';
       el.textContent = text;
-      return appendToChat(el);
+      if (files.length) {
+        const row = document.createElement('div');
+        row.className = 'msg-user-files';
+        for (const f of files) {
+          const chip = document.createElement('span');
+          chip.className = 'msg-user-file';
+          chip.textContent = '📎 ' + f.split('/').pop();
+          row.appendChild(chip);
+        }
+        el.appendChild(row);
+      }
+      return el;
+    }
+
+    function addUserMessage(text, files = []) {
+      return appendToChat(_userMessageEl(text, files));
     }
     function addAgentMessage(html, asText = true) {
       const el = document.createElement('div');
@@ -6836,113 +6909,264 @@
       return appendToChat(el);
     }
 
-    // ── Tool Call / Result ──────────────────────────────────────────────────
-    function toggleToolCard(header) {
-      const card = header.closest('.tool-call-card');
-      if (card) card.classList.toggle('expanded');
+    // ── Run card ────────────────────────────────────────────────────────────
+    // While a task runs, its tool calls show as ONE card: what the agent is
+    // doing right now in plain words, how far along it is, and the last few
+    // steps. Raw arguments and output stay one tap away on each step. When
+    // the task ends, the card folds into the answer's "How it got there".
+    // Housekeeping (context compression) never reaches the chat.
+    let _run = null;
+    const RUN_VISIBLE_STEPS = 4;
+
+    // [tool-name pattern, icon, i18n key]. The keys take {x}: the file,
+    // site or search the step is about (empty when there isn't one).
+    const STEP_KINDS = [
+      [/^(read_file|pdf_extract_text|doc_to_markdown|gcp_storage_read)$/, '📄', 'step_read'],
+      [/^(write_file|gcp_storage_write)$/,                                '✏️', 'step_write'],
+      [/^delete_file$/,                                                   '🗑️', 'step_delete'],
+      [/^(list_directory|gcp_storage_list)$/,                             '🗂️', 'step_list'],
+      [/^shell_exec/,                                                     '⌨️', 'step_shell'],
+      [/^python_exec$/,                                                   '⚙️', 'step_code'],
+      [/(_search|^github_trending)$/,                                     '🔎', 'step_search'],
+      [/^(browser_fetch|http_get|http_post|chrome_)/,                     '🌐', 'step_web'],
+      [/^(db_|gcp_bigquery|csv_describe)/,                                '🗄️', 'step_data'],
+      [/^render_chart_report$/,                                           '📊', 'step_chart'],
+      [/^(email_send|telegram_send|gcp_pubsub_publish)$/,                 '📨', 'step_send'],
+      [/^(print_file|printer_status)$/,                                   '🖨️', 'step_print'],
+      [/^(weather_forecast|typhoon_status)$/,                             '🌤️', 'step_weather'],
+      [/^calendar_events$/,                                               '📅', 'step_calendar'],
+      [/^gmail_unread$/,                                                  '✉️', 'step_mail'],
+      [/^reminder_create$/,                                               '⏰', 'step_reminder'],
+      [/^pip_/,                                                           '📦', 'step_packages'],
+      [/(docker|^compose_|^port_)/,                                       '🐳', 'step_docker'],
+      [/^claude_code/,                                                    '🤖', 'step_delegate'],
+    ];
+    const STEP_NOTES = {
+      retry: 'step_note_retry', skipped: 'step_note_repeat', waiting: 'step_note_waiting',
+      denied: 'step_note_denied', stopped: 'step_note_stopped',
+    };
+
+    function _stepSubject(args) {
+      const a = args || {};
+      const p = a.path || a.file_path || a.filename || '';
+      if (p) return String(p).split('/').filter(Boolean).pop() || String(p);
+      if (a.url) {
+        try { return new URL(a.url).hostname.replace(/^www\./, ''); }
+        catch (_) { return String(a.url).slice(0, 40); }
+      }
+      const q = a.query || a.q || '';
+      return q ? t('step_quote', { q: String(q).slice(0, 30) }) : '';
     }
+
+    // Plain-words label + icon for one tool call.
+    function describeStep(tool, args) {
+      const hit = STEP_KINDS.find(([re]) => re.test(tool || ''));
+      if (!hit) return { icon: '🔧', label: t('step_tool', { x: tool || '' }).trim() };
+      return { icon: hit[1], label: t(hit[2], { x: _stepSubject(args) }).trim() };
+    }
+
+    function startRun(taskId, anchor, startMs) {
+      finishRun();
+      _run = {
+        taskId, anchor: anchor || null, startMs: startMs || Date.now(),
+        card: null, steps: [], byKey: {}, done: 0, total: 0,
+        showAll: false, note: '', timer: null,
+      };
+    }
+
+    // The run an event belongs to. A task still running from an earlier
+    // page view (its bubble carries data-task-id) gets a card lazily.
+    function _runFor(taskId) {
+      if (_run && (!taskId || _run.taskId === taskId)) return _run;
+      if (!taskId) return null;
+      const bubble = document.querySelector(
+        `#chatMessages .msg-agent[data-task-id="${CSS.escape(taskId)}"]`);
+      if (!bubble) return null;
+      startRun(taskId, bubble, Number(bubble.dataset.startMs) || Date.now());
+      return _run;
+    }
+
+    function _runCard() {
+      const run = _run;
+      if (run.card) return run.card;
+      const card = document.createElement('div');
+      card.className = 'run-card';
+      card.innerHTML = `
+        <div class="run-head">
+          <span class="run-orb" aria-hidden="true"></span>
+          <div class="run-head-text">
+            <div class="run-title"></div>
+            <div class="run-meta"></div>
+          </div>
+        </div>
+        <div class="run-bar"><i></i></div>
+        <button type="button" class="run-more" hidden></button>
+        <ol class="run-steps"></ol>`;
+      card.querySelector('.run-more').onclick = () => { run.showAll = true; _paintRun(); };
+      // The card takes over from the "thinking…" bubble; the bubble only
+      // comes back if an answer starts streaming into it.
+      if (run.anchor && run.anchor.isConnected) {
+        run.anchor.after(card);
+        if (!run.anchor._streamingActive) run.anchor.classList.add('run-hidden');
+      } else {
+        appendToChat(card);
+      }
+      run.card = card;
+      run.timer = setInterval(_paintRunHead, 1000);
+      return card;
+    }
+
+    function _stepDetailHTML(s) {
+      const clip = (x, n) => (x.length > n ? x.slice(0, n) + '\n…' : x);
+      const args = s.args && Object.keys(s.args).length ? JSON.stringify(s.args, null, 2) : '';
+      let html = `<div class="run-step-tool">${escHtml(s.tool)}</div>`;
+      if (args) {
+        html += `<div class="run-step-label">${escHtml(t('run_detail_input'))}</div>` +
+                `<pre>${escHtml(clip(args, 2000))}</pre>`;
+      }
+      if (s.output) {
+        html += `<div class="run-step-label">${escHtml(t('run_detail_output'))}</div>` +
+                `<pre>${escHtml(clip(String(s.output), 4000))}</pre>`;
+      }
+      return html;
+    }
+
+    // One step as a <li>. Collapsed it reads as a sentence; tapping it
+    // opens the technical detail (tool name, input, output).
+    function _stepHTML(s) {
+      return `
+        <li class="run-step is-${s.state}">
+          <details>
+            <summary>
+              <span class="run-step-ico">${s.icon}</span>
+              <span class="run-step-text">${escHtml(s.label)}</span>
+              <span class="run-step-note">${escHtml(_stepNote(s))}</span>
+              <span class="run-step-state" aria-hidden="true"></span>
+            </summary>
+            <div class="run-step-detail">${_stepDetailHTML(s)}</div>
+          </details>
+        </li>`;
+    }
+
+    function _stepNote(s) {
+      if (STEP_NOTES[s.state]) return t(STEP_NOTES[s.state]);
+      const ms = Date.now() - s.t0;
+      return s.state === 'running' && ms >= 10_000 ? fmtElapsed(ms) : '';
+    }
+
+    function _paintStep(s) {
+      if (!s.node) return;
+      s.node.className = 'run-step is-' + s.state;
+      s.node.querySelector('.run-step-note').textContent = _stepNote(s);
+      s.node.querySelector('.run-step-detail').innerHTML = _stepDetailHTML(s);
+    }
+
+    function _paintRunHead() {
+      const run = _run;
+      if (!run || !run.card) return;
+      const card = run.card;
+      const live = run.steps.filter(s => s.state === 'running' || s.state === 'waiting');
+      const cur  = live[live.length - 1];
+      const waiting = !!cur && cur.state === 'waiting';
+      card.classList.toggle('is-waiting', waiting);
+      card.querySelector('.run-title').textContent =
+        waiting ? t('run_waiting_you') : cur ? cur.label : (run.note || t('run_thinking'));
+      const meta = [];
+      if (run.total > 1) {
+        meta.push(t('run_step_of', { n: Math.min(run.done + 1, run.total), total: run.total }));
+      }
+      meta.push(fmtElapsed(Date.now() - run.startMs));
+      card.querySelector('.run-meta').textContent = meta.join(' · ');
+      const bar = card.querySelector('.run-bar');
+      bar.classList.toggle('is-indeterminate', run.total <= 1);
+      if (run.total > 1) {
+        bar.firstElementChild.style.width =
+          Math.max(6, Math.round((run.done + 0.5) / run.total * 100)) + '%';
+      }
+      for (const s of live) {
+        const note = s.node && s.node.querySelector('.run-step-note');
+        if (note) note.textContent = _stepNote(s);
+      }
+    }
+
+    function _paintRun() {
+      const run = _run;
+      if (!run || !run.card) return;
+      const hidden = run.showAll ? 0 : Math.max(0, run.steps.length - RUN_VISIBLE_STEPS);
+      run.steps.forEach((s, i) => { if (s.node) s.node.hidden = i < hidden; });
+      const more = run.card.querySelector('.run-more');
+      more.hidden = hidden === 0;
+      if (hidden) more.textContent = t('run_show_earlier', { n: hidden });
+      _paintRunHead();
+    }
+
+    function _keepChatAtBottom() {
+      const chat = document.getElementById('chatMessages');
+      if (chat && chat.scrollHeight - chat.scrollTop - chat.clientHeight < 160) {
+        chat.scrollTop = chat.scrollHeight;
+      }
+    }
+
+    function _stepKey(d) { return `${d.round}-${d.call_idx ?? 0}-${d.tool}`; }
 
     function handleToolCall(data) {
-      const idx     = data.call_idx ?? 0;
-      const key     = `${data.round}-${idx}-${data.tool}`;
-      const argsStr = data.args ? JSON.stringify(data.args, null, 2) : '(no args)';
-
-      const card = document.createElement('div');
-      card.className = 'tool-call-card';
-      card.id = `tc-${key}`;
-      card.innerHTML = `
-        <div class="tool-call-header" onclick="toggleToolCard(this)">
-          <span class="tool-call-chevron">▸</span>
-          <span>🔧</span>
-          <span class="tool-call-name">${escHtml(data.tool || '')}</span>
-          <span class="tool-call-summary" id="tcs-${escHtml(key)}">running…</span>
-        </div>
-        <div class="tool-call-body">
-          <div class="tool-call-args">${escHtml(argsStr)}</div>
-          <div class="tool-result-row" id="tcr-${escHtml(key)}">
-            <span class="tool-result-icon loader" style="width:11px;height:11px;border-width:2px;margin-right:4px"></span>
-            <span style="color:var(--text-muted);font-size:0.76rem">Running…</span>
-          </div>
-          <div id="stuck-${escHtml(key)}" style="display:none;font-size:0.72rem;margin-top:4px;padding:3px 6px;border-radius:4px;background:var(--accent-light);color:var(--warning)"></div>
-        </div>`;
-      appendToChat(card);
-      _currentRunToolCards.push(card);
-      _activeCalls[key] = true;
-
-      const stuckEl = document.getElementById(`stuck-${key}`);
-      const t30 = setTimeout(() => {
-        if (!_activeCalls[key]) return;
-        if (stuckEl) {
-          stuckEl.textContent = t('stuck_slow');
-          stuckEl.style.display = 'block';
-        }
-      }, 30_000);
-
-      const t90 = setTimeout(() => {
-        if (!_activeCalls[key]) return;
-        if (stuckEl) {
-          stuckEl.textContent = t('stuck_timeout');
-          stuckEl.style.background = 'var(--error)';
-          stuckEl.style.color = '#fff';
-        }
-      }, 90_000);
-
-      _stuckTimers[key] = { t30, t90 };
+      const run = _runFor(data.task_id);
+      if (!run) return;
+      const key = _stepKey(data);
+      if (run.byKey[key]) return;              // replayed after a reconnect
+      const s = {
+        key, tool: data.tool || '', args: data.args || null,
+        ...describeStep(data.tool, data.args),
+        state: 'running', output: '', t0: Date.now(), node: null,
+      };
+      run.steps.push(s);
+      run.byKey[key] = s;
+      const list = _runCard().querySelector('.run-steps');
+      list.insertAdjacentHTML('beforeend', _stepHTML(s));
+      s.node = list.lastElementChild;
+      _paintRun();
+      _keepChatAtBottom();
     }
 
-    // Collapse the current run's tool-call cards into a single <details>
-    // block. Call this right before the final agent message is rendered
-    // so the chat ends up as: [user msg] → [🔧 N tool calls ▸] → [summary].
-    // The details stays CLOSED by default — the user expands only when
-    // they want to audit tools or read the reasoning trace.
-    function collapseCurrentRunToolCards() {
-      const cards = _currentRunToolCards.filter(c => c && c.isConnected);
-      _currentRunToolCards = [];
-      if (!cards.length) return;
-      const first  = cards[0];
-      const parent = first.parentNode;
-      if (!parent) return;
-
-      const total  = cards.length;
-      const failed = cards.filter(c => c.classList.contains('failure')).length;
-      const dot    = failed > 0 ? 'var(--error)' : 'var(--success)';
-      const label  = failed > 0
-        ? `<span style="color:${dot}">●</span> ${total - failed}/${total} tool calls · ${failed} failed`
-        : `<span style="color:${dot}">●</span> ${total} tool calls`;
-
-      const details = document.createElement('details');
-      details.className = 'tool-calls-group' + (failed > 0 ? ' has-failure' : '');
-      details.innerHTML = `<summary>${label}</summary>`;
-
-      parent.insertBefore(details, first);
-      // Move cards in original order (they're already in DOM order on chat).
-      for (const card of cards) details.appendChild(card);
+    function handleToolResult(data) {
+      const run = _runFor(data.task_id);
+      const s = run && run.byKey[_stepKey(data)];
+      if (!s) return;
+      const err = String(data.error || '');
+      s.output = data.error || data.output || '';
+      s.state = data.success !== false ? 'done'
+        : /loop detected|refusing to re-run/i.test(err) ? 'skipped'
+        : /user rejected|blocked by/i.test(err) ? 'denied'
+        : 'retry';
+      _paintStep(s);
+      _paintRunHead();
     }
 
-    function cancelStragglers(reason) {
-      for (const key of Object.keys(_activeCalls)) {
-        const card   = document.getElementById(`tc-${key}`);
-        const row    = document.getElementById(`tcr-${key}`);
-        const sumEl  = document.getElementById(`tcs-${key}`);
-        const stuck  = document.getElementById(`stuck-${key}`);
-        if (_stuckTimers[key]) {
-          clearTimeout(_stuckTimers[key].t30);
-          clearTimeout(_stuckTimers[key].t90);
-          delete _stuckTimers[key];
-        }
-        if (stuck) stuck.style.display = 'none';
-        if (card) {
-          card.classList.add('failure');
-          card.classList.remove('expanded');
-        }
-        if (row) {
-          row.innerHTML = `
-            <span class="tool-result-icon">⏱️</span>
-            <div class="tool-result-output"><strong style="font-family:inherit;font-size:0.75rem">Status:</strong> ${escHtml(reason)}</div>`;
-        }
-        if (sumEl) sumEl.textContent = 'cancelled';
+    // A tool waiting on the user's OK: mark its step so the card says so.
+    function _markStepWaiting(taskId, tool, waiting) {
+      const run = _runFor(taskId);
+      if (!run) return;
+      const from = waiting ? 'running' : 'waiting';
+      const s = [...run.steps].reverse().find(x => x.tool === tool && x.state === from);
+      if (!s) return;
+      s.state = waiting ? 'waiting' : 'running';
+      _paintStep(s);
+      _paintRunHead();
+    }
+
+    // Ends the live card and hands back its steps for the answer's
+    // "How it got there". Steps still open are marked stopped.
+    function finishRun() {
+      const run = _run;
+      _run = null;
+      if (!run) return [];
+      clearInterval(run.timer);
+      for (const s of run.steps) {
+        if (s.state === 'running' || s.state === 'waiting') s.state = 'stopped';
       }
-      _activeCalls = {};
+      if (run.card) run.card.remove();
+      if (run.anchor) run.anchor.classList.remove('run-hidden');
+      return run.steps;
     }
 
     // Collect file-produced artifacts from the stream. They're attached
@@ -7497,75 +7721,51 @@
       }
     });
 
+    // File type → [i18n key for the kind, colour tone of the badge].
+    const FILE_KINDS = [
+      [/^html?$/,                          'file_kind_web',   'web'],
+      [/^(png|jpe?g|gif|svg|webp)$/,       'file_kind_image', 'image'],
+      [/^pdf$/,                            'file_kind_pdf',   'doc'],
+      [/^(csv|xlsx?|tsv)$/,                'file_kind_sheet', 'data'],
+      [/^(json|db|sqlite)$/,               'file_kind_data',  'data'],
+      [/^(md|txt|log|docx?)$/,             'file_kind_text',  'doc'],
+      [/^(zip|tar|gz|tgz|7z)$/,            'file_kind_zip',   'other'],
+      [/^(py|js|ts|sh|css|go|rs|java)$/,   'file_kind_code',  'code'],
+    ];
+
+    // Files the task produced, as cards: what it is, how big, and
+    // Open / Download buttons (handled by the delegated click listener).
     function renderArtifactList(artifacts) {
       if (!artifacts || !artifacts.length) return '';
       const sessionQS = _currentSessionId
         ? `&session_id=${encodeURIComponent(_currentSessionId)}`
         : '';
-      const chips = artifacts.map(a => {
-        const base     = `${API}/files?path=${encodeURIComponent(a.path)}${sessionQS}`;
-        const dlHref   = `${base}&download=1`;
-        const size     = a.size ? ` · ${formatBytes(a.size)}` : '';
-        const ext      = (a.name.split('.').pop() || '').toLowerCase();
+      const cards = artifacts.map(a => {
+        const base   = `${API}/files?path=${encodeURIComponent(a.path)}${sessionQS}`;
+        const dlHref = `${base}&download=1`;
+        const ext    = a.name.includes('.') ? a.name.split('.').pop().toLowerCase() : '';
+        const kind   = FILE_KINDS.find(([re]) => re.test(ext));
         const previewable = ['html','htm','txt','md','json','csv','log','png','jpg','jpeg','gif','svg','pdf'].includes(ext);
-        const previewBtn = previewable
-          ? `<button type="button" class="artifact-preview"
-                     data-teddy-artifact="preview" data-url="${escHtml(base)}"
-                     data-name="${escHtml(a.name)}"
-                     title="在新分頁預覽">👁</button>`
+        const sub = [kind ? t(kind[1]) : '', a.size ? formatBytes(a.size) : ''].filter(Boolean).join(' · ');
+        const openBtn = previewable
+          ? `<button type="button" class="file-btn" data-teddy-artifact="preview"
+                     data-url="${escHtml(base)}" data-name="${escHtml(a.name)}">${escHtml(t('file_open'))}</button>`
           : '';
-        return `<span class="artifact-chip-wrap">
-                  <button type="button" class="artifact-chip"
-                          data-teddy-artifact="download"
-                          data-url="${escHtml(dlHref)}"
-                          data-name="${escHtml(a.name)}"
-                          title="下載 ${escHtml(a.path)}">
-                    📎 ${escHtml(a.name)}${escHtml(size)}
-                  </button>
-                  ${previewBtn}
-                </span>`;
+        return `
+          <div class="file-card">
+            <span class="file-card-badge tone-${kind ? kind[2] : 'other'}">${escHtml((ext || 'file').slice(0, 4).toUpperCase())}</span>
+            <span class="file-card-text">
+              <span class="file-card-name" title="${escHtml(a.rel || a.name)}">${escHtml(a.name)}</span>
+              <span class="file-card-sub">${escHtml(sub)}</span>
+            </span>
+            <span class="file-card-actions">
+              ${openBtn}
+              <button type="button" class="file-btn primary" data-teddy-artifact="download"
+                      data-url="${escHtml(dlHref)}" data-name="${escHtml(a.name)}">${escHtml(t('file_download'))}</button>
+            </span>
+          </div>`;
       }).join('');
-      return `<div class="artifact-row">${chips}</div>`;
-    }
-
-    function handleToolResult(data) {
-      const idx       = data.call_idx ?? 0;
-      const key       = `${data.round}-${idx}-${data.tool}`;
-      const card      = document.getElementById(`tc-${key}`);
-      const resultRow = document.getElementById(`tcr-${key}`);
-      const summaryEl = document.getElementById(`tcs-${key}`);
-      if (!card || !resultRow) return;
-
-      if (_stuckTimers[key]) {
-        clearTimeout(_stuckTimers[key].t30);
-        clearTimeout(_stuckTimers[key].t90);
-        delete _stuckTimers[key];
-      }
-      const stuckEl = document.getElementById(`stuck-${key}`);
-      if (stuckEl) stuckEl.style.display = 'none';
-      delete _activeCalls[key];
-
-      const success = data.success !== false;
-      card.classList.add(success ? 'success' : 'failure');
-
-      const icon  = success ? '✅' : '❌';
-      const label = success ? 'Output:' : 'Error:';
-      const raw   = data.error || data.output || '';
-      const text  = raw ? escHtml(raw) : '(done)';
-
-      resultRow.innerHTML = `
-        <span class="tool-result-icon">${icon}</span>
-        <div class="tool-result-output"><strong style="font-family:inherit;font-size:0.75rem">${label}</strong> ${text}</div>`;
-
-      if (summaryEl) {
-        const firstLine = (raw || (success ? 'done' : 'error')).split('\n')[0].trim().slice(0, 120);
-        summaryEl.textContent = firstLine || (success ? 'done' : 'error');
-      }
-      if (success) card.classList.remove('expanded');
-      else card.classList.add('expanded');
-
-      const chat = document.getElementById('chatMessages');
-      chat.scrollTop = chat.scrollHeight;
+      return `<div class="file-cards">${cards}</div>`;
     }
 
     // ── Sidebar nav / tabs ──────────────────────────────────────────────────
@@ -8526,7 +8726,7 @@
       }
       // Route the normal tool-call UI for this taskId while Claude runs.
       _currentTaskId = taskId;
-      _activeCalls   = {};
+      startRun(taskId);
 
       // Visible breadcrumb in the chat so the user knows Claude started.
       const msg = document.createElement('div');
@@ -8559,18 +8759,11 @@
     }
 
     function handleClaudeFixDone(data) {
-      // Clean up any in-flight tool cards (Claude's run is over).
-      cancelStragglers('Claude fix 完成');
-      // Render the final summary as a new agent message.
+      // Claude's run is over: fold its live card into the answer.
+      const steps = finishRun();
       const summary = data.summary || '(no summary)';
-      const subtitle = data.turns != null
-        ? `${data.turns} turns · tools: ${(data.tools_used || []).length}`
-        : '';
-      let html = `<div class="md-body">${renderMarkdown(summary)}</div>`;
-      if (subtitle) {
-        html += `<div style="font-size:0.72rem;color:var(--text-muted);margin-top:6px">${escHtml(subtitle)}</div>`;
-      }
-      collapseCurrentRunToolCards();
+      const html = `<div class="md-body">${renderMarkdown(summary)}</div>` +
+        _resultFootHTML({ status: 'completed', steps });
       addAgentMessage(html, false);
       // Remove the now-stale "Let Claude fix this" buttons so the user
       // doesn't accidentally double-fire (and re-burn tokens).
@@ -8601,8 +8794,8 @@
       const totalSec = Math.max(0, Math.round(ms / 1000));
       const m = Math.floor(totalSec / 60);
       const s = totalSec - m * 60;
-      if (m === 0) return s + 's';
-      return m + 'm ' + (s < 10 ? '0' : '') + s + 's';
+      if (m === 0) return t('dur_s', { s });
+      return t('dur_ms', { m, s: (s < 10 ? '0' : '') + s });
     }
     // Parse a server-emitted timestamp as UTC. The backend uses
     // `datetime.utcnow().isoformat()` which produces a naive string
@@ -8623,7 +8816,6 @@
     // The spinner is a CSS-animated 3-dot loader so the user sees
     // motion rather than a static ⏳ glyph. Timer ticks update only the
     // text span, leaving the spinner alive.
-    const _THINKING_BASE_EN = 'Working on it…';
     function makeThinkingBubble() {
       const html =
         '<span class="msg-spinner" aria-hidden="true"><span></span><span></span><span></span></span>' +
@@ -8637,6 +8829,8 @@
       else      el.textContent = text;   // fallback: pre-spinner element
     }
 
+    // The text before the timer lives on the element (_teddyTimerBase)
+    // so planning can swap it without restarting the clock.
     function startTaskTimer(el, baseText) {
       if (!el) return;
       el._teddyTimerStart = performance.now();
@@ -8648,7 +8842,7 @@
         // stopTaskTimer() can still report the elapsed total.
         if (el._streamingActive) return;
         const elapsed = performance.now() - el._teddyTimerStart;
-        setThinkingText(el, baseText + ' · ' + fmtElapsed(elapsed));
+        setThinkingText(el, el._teddyTimerBase + ' · ' + fmtElapsed(elapsed));
       };
       tick();
       el._teddyTimerId = setInterval(tick, 1000);
@@ -8691,6 +8885,7 @@
       if (!el._streamingActive) {
         el._streamingActive = true;
         el.classList.add('streaming');
+        el.classList.remove('run-hidden');
         el.innerHTML = '<div class="md-body teddy-stream-body"></div>';
       }
       const body = el.querySelector('.teddy-stream-body');
@@ -8712,188 +8907,138 @@
     }
 
     // ── Plan-phase streaming (#3) ───────────────────────────────────────
-    // Orchestrator (Gemma) streams its planning JSON token-by-token via
-    // `plan.stream.delta`. We surface it inside the existing "Working
-    // on it…" bubble as a faded preview so the user sees the agent is
-    // actively thinking instead of a 5–15 s blank wait. When the plan
-    // finishes (`plan.stream.end`), we fade the preview out and let
-    // the regular timer/streamed-answer flow take over.
+    // While the orchestrator plans, the bubble says so in words — the
+    // planning JSON it streams isn't meant for people. When the plan is
+    // done its steps are counted so the run card can say "step 2 of 5"
+    // from the start instead of after the first step finishes.
     function handlePlanStreamDelta(data) {
       if (!data || !data.text) return;
-      // Bind to the same thinkingEl that the run-task flow created.
       // Reuse _streamState's task_id check so stale events don't leak.
       if (_streamState.taskId && data.task_id !== _streamState.taskId) return;
       const el = _streamState.el;
       if (!el) return;
-      // Set up a planning-preview surface inside the bubble on first
-      // chunk. Keep the original timer text on top, planning preview
-      // below in muted style.
       if (!el._planActive) {
         el._planActive = true;
         el._planAcc    = '';
         el.classList.add('planning');
-        // Inject a sub-element. Don't overwrite el.textContent — the
-        // timer's tick keeps appending elapsed; we put the plan text
-        // in a child div the timer doesn't touch.
-        const sub = document.createElement('div');
-        sub.className = 'plan-stream-preview';
-        el.appendChild(sub);
-        el._planSub = sub;
+        el._teddyTimerBase = t('run_planning');
       }
       el._planAcc += data.text;
-      // Cap to last ~600 chars so a verbose model doesn't tank the DOM
-      // — the orchestrator output is structured JSON anyway, the
-      // preview just needs to convey "things are happening".
-      const view = el._planAcc.slice(-600);
-      el._planSub.textContent = view;
     }
     function handlePlanStreamEnd(data) {
       if (_streamState.taskId && data.task_id !== _streamState.taskId) return;
       const el = _streamState.el;
       if (!el) return;
       el.classList.remove('planning');
-      // Fade + drop the preview so the bubble cleans up before
-      // executor streaming takes over.
-      if (el._planSub) {
-        el._planSub.style.opacity = '0';
-        setTimeout(() => {
-          if (el._planSub && el._planSub.parentNode) el._planSub.remove();
-          el._planSub = null;
-        }, 250);
+      el._teddyTimerBase = t('run_thinking');
+      const planned = (el._planAcc || '').match(/"description"\s*:/g);
+      const run = _runFor(data.task_id);
+      if (run && !run.total && planned && planned.length > 1) {
+        run.total = planned.length;
+        _paintRunHead();
       }
       el._planActive = false;
+      el._planAcc    = '';
     }
 
-    // Context watchdog (#4) — backend compressed N earlier rounds to
-    // avoid blowing num_ctx. Drop a tiny system-style chip so the user
-    // sees the agent actively kept its memory under control rather than
-    // silently forgetting things.
-    function handleContextCompressed(data) {
-      const dropped = data.dropped ?? 0;
-      const recap   = data.recap_chars ?? 0;
-      const chip = document.createElement('div');
-      chip.className = 'msg-system';
-      chip.textContent = `🪶 ${t('context_compressed', { n: dropped }) || `Compressed ${dropped} earlier rounds`} (${recap} chars)`;
-      appendToChat(chip);
-    }
-
-    // Circuit breaker (#D) — agent loop hit too many tool failures
-    // and was forced to finalize. Visible chip tells the user what
-    // happened so the truncated answer doesn't look like a glitch.
+    // Circuit breaker (#D) — the agent hit too many tool failures and was
+    // made to wrap up. The run card says so, so the shorter answer that
+    // follows doesn't look like a glitch.
     function handleCircuitBreaker(data) {
-      const n = data.failures ?? 0;
-      const chip = document.createElement('div');
-      chip.className = 'msg-system';
-      chip.textContent = `⛔ ${t('circuit_breaker_chip', { n }) || `Circuit breaker tripped (${n} tool failures) — agent forced to commit to a final answer`}`;
-      appendToChat(chip);
+      const run = _runFor(data.task_id);
+      if (!run) return;
+      run.note = t('circuit_breaker_chip', { n: data.failures ?? 0 });
+      _paintRunHead();
     }
 
-    // ── Live task progress pill (Sprint 2B) ────────────────────────────
-    // Aggregates state from subtask.progress events + tool_call counts
-    // for the CURRENTLY-RUNNING task only. Hidden between tasks, fades
-    // in on first event of a new task, fades out 3s after completion.
-    let _pillState = {
-      taskId: null,
-      order: 0, total: 0,
-      conf: 0,
-      tokens: 0, cost: 0,
-      toolCount: 0,
-    };
-
-    function resetPillForNewTask(taskId) {
-      _pillState = {
-        taskId, order: 0, total: 0,
-        conf: 0, tokens: 0, cost: 0, toolCount: 0,
-      };
-      renderProgressPill();
-    }
-
-    function clearPill(delayMs) {
-      const el = document.getElementById('taskProgressPill');
-      if (!el) return;
-      // Soft clear: keep the last numbers visible for a few seconds so
-      // the user has time to read final stats, then hide.
-      setTimeout(() => {
-        if (_pillState.taskId === null) el.hidden = true;
-      }, delayMs);
-      _pillState.taskId = null;
-    }
-
+    // A subtask finished: `order` is how many are done (1-based), `total`
+    // how many the plan has. Feeds the run card's "step N of M" and bar.
     function handleSubtaskProgress(data) {
       if (!data || !data.task_id) return;
-      // Defensive: only update if this matches the current task. The
-      // initial WS dispatcher's task_id filter (line ~4990) should
-      // already drop foreign-task events but redundancy is cheap.
-      if (_currentTaskId && data.task_id !== _currentTaskId) return;
-      _pillState.taskId = data.task_id;
-      _pillState.order  = Number(data.order || 0);
-      _pillState.total  = Number(data.total || 0);
-      _pillState.conf   = Number(data.confidence || 0);
-      _pillState.tokens = Number((data.tokens_in || 0) + (data.tokens_out || 0));
-      _pillState.cost   = Number(data.cost_usd || 0);
-      renderProgressPill();
+      const run = _runFor(data.task_id);
+      if (!run) return;
+      run.done  = Number(data.order || 0);
+      run.total = Number(data.total || 0) || run.total;
+      _paintRunHead();
     }
 
-    function bumpPillToolCount() {
-      // Only count for the current run. If pill hasn't been initialised
-      // yet (first event of a new task), seed it from _currentTaskId.
-      if (!_pillState.taskId && _currentTaskId) {
-        _pillState.taskId = _currentTaskId;
+    // Footer under an answer: how it went, how long, how many actions —
+    // and, when there is anything to show, "How it got there": the plan
+    // and every step, each step opening to its technical detail.
+    function _resultFootHTML({ status, elapsedMs = null, steps = [], subtasks = [], quiet = false }) {
+      const failedSubs = subtasks.filter(s => ['failed', 'escalated'].includes(s.status)).length;
+      const tone = status === 'completed' ? (failedSubs ? 'warn' : 'ok')
+                 : status === 'cancelled' ? 'muted' : 'fail';
+      const bits = [];
+      if (!quiet || tone !== 'ok') {
+        const label = { ok: 'result_done', warn: 'result_partial', fail: 'result_failed', muted: 'result_stopped' }[tone];
+        bits.push(`<span class="result-badge tone-${tone}">${escHtml(t(label))}</span>`);
       }
-      if (_pillState.taskId !== _currentTaskId) return;
-      _pillState.toolCount += 1;
-      renderProgressPill();
+      if (elapsedMs != null) bits.push(`<span>${escHtml(fmtElapsed(elapsedMs))}</span>`);
+      if (steps.length) bits.push(`<span>${escHtml(t('result_actions', { n: steps.length }))}</span>`);
+      if (!bits.length) return '';
+      let panel = '';
+      if (steps.length || subtasks.length > 1) {
+        const plan = subtasks.length > 1
+          ? `<div class="process-label">${escHtml(t('process_plan'))}</div>
+             <ol class="process-plan">${subtasks.map(st =>
+               `<li class="is-${escHtml(st.status || '')}"><span class="process-mark" aria-hidden="true"></span>` +
+               `<span>${escHtml(st.description || '')}</span></li>`).join('')}</ol>`
+          : '';
+        const acts = steps.length
+          ? `<div class="process-label">${escHtml(t('process_steps'))}</div>
+             <ol class="run-steps">${steps.map(_stepHTML).join('')}</ol>`
+          : '';
+        panel = `<details class="result-process"><summary>${escHtml(t('result_how'))}</summary>${plan}${acts}</details>`;
+      }
+      return `<div class="result-foot"><div class="result-meta">${bits.join('<span class="dot">·</span>')}</div>${panel}</div>`;
     }
 
-    function renderProgressPill() {
-      const el = document.getElementById('taskProgressPill');
-      if (!el) return;
-      if (!_pillState.taskId) {
-        el.hidden = true;
-        return;
+    // The summary's own "📎 Output: x" line repeats the file cards — and
+    // can name a file that was never written. With cards, drop the line.
+    function _summaryWithoutOutputLine(summary, artifacts) {
+      if (!artifacts || !artifacts.length) return summary;
+      return summary.replace(/^\s*📎\s*(產出|产出|outputs?)\s*[:：].*$/gim, '').trim();
+    }
+
+    // The finished task as one answer: summary, files, then the footer.
+    function renderTaskResult(data, elapsedMs, steps) {
+      const isChatMode = currentMode() === 'chat';
+      const summary = data.summary || data.message || '';
+      let html = '<div class="md-body">' +
+        (summary ? renderMarkdown(_summaryWithoutOutputLine(summary, _currentArtifacts))
+                 : escHtml(t('result_no_summary'))) +
+        '</div>';
+      html += renderArtifactList(_currentArtifacts);
+      html += _resultFootHTML({
+        status: data.status, elapsedMs, steps,
+        // A chat reply isn't a project: no plan, and no badge when it went fine.
+        subtasks: isChatMode ? [] : (data.subtasks || []),
+        quiet: isChatMode,
+      });
+      // If the local run failed (or any subtask ended in failed/escalated),
+      // offer the user a big "Let Claude fix this" button. Clicking gives
+      // Claude the full context + tool access — opt-in because it spends
+      // commercial tokens.
+      const hadAnyFailure =
+        ['failed', 'escalated'].includes(data.status) ||
+        (data.subtasks || []).some(s => ['failed', 'escalated'].includes(s.status));
+      if (hadAnyFailure && data.task_id) {
+        // Hide the fix button when the session is in local-only mode
+        // so the user doesn't see an option they actively opted out
+        // of. (The button is also rendered with display:none by
+        // updatePrivacyIndicator if they flip the toggle AFTER
+        // render, so this inline style is just the initial state.)
+        const hidden = isLocalOnly() ? ' style="display:none"' : '';
+        html += `
+          <div class="claude-fix-wrap"${hidden}>
+            <button class="btn-claude-fix" onclick="letClaudeFix('${escHtml(data.task_id)}', this)">
+              ${t('let_claude_fix')}
+            </button>
+            <span class="claude-fix-hint">${escHtml(t('claude_fix_hint'))}</span>
+          </div>`;
       }
-      const parts = [];
-      if (_pillState.total > 0) {
-        parts.push(
-          `<span><span class="pill-label">⚙️</span> ` +
-          `<span class="pill-strong">${_pillState.order}/${_pillState.total}</span></span>`
-        );
-      }
-      if (_pillState.conf > 0) {
-        // Colour-code so 0.65 reads as "okay" not "scary".
-        let confClass = 'pill-conf-good';
-        if (_pillState.conf < 0.4)      confClass = 'pill-conf-low';
-        else if (_pillState.conf < 0.7) confClass = 'pill-conf-medium';
-        parts.push(
-          `<span><span class="pill-label">🎯</span> ` +
-          `<span class="${confClass}">${_pillState.conf.toFixed(2)}</span></span>`
-        );
-      }
-      // Cost only meaningful in cloud / mixed mode. In local mode it's
-      // always $0 → show tokens count instead so the pill stays useful.
-      if (_pillState.cost > 0) {
-        parts.push(
-          `<span><span class="pill-label">💰</span> ` +
-          `<span class="pill-strong">$${_pillState.cost.toFixed(3)}</span></span>`
-        );
-      } else if (_pillState.tokens > 0) {
-        parts.push(
-          `<span><span class="pill-label">🔤</span> ` +
-          `<span class="pill-strong">${_pillState.tokens.toLocaleString()} tok</span></span>`
-        );
-      }
-      if (_pillState.toolCount > 0) {
-        parts.push(
-          `<span><span class="pill-label">🔧</span> ` +
-          `<span class="pill-strong">${_pillState.toolCount}</span></span>`
-        );
-      }
-      if (!parts.length) {
-        el.hidden = true;
-        return;
-      }
-      el.hidden = false;
-      el.innerHTML = parts.join('');
+      return html;
     }
 
     async function runTask() {
@@ -8927,12 +9072,9 @@
       // Pre-generate task_id so /tasks/{id}/cancel works before /run returns.
       const taskId = uuid4();
       _currentTaskId = taskId;
-      _activeCalls   = {};
       _currentArtifacts = [];     // fresh list per task
-      _currentRunToolCards = [];  // fresh tool-call bucket per task
       _runAbort      = new AbortController();
       setRunningState(true);
-      resetPillForNewTask(taskId);   // Sprint 2B — fresh pill state per run
 
       // Lock the mode the moment a task is dispatched — even before the
       // server confirms it. Switching mode mid-session would re-prompt
@@ -8941,11 +9083,8 @@
       if (_currentSessionId) _sessionHasTasks.add(_currentSessionId);
       updateModeSwitchUI();
 
-      // Show what the user actually sees (plain goal) plus chip count.
-      const userDisplay = attaches.length
-        ? `${goal}\n\n📎 ${attaches.length} file${attaches.length > 1 ? 's' : ''} attached`
-        : goal;
-      addUserMessage(userDisplay);
+      // Show what the user actually typed, with the attached files as chips.
+      addUserMessage(goal, attaches.map(a => a.rel_path));
       goalEl.value = '';
       goalEl.style.height = 'auto';
       clearAttachments();   // chips consumed with this message
@@ -8956,7 +9095,9 @@
       const thinkingEl = makeThinkingBubble();
       // Live elapsed counter — overwrites the bubble text every second.
       // Base text deliberately omits ⏳ — the spinner provides the visual.
-      startTaskTimer(thinkingEl, _THINKING_BASE_EN);
+      startTaskTimer(thinkingEl, t('run_thinking'));
+      // Tool calls gather in one run card placed right after this bubble.
+      startRun(taskId, thinkingEl);
       // Register the bubble as the target for chat.stream.delta events
       // — the WebSocket handler will paint tokens into it as they
       // arrive (taskId-scoped so stale streams from cancelled tasks
@@ -8994,24 +9135,24 @@
       } catch (e) {
         if (e.name === 'AbortError') {
           aborted = true;
-          stopTaskTimer(thinkingEl);
+          const elapsedMs = stopTaskTimer(thinkingEl);
           detachStreamingTarget();
+          const steps = finishRun();
           if (thinkingEl && thinkingEl.parentNode) thinkingEl.remove();
-          cancelStragglers('已中斷');
-          addSystemMessage('⏹️ 已中斷推論 — 部分子任務可能仍在背景結束中。');
+          addAgentMessage(
+            `<div class="md-body">${escHtml(t('run_stopped_note'))}</div>` +
+            _resultFootHTML({ status: 'cancelled', elapsedMs, steps }), false);
         } else {
           stopTaskTimer(thinkingEl);
           detachStreamingTarget();
-          if (thinkingEl) thinkingEl.textContent = '❌ Error: ' + e.message;
+          finishRun();
+          if (thinkingEl) thinkingEl.textContent = t('run_error', { msg: e.message });
           toast('Error: ' + e.message, true);
         }
       } finally {
         setRunningState(false);
         _runAbort      = null;
         _currentTaskId = null;
-        // Pill fades out 3s after the task ends — long enough to read
-        // the final tool count / cost, short enough not to feel stuck.
-        clearPill(3000);
         if (!aborted) {
           loadSessions().catch(() => {});
           // A completed task may have stored new summaries to memory —
@@ -9038,65 +9179,15 @@
             '<div class="md-body">' + renderMarkdown(data.summary) + '</div>';
         }
 
-        const summary = data.summary || data.message || '';
-
-        if (data.status && data.status !== 'running' && data.status !== 'pending') {
-          cancelStragglers('已取消（任務提前結束，可能已升級到 Claude）');
-        }
-
         // Capture how long the round trip took before we drop the
         // placeholder, so we can stamp it into the final response.
         const elapsedMs = stopTaskTimer(thinkingEl);
         // Tear down the streaming wiring — final summary takes over.
         detachStreamingTarget();
+        const steps = finishRun();
         if (thinkingEl && thinkingEl.parentNode) thinkingEl.remove();
 
-        let resultHTML = '<div class="md-body">' +
-          (summary ? renderMarkdown(summary) : escHtml('Task ' + data.status + '.')) +
-          '</div>';
-        if (elapsedMs != null) {
-          resultHTML += `<div class="task-elapsed-footer">⏱ ${escHtml(fmtElapsed(elapsedMs))}</div>`;
-        }
-        // Download chips for any files the agent produced — render
-        // FIRST so they sit right under the summary (before the steps),
-        // since that's what the user typically wants to click on.
-        if (_currentArtifacts.length) {
-          resultHTML += renderArtifactList(_currentArtifacts);
-        }
-
-        // Subtask list — COLLAPSED by default. The summary above is the
-        // simple view; users who want per-step detail can expand.
-        // Counts successes vs failures for the toggle label so at a
-        // glance you can see if everything passed.
-        //
-        // Skipped entirely in chat mode — chat is conversational, not
-        // task-shaped. Showing "1 step" / "[子任務 0]" makes a hello
-        // exchange feel like a build report. Even when chat ends up
-        // calling a tool (e.g. web search later), the inline tool-card
-        // stream already shows what happened — a footer "1 step" toggle
-        // is redundant noise.
-        const isChatMode = (typeof currentMode === 'function')
-          && currentMode() === 'chat';
-        if (data.subtasks && data.subtasks.length && !isChatMode) {
-          const total  = data.subtasks.length;
-          const failed = data.subtasks.filter(s =>
-            ['failed', 'escalated'].includes(s.status)).length;
-          const dotColor = failed > 0 ? 'var(--error)' : 'var(--success)';
-          const toggleLabel =
-            failed > 0
-              ? `<span style="color:${dotColor}">●</span> ${total - failed}/${total} steps · ${failed} failed`
-              : `<span style="color:${dotColor}">●</span> ${total} steps`;
-          const stepsHtml = data.subtasks.map(st =>
-              `<li><span class="status-badge status-${st.status}" style="flex-shrink:0">${st.status}</span>
-               <span>${escHtml(st.description)}</span>
-               <span style="color:var(--text-muted);font-size:0.78rem;margin-left:auto">${(st.confidence * 100).toFixed(0)}%</span>
-              </li>`
-            ).join('');
-          resultHTML += `
-            <details class="chat-steps-details">
-              <summary class="chat-steps-summary">${toggleLabel}</summary>
-              <ul class="chat-subtasks">${stepsHtml}</ul>
-            </details>`;
+        if (data.subtasks && data.subtasks.length) {
           // Keep the old hidden panel in sync for the compat-ID code path.
           document.getElementById('subtaskSection').style.display = 'block';
           document.getElementById('subtaskList').innerHTML = data.subtasks.map(st =>
@@ -9108,33 +9199,7 @@
           ).join('');
         }
 
-        // If the local run failed (or any subtask ended in failed/escalated),
-        // offer the user a big "Let Claude fix this" button. Clicking gives
-        // Claude the full context + tool access — opt-in because it spends
-        // commercial tokens.
-        const hadAnyFailure =
-          ['failed', 'escalated'].includes(data.status) ||
-          (data.subtasks || []).some(s => ['failed', 'escalated'].includes(s.status));
-        if (hadAnyFailure && data.task_id) {
-          // Hide the fix button when the session is in local-only mode
-          // so the user doesn't see an option they actively opted out
-          // of. (The button is also rendered with display:none by
-          // updatePrivacyIndicator if they flip the toggle AFTER
-          // render, so this inline style is just the initial state.)
-          const hidden = isLocalOnly() ? ' style="display:none"' : '';
-          resultHTML += `
-            <div class="claude-fix-wrap"${hidden}>
-              <button class="btn-claude-fix" onclick="letClaudeFix('${escHtml(data.task_id)}', this)">
-                ${t('let_claude_fix')}
-              </button>
-              <span class="claude-fix-hint">
-                Hands the full task context + tools to Claude. Uses commercial tokens.
-              </span>
-            </div>`;
-        }
-
-        collapseCurrentRunToolCards();
-        addAgentMessage(resultHTML, false);
+        addAgentMessage(renderTaskResult(data, elapsedMs, steps), false);
 
         // Refresh the savings pill — the just-finished task likely
         // bumped the running total. The 30s polling interval would
@@ -9426,11 +9491,13 @@
         return;
       }
 
+      _markStepWaiting(taskId, toolName, true);
       const card = document.createElement('div');
       card.className = 'approval-card';
       card.id = `chat-approval-${escHtml(approvalId)}`;
       card.dataset.approvalId = approvalId;
       card.dataset.toolName   = toolName;
+      card.dataset.taskId     = taskId;
       // Live countdown UI when Settings → "Auto-approve after" is on.
       // The server is the source of truth (it'll flip the approval to
       // 'approved' at the same N-second mark), but we surface the timer
@@ -9447,10 +9514,16 @@
       // Use the macOS-ish symbols that Claude Code uses (⌘⇧↵). On
       // Windows/Linux ⌘ reads as "Cmd" but the symbol is universally
       // recognisable as "the modifier key".
+      // Say what it wants to do in words; the raw arguments (a whole file,
+      // a shell command) stay folded away until asked for.
+      const { icon, label } = describeStep(toolName, args);
       card.innerHTML = `
-        <div class="approval-header">${t('approval_header', { tool: escHtml(toolName) })}</div>
-        <div class="approval-command">${escHtml(argsStr)}</div>
-        <div class="approval-subtext">${t('approval_subtext', { taskId: escHtml(taskId.slice(0, 8)) })}</div>
+        <div class="approval-header"><span class="approval-icon">${icon}</span>${escHtml(t('approval_ask', { x: label }))}</div>
+        <div class="approval-subtext">${escHtml(t('approval_why'))}</div>
+        <details class="approval-details">
+          <summary>${escHtml(t('approval_show'))}</summary>
+          <div class="approval-command">${escHtml(argsStr)}</div>
+        </details>
         ${countdownHTML}
         <div class="approval-card-actions">
           <button class="btn-approval btn-deny"
@@ -9511,6 +9584,8 @@
 
       // Disable all buttons in this card to prevent double-click.
       card?.querySelectorAll('button').forEach(b => (b.disabled = true));
+      // Approved: the step runs again. Denied: its result says so.
+      if (approved && card) _markStepWaiting(card.dataset.taskId, card.dataset.toolName, false);
       try {
         const res = await fetch(`${API}/approvals/${approvalId}/${endpoint}`, { method: 'POST' });
         if (!res.ok) {
