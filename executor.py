@@ -1290,7 +1290,8 @@ class Executor:
                         "the language they wrote in.")})
                     continue
                 if browser_used and browser_calls <= 2 and not gave_up_checked and round_idx < max_rounds - 1 \
-                        and _GAVE_UP.search(_answer_text(raw_text)):
+                        and (_GAVE_UP.search(_answer_text(raw_text))
+                             or (not browser_acted and len(_answer_text(raw_text)) < 12)):
                     gave_up_checked = True
                     logger.info("task=%s gave up a browser chore after %d step(s) — asked to go on", task_id, browser_calls)
                     messages.append({"role": "assistant", "content": raw_text})

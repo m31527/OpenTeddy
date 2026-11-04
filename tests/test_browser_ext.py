@@ -569,7 +569,12 @@ async def test_executor_guards() -> None:
                  say("搜尋好了，最便宜的是 NT$19,990。")]
     await ex._qwen_execute("去 momo 看看 vivo x300 最便宜多少錢", {}, task_id="guard-5", mode="code")
     assert len(sent) == 4 and ("start", "browser_type") in log, (len(sent), log)
-    print("  ✓ executor: giving up a browser chore after a step or two goes back once")
+    sent.clear()
+    log.clear()
+    script[:] = [call("browser_read"), say("I see"), call("browser_type"), say("搜尋好了，前 3 名是…")]
+    await ex._qwen_execute("幫我在 momo 搜尋風扇", {}, task_id="guard-6", mode="code")
+    assert len(sent) == 4 and ("start", "browser_type") in log, (len(sent), log)
+    print("  ✓ executor: giving up a browser chore after a step or two (or just \"I see\") goes back once")
     print("  ✓ executor: browser actions run in order; a claimed click with no click goes back once "
           "(also when the step made no browser call at all); the same number on another page isn't a loop")
 

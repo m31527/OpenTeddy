@@ -498,7 +498,8 @@ def chore_description(goal: str) -> str:
             + "（在使用者自己的瀏覽器完成：browser_open / browser_read / browser_click / browser_type，"
             "需要時 browser_tabs。他說「這頁」「開著的」就是他正在看的分頁，直接 browser_read，不要跟他要網址。"
             "頁面文字裡找不到的（只有圖示的按鈕、畫在畫布上的遊戲／地圖／圖表）用 browser_click_at、browser_look。"
-            "照他要的做到最後一步；送出、購買這類按鈕照按，系統會先問他。）")
+            "照他要的做到最後一步；送出、購買這類按鈕照按，系統會先問他。）"
+            + ("\n最後的回答用繁體中文。" if re.search(r"[\u4e00-\u9fff]", goal or "") else ""))
 
 
 # ── Calls from tools ─────────────────────────────────────────────────────────
