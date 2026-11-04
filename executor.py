@@ -1240,7 +1240,8 @@ class Executor:
                 # the answer. Fall back to thinking so we don't return
                 # "" and trip the empty-response → low-confidence loop.
                 raw_text = message.get("content") or message.get("thinking") or ""
-                if browser_used and not browser_acted and not claim_checked and _CLAIMS_ACTION.search(raw_text):
+                if (browser_used or "browser_" in description) and not browser_acted and not claim_checked \
+                        and _CLAIMS_ACTION.search(raw_text):
                     claim_checked = True
                     logger.info("task=%s claims a browser action it never made — sent back once", task_id)
                     messages.append({"role": "assistant", "content": raw_text})

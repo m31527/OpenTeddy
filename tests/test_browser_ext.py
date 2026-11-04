@@ -406,9 +406,11 @@ async def test_orchestrator() -> None:
     # A browser chore skips the planner: one subtask, the person's own words.
     for goal in ("看一下我在 https://shop.tw/account/orders 的訂單（有好幾頁），10 月花多少？",
                  "這是結帳頁，幫我填收件人王小明然後送出", "我開著的這篇文章在講什麼？",
-                 "到 https://shop.tw 搜尋除濕機"):
+                 "到 https://shop.tw 搜尋除濕機", "在 https://shop.tw/album 幫我把第一張照片按愛心收藏",
+                 "我開著的這張營收圖表，哪個月最高？"):
         assert B.looks_like_browser_chore(goal), goal
-    for goal in ("整理 https://example.com 的重點", "寫一個 slugify.py",
+    for goal in ("整理 https://example.com 的重點", "寫一個 slugify.py", "請按照 https://x.com 的說明安裝",
+                 "冷氣開著的話很耗電嗎",
                  "幫我翻譯這頁\n[Attachments in workspace]\n- a.pdf (3 KB)"):
         assert not B.looks_like_browser_chore(goal), goal
     privacy.begin("plan-1", "tg:999")
@@ -476,7 +478,15 @@ async def test_executor_guards() -> None:
     assert "Check your answer" in json.dumps(sent[2]["messages"], ensure_ascii=False)
     i = log.index(("start", "browser_click"))
     assert log.index(("end", "browser_type")) < i, f"type then click, not both at once: {log}"
-    print("  ✓ executor: browser actions run in order; a claimed click with no click goes back once")
+
+    # A planned step "click it" answered without any browser call at all.
+    sent.clear()
+    log.clear()
+    script[:] = [say("已點擊第一張照片的愛心按鈕 [5]。"), call("browser_click"), say("按好了。")]
+    await ex._qwen_execute("用 browser_click 點擊第一張照片的愛心收藏按鈕", {}, task_id="guard-2", mode="code")
+    assert len(sent) == 3 and ("start", "browser_click") in log, (len(sent), log)
+    print("  ✓ executor: browser actions run in order; a claimed click with no click goes back once "
+          "(also when the step made no browser call at all)")
 
 
 async def main() -> None:
