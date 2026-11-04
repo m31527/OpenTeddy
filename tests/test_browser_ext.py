@@ -420,6 +420,65 @@ async def test_orchestrator() -> None:
           "a browser chore is one subtask in the person's own words")
 
 
+async def test_executor_guards() -> None:
+    """In the person's browser: actions run in the order asked (never in
+    parallel), and "I clicked it" with no click behind it goes back once."""
+    import executor as EX
+    from tool_registry import ToolRegistry, make_result
+
+    log: list = []
+
+    def fake(name, delay=0.0):
+        async def fn(**kw):
+            log.append(("start", name))
+            await asyncio.sleep(delay)
+            log.append(("end", name))
+            return make_result(True, result=f"{name} ok")
+        return fn
+
+    reg = ToolRegistry()
+    for name, delay in (("browser_read", 0), ("browser_type", 0.2), ("browser_click", 0)):
+        reg.register(fake(name, delay), {"type": "function", "function": {
+            "name": name, "description": name, "parameters": {"type": "object", "properties": {}}}}, "low")
+
+    def call(*names):
+        return {"message": {"content": "", "tool_calls": [{"function": {"name": n, "arguments": {}}} for n in names]}}
+
+    def say(text):
+        return {"message": {"content": json.dumps({"result": text, "confidence": 0.9}, ensure_ascii=False)}}
+
+    script = [call("browser_read"), say("已成功將第一張照片按愛心收藏（點擊了 [4]）。"),
+              call("browser_type", "browser_click"), say("按好了。")]
+    sent: list = []
+
+    class _Http:
+        async def post(self, url, json=None, **k):
+            sent.append(json)
+            reply = script[len(sent) - 1]
+
+            class _R:
+                def raise_for_status(self): pass
+                def json(self): return dict(reply, prompt_eval_count=10, eval_count=5)
+            return _R()
+
+        async def aclose(self): pass
+
+    class _Tr:
+        async def record_usage(self, **k): pass
+
+    config.streaming_enabled = False
+    ex = EX.Executor(tracker=_Tr(), skill_factory=None, registry=reg)
+    await ex._http.aclose()
+    ex._http = _Http()
+    privacy.begin("guard-1", "tg:999")
+    await ex._qwen_execute("在相簿按愛心", {}, task_id="guard-1", mode="code")
+    assert len(sent) == 4, f"the claim went back once, then the click was made: {len(sent)} calls"
+    assert "Check your answer" in json.dumps(sent[2]["messages"], ensure_ascii=False)
+    i = log.index(("start", "browser_click"))
+    assert log.index(("end", "browser_type")) < i, f"type then click, not both at once: {log}"
+    print("  ✓ executor: browser actions run in order; a claimed click with no click goes back once")
+
+
 async def main() -> None:
     from tracker import Tracker
     tracker = Tracker(config.db_path)
@@ -443,7 +502,7 @@ async def main() -> None:
     try:
         print("A. pairing"); await test_pairing(base, f"ws://127.0.0.1:{port}")
         print("B–D. the extension in Chromium"); await test_browser(base)
-        print("E. who"); await test_who(); await test_orchestrator()
+        print("E. who"); await test_who(); await test_orchestrator(); await test_executor_guards()
     finally:
         server.should_exit = True
         await serving

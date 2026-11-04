@@ -165,7 +165,8 @@ function draw(msg){g.clearRect(0,0,600,300);btn(60,110,200,70,'#2da44e','開始�
   if(msg){g.fillStyle='#111';g.font='22px sans-serif';g.textAlign='center';g.fillText(msg,300,250);}}
 window.addEventListener('load',()=>draw(''));
 c.addEventListener('click',e=>{const r=c.getBoundingClientRect(),x=e.clientX-r.left,y=e.clientY-r.top;
-  if(x>=60&&x<=260&&y>=110&&y<=180){fetch('/game/start',{method:'POST'});draw('遊戲開始！');}
+  if(x>=60&&x<=260&&y>=110&&y<=180){fetch('/game/start',{method:'POST'});draw('遊戲進行中：剩餘 30 秒，分數 0');
+    g.fillStyle='#8b5a2b';[[120,60],[300,60],[480,60]].forEach(([mx,my])=>{g.beginPath();g.arc(mx,my,22,0,7);g.fill();});}
   else if(x>=340&&x<=540&&y>=110&&y<=180){fetch('/game/rank',{method:'POST'});draw('排行榜：小熊 980 分');}});
 </script>""")
 

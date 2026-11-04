@@ -29,6 +29,16 @@ logger = logging.getLogger(__name__)
 
 _MAX_TOOL_ROUNDS = 10   # prevent infinite tool-call loops
 
+# The person's own browser (tools/browser_ext_tool.py).
+_BROWSER_ACTIONS = frozenset({"browser_click", "browser_click_at", "browser_type"})
+_CLAIMS_ACTION = re.compile(
+    r"((已|成功|完成|幫你|為你|為您).{0,12}(點擊|點了|按了|按下|收藏|送出|提交|填寫|填入|輸入|加入|購買|下單|勾選|選擇|留言)"
+    r"|點擊了|按了|\b(clicked|pressed|submitted|typed|filled in|added to|liked)\b)", re.I)
+
+
+def _is_browser_tool(name: str) -> bool:
+    return name.startswith("browser_") and name != "browser_fetch"
+
 # Objective failure markers in tool results — override self-reported confidence
 # when present, so Claude takes over instead of a false "completed".
 # New additions cover compose/YAML failures that previously slipped through
@@ -961,6 +971,12 @@ class Executor:
         # tail, not a licence to explore.
         max_rounds = _MAX_TOOL_ROUNDS + (4 if (context or {}).get("db_context") else 0)
 
+        # "Clicked the heart [4]" with no click ever made (web eval
+        # 2026-11-04): in the person's browser, a final answer that claims
+        # an action needs a successful action call behind it — else it goes
+        # back once to do it or say it wasn't done.
+        browser_used = browser_acted = claim_checked = False
+
         for round_idx in range(max_rounds):
             # ── Context watchdog (#4) ──────────────────────────────────────
             # If the previous round's prompt was already >= 70% of num_ctx,
@@ -1224,6 +1240,17 @@ class Executor:
                 # the answer. Fall back to thinking so we don't return
                 # "" and trip the empty-response → low-confidence loop.
                 raw_text = message.get("content") or message.get("thinking") or ""
+                if browser_used and not browser_acted and not claim_checked and _CLAIMS_ACTION.search(raw_text):
+                    claim_checked = True
+                    logger.info("task=%s claims a browser action it never made — sent back once", task_id)
+                    messages.append({"role": "assistant", "content": raw_text})
+                    messages.append({"role": "user", "content": (
+                        "Check your answer: no browser_click, browser_click_at or browser_type call succeeded in "
+                        "this task, so nothing was clicked, typed or submitted. If your answer says you did such a "
+                        "thing and it still needs doing, do it now with the tool; if it can't be done, say plainly "
+                        "that it was NOT done. If your answer only reports what the page says, give it again "
+                        "unchanged.")})
+                    continue
                 return self._finalize_response(raw_text, objective_failure_seen)
 
             # ── Process tool calls ────────────────────────────────────────────
@@ -1250,8 +1277,11 @@ class Executor:
             # high-risk gating runs through the approval queue which
             # mustn't be batched.
             parallel_pre: Dict[int, Dict[str, Any]] = {}
+            # Never the person's browser: clicks and typing on one page have
+            # to happen in the order they were asked for.
             if len(tool_calls) >= 2 and all(
                 self.registry.risk_of((c.get("function") or {}).get("name", "")) == "low"
+                and not _is_browser_tool((c.get("function") or {}).get("name", ""))
                 for c in tool_calls
             ):
                 async def _exec_parallel(i: int, c: Dict[str, Any]) -> Tuple[int, Dict[str, Any]]:
@@ -1481,6 +1511,10 @@ class Executor:
                     tool_result.get("duration_ms"),
                     result_preview,
                 )
+                if _is_browser_tool(tool_name):
+                    browser_used = True
+                    if tool_name in _BROWSER_ACTIONS and tool_result.get("success"):
+                        browser_acted = True
 
                 # ── Objective failure detection ───────────────────────────
                 # Scan tool output for hard failure signals (unhealthy, Exited,
