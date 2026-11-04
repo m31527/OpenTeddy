@@ -148,11 +148,12 @@ def _album() -> str:
         f"""<div class="card"><div style="width:260px;height:150px;background:{bg};border-radius:6px;display:grid;
 place-items:center">照片 {n}：{t}</div><div style="display:flex;gap:14px;margin-top:8px">"""
         + "".join(f"<button style='width:42px;height:42px;border:0;border-radius:8px;background:#eef'"
-                  f" onclick=\"act('{a}',{n})\">{_ICONS[a]}</button>" for a in ("delete", "like", "share"))
+                  f" data-k='{a}' data-n='{n}'>{_ICONS[a]}</button>" for a in ("delete", "like", "share"))
         + "</div></div>" for n, t, bg in photos)
     return _page("相簿", f"""<h1>我的相簿</h1>{cards}<p id="msg"></p>
-<script>function act(a,n){{fetch('/album/'+a+'?photo='+n,{{method:'POST'}}).then(()=>{{
-document.getElementById('msg').textContent=({{like:'已收藏',delete:'已刪除',share:'已分享'}})[a]+' 照片 '+n}})}}</script>""")
+<script>document.querySelectorAll('button[data-k]').forEach(b=>b.addEventListener('click',()=>{{
+const a=b.dataset.k,n=b.dataset.n;fetch('/album/'+a+'?photo='+n,{{method:'POST'}}).then(()=>{{
+document.getElementById('msg').textContent=({{like:'已收藏',delete:'已刪除',share:'已分享'}})[a]+' 照片 '+n}})}}))</script>""")
 
 
 def _game() -> str:

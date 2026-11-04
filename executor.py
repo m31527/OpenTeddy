@@ -36,6 +36,9 @@ _CLAIMS_ACTION = re.compile(
     r"|點擊了|按了|\b(clicked|pressed|submitted|typed|filled in|added to|liked)\b)", re.I)
 
 
+_PAGE_ADDR = re.compile(r"\[tab \d+\][^\n]*\n(https?://\S+)")
+
+
 def _is_browser_tool(name: str) -> bool:
     return name.startswith("browser_") and name != "browser_fetch"
 
@@ -976,6 +979,10 @@ class Executor:
         # an action needs a successful action call behind it — else it goes
         # back once to do it or say it wasn't done.
         browser_used = browser_acted = claim_checked = False
+        # "Click [5]" on the results page and "click [5]" on the product page
+        # are different clicks: a browser call's duplicate key includes the
+        # page it was made on (the last address a browser result showed).
+        browser_page = ""
 
         for round_idx in range(max_rounds):
             # ── Context watchdog (#4) ──────────────────────────────────────
@@ -1336,7 +1343,7 @@ class Executor:
                 # short-circuit — don't execute, don't burn GPU, just
                 # synthesize a fail-fast tool_result that tells Qwen
                 # "stop looping, emit your final answer".
-                k = _call_key(tool_name, args)
+                k = _call_key(tool_name, dict(args, _page=browser_page) if _is_browser_tool(tool_name) else args)
                 prev_count = call_counts.get(k, 0)
                 call_counts[k] = prev_count + 1
 
@@ -1516,6 +1523,9 @@ class Executor:
                     browser_used = True
                     if tool_name in _BROWSER_ACTIONS and tool_result.get("success"):
                         browser_acted = True
+                    _pages = _PAGE_ADDR.findall(str(tool_result.get("result") or ""))
+                    if _pages:
+                        browser_page = _pages[-1]
 
                 # ── Objective failure detection ───────────────────────────
                 # Scan tool output for hard failure signals (unhealthy, Exited,

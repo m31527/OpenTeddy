@@ -62,6 +62,7 @@ SHOP = """<!doctype html><html><head><meta charset="utf-8"><title>小熊商店</
 <a href="/t/next">下一頁</a>
 <a href="/t/next?new=1" target="_blank">在新分頁打開說明</a>
 <label>暱稱 <input id="nick"></label>
+<button class="btn icon-trash" onclick="location.href='/t/next?deleted=1'"><svg width="16" height="16"></svg></button>
 <div id="echo"></div>
 <p style="display:none">隱藏的文字</p>
 <script>document.getElementById('nick').addEventListener('input',
@@ -270,7 +271,17 @@ async def test_browser(base: str) -> None:
             page = r["result"]
             r = await T.browser_type(num(page, "暱稱"), "小熊")
             assert r["success"] and "你好，小熊" in r["result"], r
-            print("  ✓ passwords / card numbers refused and untouched; dropdown, checkbox, watched input")
+            m = re.search(r'\[(\d+)\] button "" \(no label; its code says: trash[^)]*\)', r["result"])
+            assert m, r["result"]
+            SAID.clear()
+            task = asyncio.create_task(T.browser_click(int(m.group(1))))
+            await until(lambda: bool(B._confirms.get(ALICE)), "question for the trash icon")
+            assert "trash" in SAID[-1][1], SAID
+            B.answer_from_chat(ALICE, "不要")
+            r = await task
+            assert not r["success"], r
+            print("  ✓ passwords / card numbers refused and untouched; dropdown, checkbox, watched input; "
+                  "a bare icon named by its code (icon-trash) asks first")
 
             r = await T.browser_read()
             page = r["result"]
@@ -485,8 +496,21 @@ async def test_executor_guards() -> None:
     script[:] = [say("已點擊第一張照片的愛心按鈕 [5]。"), call("browser_click"), say("按好了。")]
     await ex._qwen_execute("用 browser_click 點擊第一張照片的愛心收藏按鈕", {}, task_id="guard-2", mode="code")
     assert len(sent) == 3 and ("start", "browser_click") in log, (len(sent), log)
+
+    # The same [5] clicked on three different pages is three clicks, not a loop.
+    pages = iter(["http://shop/", "http://shop/search", "http://shop/p/dh6"])
+
+    async def click_on_page(**kw):
+        log.append(("start", "browser_click"))
+        return make_result(True, result=f"Clicked. The page now:\n[tab 1] page\n{next(pages)}\n")
+    reg._tools["browser_click"]["fn"] = click_on_page
+    sent.clear()
+    log.clear()
+    script[:] = [call("browser_click"), call("browser_click"), call("browser_click"), say("到結帳頁了。")]
+    await ex._qwen_execute("用 browser_click 一路點到結帳", {}, task_id="guard-3", mode="code")
+    assert log.count(("start", "browser_click")) == 3, log
     print("  ✓ executor: browser actions run in order; a claimed click with no click goes back once "
-          "(also when the step made no browser call at all)")
+          "(also when the step made no browser call at all); the same number on another page isn't a loop")
 
 
 async def main() -> None:

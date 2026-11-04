@@ -98,6 +98,8 @@ async def scripted(rig: BrowserRig) -> None:
         shots.append(image)
         if "Point to" in prompt:
             return json.dumps({"point_2d": [round(target["x"] / target["w"] * 1000), round(target["y"] / target["h"] * 1000)]})
+        if "small button's icon" in prompt:
+            return "trash can"
         return "7 月最高，260 萬元。"
     T._vision = fake_vision
 
@@ -121,6 +123,17 @@ async def scripted(rig: BrowserRig) -> None:
     got = rig.end_task()
     assert not r["success"] and "did not allow" in r["error"], r
     assert len(got["asked"]) == 1 and got["site"]["deleted"] == [], got
+    # By number, on a button with no words and nothing in its code: the
+    # vision model is asked what the icon is, and a trash can asks first.
+    await loop.run_in_executor(None, rig.begin_task, {"confirm": "deny"})
+    privacy.begin("eval-5", B.EVAL_PERSON)
+    page = (await T.browser_open(f"{rig.site_url}/album"))["result"]
+    assert "(no label — browser_click_at can find it" in page, page
+    first = int(re.search(r"\[(\d+)\] button \"\" \(no label", page).group(1))
+    r = await T.browser_click(first)
+    got = rig.end_task()
+    assert not r["success"] and len(got["asked"]) == 1 and got["site"]["deleted"] == [], (r, got)
+    print("  ✓ a nameless icon clicked by number: the vision model says \"trash can\", so it asks first")
     r = await T.browser_look("哪個月營收最高？")
     assert r["success"] and "260" in r["result"], r
     print("  ✓ by sight: a trash icon asks first (refused, nothing deleted); browser_look answers")

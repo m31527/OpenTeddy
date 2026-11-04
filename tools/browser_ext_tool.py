@@ -59,7 +59,9 @@ _SECRET = re.compile(
 
 
 def _risky_click(el: Dict[str, Any]) -> bool:
-    name = str(el.get("name") or "")
+    # `hint`: words from a nameless button's code (class, id, onclick…);
+    # `seen`: what the vision model says an icon-only button is.
+    name = " ".join(str(el.get(k) or "") for k in ("name", "hint", "seen"))
     if _RISKY.search(name):
         return True
     form = el.get("form") or {}
@@ -82,11 +84,12 @@ def _secret_field(el: Dict[str, Any]) -> bool:
 
 
 def _tab(tab: Any) -> Optional[int]:
-    if isinstance(tab, int) and tab > 0:
-        return tab
-    if isinstance(tab, str) and tab.strip().isdigit():
-        return int(tab.strip())
-    return B.task_tab(privacy.current_task())
+    """A tab id as given — models also write 1836818761 as "1.836818761e+09"."""
+    try:
+        n = int(float(tab)) if isinstance(tab, (int, float, str)) and str(tab).strip() else 0
+    except ValueError:
+        n = 0
+    return n if n > 0 else B.task_tab(privacy.current_task())
 
 
 def _host(el: Dict[str, Any]) -> str:
@@ -141,13 +144,45 @@ async def browser_read(tab: Optional[int] = None, find: str = "") -> Dict[str, A
     return make_result(True, result=_page(r), duration_ms=_ms(t0))
 
 
+async def _what_icon(el: Dict[str, Any]) -> str:
+    """An icon-only button with nothing in its code to go by: ask the vision
+    model what it shows, so the "ask first" rule can judge it (a bare trash
+    icon deleted a photo unasked in the 2026-11-04 web eval)."""
+    box = el.get("box") or {}
+    if not box or not (getattr(config, "vision_model", "") or "").strip():
+        return ""
+    try:
+        import base64
+        import io
+        from PIL import Image
+        shot = await B.call("screenshot", {"tab": el.get("tab")}, timeout=30)
+        img = Image.open(io.BytesIO(base64.b64decode(shot["image"])))
+        k = img.width / max(1.0, float(shot["width"]))
+        pad = 10
+        crop = img.crop((max(0, int((box["x"] - pad) * k)), max(0, int((box["y"] - pad) * k)),
+                         min(img.width, int((box["x"] + box["w"] + pad) * k)),
+                         min(img.height, int((box["y"] + box["h"] + pad) * k))))
+        crop = crop.resize((max(64, crop.width * 3), max(64, crop.height * 3)))
+        buf = io.BytesIO()
+        crop.convert("RGB").save(buf, "JPEG", quality=90)
+        label = await _vision("What is this small button's icon? Answer in 1-4 English words, e.g. "
+                              "\"trash can\", \"heart\", \"gear\", \"share\".",
+                              base64.b64encode(buf.getvalue()).decode(), num_predict=12)
+    except Exception:  # noqa: BLE001 — no picture, no label; the click still follows the rules
+        return ""
+    return re.sub(r"[^\w\s-]", "", label).strip()[:40]
+
+
 async def browser_click(n: int, tab: Optional[int] = None) -> Dict[str, Any]:
     t0 = _start()
     tab = _tab(tab)
     try:
         el = await B.call("describe", {"tab": tab, "n": int(n)})
+        if not el.get("name") and not el.get("hint"):
+            el["seen"] = await _what_icon(el)
         if _risky_click(el):
-            ok = await B.confirm(f"要我在 {_host(el)} 按「{el.get('name') or '這個按鈕'}」嗎？", tab=el.get("tab"))
+            label = el.get("name") or (f"{el['seen']} 圖示" if el.get("seen") else "") or el.get("hint") or "這個按鈕"
+            ok = await B.confirm(f"要我在 {_host(el)} 按「{label}」嗎？", tab=el.get("tab"))
             if not ok:
                 return make_result(False, error=(
                     "The person did not allow this click (said no, or didn't answer in time). Don't click it "
@@ -157,7 +192,7 @@ async def browser_click(n: int, tab: Optional[int] = None) -> Dict[str, Any]:
     except B.BrowserError as exc:
         return make_result(False, error=str(exc), duration_ms=_ms(t0))
     B.set_task_tab(privacy.current_task(), r.get("tab"))
-    what = f"Clicked {r.get('clicked') or f'[{n}]'}."
+    what = f"Clicked {r.get('clicked') or f'[{n}]'}" + (f" (an icon: {el['seen']})." if el.get("seen") else ".")
     if r.get("new_tab"):
         what += " It opened in a new tab, which is now the one you're working in."
     elif r.get("navigated"):

@@ -127,6 +127,31 @@
     return s;
   }
 
+  // A button with no words at all (just an icon): what its code calls it —
+  // id, class, data-*, onclick, the icon's class / <title> / sprite name.
+  // "icon-trash" → "trash"; enough for the model to pick the right one and
+  // for OpenTeddy to know a delete button when it sees one.
+  const GENERIC = /^(btn|button|buttons|icon|icons|svg|img|image|act|action|click|handler|onclick|fa|fas|far|fab|mdi|material|symbols|outlined|rounded|ui|el|item|wrap|wrapper|container|inner|outer|small|large|lg|sm|md|xs|primary|secondary|default|active|true|false|this|event|return|function|void|null|undefined|href|use|xlink|sprite|style|class|svgicon|location|window|document|fetch|method|post|get|then|text|content|textcontent|getelementbyid|value|target|query|selector|data|dataset|http|https|www|com|html)$/i;
+
+  function hintOf(el) {
+    const svg = el.querySelector('svg');
+    const use = svg && svg.querySelector('use');
+    const i = el.querySelector('i[class], span[class*=icon]');
+    const raw = [el.id, typeof el.className === 'string' ? el.className : '', el.getAttribute('data-testid'),
+      el.getAttribute('data-action'), el.getAttribute('onclick'), el.getAttribute('name'),
+      svg && svg.getAttribute('class'), svg && svg.querySelector('title') && svg.querySelector('title').textContent,
+      use && (use.getAttribute('href') || use.getAttribute('xlink:href')), i && i.className,
+    ].filter((x) => typeof x === 'string' && x).join(' ');
+    const words = [];
+    for (const w of raw.replace(/([a-z])([A-Z])/g, '$1 $2').split(/[^A-Za-z\u4e00-\u9fff]+/)) {
+      const lw = w.toLowerCase();
+      if (lw.length < 3 || GENERIC.test(lw) || words.includes(lw)) continue;
+      words.push(lw);
+      if (words.length >= 3) break;
+    }
+    return words.join(' ');
+  }
+
   function valueOf(el) {
     if (el.tagName === 'SELECT') {
       const o = el.selectedOptions && el.selectedOptions[0];
@@ -145,7 +170,12 @@
 
   function line(n, el, container) {
     const kind = kindOf(el);
-    let s = `[${n}] ${kind} "${clip(nameOf(el), container ? 50 : 80)}"`;
+    const name = clip(nameOf(el), container ? 50 : 80);
+    let s = `[${n}] ${kind} "${name}"`;
+    if (!name) {
+      const hint = hintOf(el);
+      s += hint ? ` (no label; its code says: ${hint})` : ' (no label — browser_click_at can find it by how it looks)';
+    }
     if (kind === 'textbox' || kind === 'searchbox' || kind === 'combobox') {
       s += isSecret(el) ? ' (password / card / code — the person types this)' : ` = "${clip(valueOf(el), 60)}"`;
     } else if (kind === 'select') {
@@ -259,8 +289,15 @@
   function describe(p) {
     const el = deref(p.n);
     const form = el.form || el.closest('form');
+    const name = clip(nameOf(el), 80);
+    let box = null;
+    if (!name) {                       // an icon: where it is, for a look at it
+      el.scrollIntoView({ block: 'center', inline: 'center' });
+      const r = el.getBoundingClientRect();
+      box = { x: r.left, y: r.top, w: r.width, h: r.height };
+    }
     return {
-      n: Number(p.n), kind: kindOf(el), name: clip(nameOf(el), 80), tag: el.tagName.toLowerCase(),
+      n: Number(p.n), kind: kindOf(el), name, hint: name ? '' : hintOf(el), box, tag: el.tagName.toLowerCase(),
       type: (el.type || '').toLowerCase(), role: el.getAttribute('role') || '',
       autocomplete: el.getAttribute('autocomplete') || '', field: squash(`${el.name || ''} ${el.id || ''}`),
       secret: isSecret(el), submits: submits(el),
