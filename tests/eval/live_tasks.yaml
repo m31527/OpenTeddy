@@ -1,0 +1,16 @@
+# Web tasks on real, live sites — results change with the sites, so these
+# aren't part of the standard eval. Run on their own:
+#   .venv/bin/python tests/eval/run_eval.py --tasks tests/eval/live_tasks.yaml --runs 2
+#
+# real_momo_search is the first thing a person asked of the extension
+# (2026-11-04): momo's search box placeholder (a promoted keyword) got typed
+# instead of 風扇, and the products sat behind 13,000 characters of filters.
+- id: real_momo_search
+  category: web
+  browser: {confirm: deny}
+  goal: 幫我在 momo 搜尋風扇，列出前 3 個商品和價格
+  checks:
+    - {check: answer_contains, any: ["扇"]}
+    - {check: answer_not_contains, any: ["Nintendo", "任天堂", "Roborock", "石頭科技"]}
+    - {check: asked, max: 0}
+  seconds: 120
