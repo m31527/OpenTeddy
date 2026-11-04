@@ -183,6 +183,11 @@ async def browser_click(n: int, tab: Optional[int] = None) -> Dict[str, Any]:
         if _risky_click(el):
             label = el.get("name") or (f"{el['seen']} 圖示" if el.get("seen") else "") or el.get("hint") or "這個按鈕"
             ok = await B.confirm(f"要我在 {_host(el)} 按「{label}」嗎？", tab=el.get("tab"))
+            if not ok and el.get("seen"):
+                return make_result(False, error=(
+                    f"[{n}] is a {el['seen']} icon, and the person did not allow clicking it. Don't click it. "
+                    "If that isn't the button you meant, find the right one by how it looks with "
+                    "browser_click_at (e.g. \"the heart icon under the first photo\")."), duration_ms=_ms(t0))
             if not ok:
                 return make_result(False, error=(
                     "The person did not allow this click (said no, or didn't answer in time). Don't click it "

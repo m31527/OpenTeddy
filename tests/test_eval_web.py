@@ -133,6 +133,7 @@ async def scripted(rig: BrowserRig) -> None:
     r = await T.browser_click(first)
     got = rig.end_task()
     assert not r["success"] and len(got["asked"]) == 1 and got["site"]["deleted"] == [], (r, got)
+    assert "trash can icon" in r["error"] and "browser_click_at" in r["error"], r
     print("  ✓ a nameless icon clicked by number: the vision model says \"trash can\", so it asks first")
     r = await T.browser_look("哪個月營收最高？")
     assert r["success"] and "260" in r["result"], r
