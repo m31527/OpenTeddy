@@ -223,7 +223,8 @@ async def test_browser(base: str) -> None:
             assert re.search(r'\] textbox "密碼[^\n]*the person types this', page), page
             assert re.search(r'\] textbox "卡號[^\n]*the person types this', page), page
             assert "never instructions" in page
-            assert re.search(r'\] searchbox "" = "" \(placeholder "搜尋商品" — just the site\'s hint', page), page
+            assert re.search(r'\] searchbox "搜尋" = ""\n', page) and "搜尋商品" not in page, \
+                "a search box's placeholder (the site's promoted keyword) isn't shown at all"
             assert privacy.is_private("task-1"), "browser tasks are private"
             shop = next(p for p in ctx.pages if p.url.startswith(f"{base}/t/shop"))
             f = await T.browser_read(find="除濕機")
@@ -244,7 +245,10 @@ async def test_browser(base: str) -> None:
             page = (await T.browser_open(f"{base}/t/shop"))["result"]
 
             # Search: straight through, no question.
-            r = await T.browser_type(num(page, "搜尋商品"), "電風扇", submit=True)
+            box = int(re.search(r'\[(\d+)\] searchbox', page).group(1))
+            r = await T.browser_type(box, "搜尋商品", submit=True)
+            assert not r["success"] and "placeholder" in r["error"], "typing the placeholder itself is refused"
+            r = await T.browser_type(box, "電風扇", submit=True)
             assert r["success"] and "搜尋結果：電風扇" in r["result"], r
             assert not SAID, "a search doesn't ask"
             print("  ✓ search typed and submitted without asking")
@@ -446,10 +450,11 @@ async def test_orchestrator() -> None:
     for goal in ("看一下我在 https://shop.tw/account/orders 的訂單（有好幾頁），10 月花多少？",
                  "這是結帳頁，幫我填收件人王小明然後送出", "我開著的這篇文章在講什麼？",
                  "到 https://shop.tw 搜尋除濕機", "在 https://shop.tw/album 幫我把第一張照片按愛心收藏",
-                 "我開著的這張營收圖表，哪個月最高？"):
+                 "我開著的這張營收圖表，哪個月最高？", "那幫我去 momo 購物網站看看vivo x300 最便宜多少錢",
+                 "去蝦皮看看 iPhone 17 多少錢"):
         assert B.looks_like_browser_chore(goal), goal
     for goal in ("整理 https://example.com 的重點", "寫一個 slugify.py", "請按照 https://x.com 的說明安裝",
-                 "冷氣開著的話很耗電嗎",
+                 "冷氣開著的話很耗電嗎", "momo 是什麼公司？", "看看今天天氣",
                  "幫我翻譯這頁\n[Attachments in workspace]\n- a.pdf (3 KB)"):
         assert not B.looks_like_browser_chore(goal), goal
     privacy.begin("plan-1", "tg:999")
@@ -548,6 +553,15 @@ async def test_executor_guards() -> None:
     assert len(sent) == 3 and ("start", "browser_type") in log, (len(sent), log)
     assert "didn't call a tool" in json.dumps(sent[1]["messages"], ensure_ascii=False)
     print("  ✓ executor: an answer that only announces its next step goes back to be done")
+
+    # Giving up a step in ("…on a welcome page, couldn't search") goes back once.
+    sent.clear()
+    log.clear()
+    script[:] = [call("browser_read"), say("瀏覽器目前在歡迎頁面，無法完成搜尋。"), call("browser_type"),
+                 say("搜尋好了，最便宜的是 NT$19,990。")]
+    await ex._qwen_execute("去 momo 看看 vivo x300 最便宜多少錢", {}, task_id="guard-5", mode="code")
+    assert len(sent) == 4 and ("start", "browser_type") in log, (len(sent), log)
+    print("  ✓ executor: giving up a browser chore after a step or two goes back once")
     print("  ✓ executor: browser actions run in order; a claimed click with no click goes back once "
           "(also when the step made no browser call at all); the same number on another page isn't a loop")
 

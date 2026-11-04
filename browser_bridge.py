@@ -439,13 +439,24 @@ _WEB_ACTION = re.compile(
     r"\b(search|click|fill|submit|buy|order|log ?in|sign ?in)\b)", re.I)
 
 
+_SITE = re.compile(
+    r"((去|到|在|上|打開|開啟|用)\s*[A-Za-z0-9\u4e00-\u9fff .\-]{1,24}?(網站|網頁|購物網|官網|商城)"
+    r"|\b(momo|shopee|pchome|amazon|coupang|youtube|facebook|instagram|threads|dcard|ptt|gmail|github)\b"
+    r"|蝦皮|博客來|露天|酷澎|淘寶|天貓|yahoo\s*(拍賣|購物))", re.I)
+_LOOK_UP = re.compile(r"(看看|看一下|多少錢|價格|價錢|有沒有|查一下|查查)")
+
+
 def looks_like_browser_chore(goal: str) -> bool:
-    """「我開著的這頁…」, or a site plus something to do on it. Uploaded
-    files are left to the planner (「這頁」 there is a page of a document)."""
+    """「我開著的這頁…」, or a site (an address, or a site by name: 「去 momo
+    購物網站看看…」) plus something to do or look up on it. Uploaded files
+    are left to the planner (「這頁」 there is a page of a document)."""
     g = goal or ""
     if "[Attachments in workspace" in g:
         return False
-    return bool(_OWN_PAGE.search(g) or (_URL.search(g) and _WEB_ACTION.search(g)))
+    if _OWN_PAGE.search(g):
+        return True
+    site = _URL.search(g) or _SITE.search(g)
+    return bool(site and (_WEB_ACTION.search(g) or (not _URL.search(g) and _LOOK_UP.search(g))))
 
 
 def chore_description(goal: str) -> str:

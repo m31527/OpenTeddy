@@ -43,6 +43,11 @@ _ONLY_INTENT = re.compile(
     r"(\b(let me(?! know)|i'?ll|i will|i'?m going to|next,? i|now i)\b|讓我(?!知道)|我來|我先|接下來我|現在我|我將|我會去)"
     r"[^.。!?！？\n:：]{0,160}[.。…:：]?\s*$", re.I)
 
+# "…the browser is on a welcome page, so I couldn't search" after just
+# opening momo (2026-11-05): giving up a browser chore a step or two in.
+_GAVE_UP = re.compile(r"(無法|尚未|未能|沒辦法|做不到|未完成|\b(couldn'?t|could not|unable|not able|cannot)\b)", re.I)
+
+
 def _answer_text(raw: str) -> str:
     """The answer itself: the "result" of a {"result": …} reply, or the text."""
     t = (raw or "").strip()
@@ -1003,7 +1008,8 @@ class Executor:
         # 2026-11-04): in the person's browser, a final answer that claims
         # an action needs a successful action call behind it — else it goes
         # back once to do it or say it wasn't done.
-        browser_used = browser_acted = claim_checked = False
+        browser_used = browser_acted = claim_checked = gave_up_checked = False
+        browser_calls = 0
         intent_nudges = 0
         # "Click [5]" on the results page and "click [5]" on the product page
         # are different clicks: a browser call's duplicate key includes the
@@ -1283,6 +1289,16 @@ class Executor:
                         "with the tool. If you're actually finished, give the final answer for the person, in "
                         "the language they wrote in.")})
                     continue
+                if browser_used and browser_calls <= 2 and not gave_up_checked and round_idx < max_rounds - 1 \
+                        and _GAVE_UP.search(_answer_text(raw_text)):
+                    gave_up_checked = True
+                    logger.info("task=%s gave up a browser chore after %d step(s) — asked to go on", task_id, browser_calls)
+                    messages.append({"role": "assistant", "content": raw_text})
+                    messages.append({"role": "user", "content": (
+                        f"You stopped after {browser_calls} browser step(s) and said it can't be done. The page "
+                        "is open — keep going: browser_read to see it, browser_type / browser_click to act. Only "
+                        "give up if a tool result said it's impossible, and then say exactly what blocked you.")})
+                    continue
                 if (browser_used or "browser_" in description) and not browser_acted and not claim_checked \
                         and _CLAIMS_ACTION.search(raw_text):
                     claim_checked = True
@@ -1557,6 +1573,7 @@ class Executor:
                 )
                 if _is_browser_tool(tool_name):
                     browser_used = True
+                    browser_calls += 1
                     if tool_name in _BROWSER_ACTIONS and tool_result.get("success"):
                         browser_acted = True
                     _pages = _PAGE_ADDR.findall(str(tool_result.get("result") or ""))

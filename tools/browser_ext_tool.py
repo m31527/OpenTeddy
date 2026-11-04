@@ -219,6 +219,11 @@ async def browser_type(n: int, text: str, submit: bool = False, tab: Optional[in
             return make_result(False, error=(
                 "這是密碼、卡號或驗證碼之類的欄位，我不會幫你填。請你自己在瀏覽器輸入，好了再叫我繼續。"),
                 duration_ms=_ms(t0))
+        ph = re.sub(r"\s+", "", str(el.get("placeholder") or ""))
+        if ph and re.sub(r"\s+", "", text) == ph:
+            return make_result(False, error=(
+                f"「{text}」 is the box's placeholder — the site's own suggestion — not what the person asked "
+                "for. Type the words from their request instead."), duration_ms=_ms(t0))
         if submit and not _searchy_field(el):
             ok = await B.confirm(
                 f"要我在 {_host(el)} 的「{el.get('name') or '欄位'}」填入「{text[:40]}」然後送出嗎？", tab=el.get("tab"))

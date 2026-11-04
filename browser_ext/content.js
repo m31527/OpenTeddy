@@ -173,8 +173,11 @@
 
   function line(n, el, container) {
     const kind = kindOf(el);
-    const name = clip(nameOf(el), container ? 50 : 80);
     const field = /^(textbox|searchbox|combobox)$/.test(kind);
+    // A search box's placeholder is the site's promoted keyword (momo:
+    // "石頭掃地機"), and a model typed it in place of the person's words
+    // even when told it was only a hint — so it isn't shown at all.
+    const name = clip(nameOf(el), container ? 50 : 80) || (kind === 'searchbox' ? '搜尋' : '');
     let s = `[${n}] ${kind} "${name}"`;
     if (!name && !field && kind !== 'select') {
       const hint = hintOf(el);
@@ -183,7 +186,7 @@
     if (field) {
       s += isSecret(el) ? ' (password / card / code — the person types this)' : ` = "${clip(valueOf(el), 60)}"`;
       const ph = squash(el.placeholder || el.getAttribute('aria-placeholder'));
-      if (ph && !isSecret(el)) s += ` (placeholder "${clip(ph, 40)}" — just the site's hint, not what to type)`;
+      if (ph && !isSecret(el) && kind !== 'searchbox') s += ` (placeholder "${clip(ph, 40)}" — a hint, not what to type)`;
     } else if (kind === 'select') {
       const opts = Array.from(el.options || []).map((o) => clip(o.text, 25)).filter(Boolean);
       s += ` = "${clip(valueOf(el), 40)}"`;

@@ -14,3 +14,16 @@
     - {check: answer_not_contains, any: ["Nintendo", "任天堂", "Roborock", "石頭科技"]}
     - {check: asked, max: 0}
   seconds: 120
+
+# The second thing asked (2026-11-05), twice: it typed momo's promoted
+# keyword 「石頭掃地機」, then gave up on a "welcome page" after one step.
+- id: real_momo_cheapest
+  category: web
+  browser: {confirm: deny}
+  goal: 那幫我去 momo 購物網站看看vivo x300 最便宜多少錢
+  checks:
+    - {check: answer_contains, any: ["vivo", "X300", "x300"]}
+    - {check: answer_contains, any: ["$", "元", "NT"]}
+    - {check: answer_not_contains, any: ["石頭", "掃地機", "Roborock", "Nintendo", "歡迎頁面"]}
+    - {check: asked, max: 0}
+  seconds: 120

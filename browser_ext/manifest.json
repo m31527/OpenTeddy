@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "OpenTeddy",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "讓你自己的 OpenTeddy 讀取和操作這個瀏覽器的網頁。需要先配對；送出、購買、刪除前會先問你。",
   "minimum_chrome_version": "116",
   "permissions": ["tabs", "scripting", "storage", "alarms"],
