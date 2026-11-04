@@ -210,14 +210,18 @@ BROWSER_EXT_TOOLS = [
         "browser_read",
         "Read a tab of the person's own Chrome as text. Every link, button and field gets a number like "
         "[12]; pass that number to browser_click / browser_type. Numbers change when the page changes — "
-        "always use the ones from the latest result. `find` keeps only lines containing those words.",
+        "always use the ones from the latest result. With no `tab` it reads the page the person is looking "
+        "at: when they say \"this page\" / 這頁 / 開著的, call it — don't ask them for the address. "
+        "`find` keeps only lines containing those words.",
         {"tab": _TAB, "find": {"type": "string", "description": "Optional words to look for on a long page."}},
         []), "low"),
     (browser_click, _schema(
         "browser_click",
         "Click element number n (from the latest page text) in the person's Chrome; returns the page "
         "afterwards so you can check it worked. Buttons that send, buy, pay, post, delete, confirm or "
-        "submit a form are shown to the person first; if they don't allow it, stop and tell them.",
+        "submit a form are shown to the person first — so when they asked you to buy / send / submit, go "
+        "all the way and click that button rather than stopping one step short; if they don't allow it, "
+        "stop and tell them.",
         {"n": {"type": "integer", "description": "The element's number, e.g. 12 for [12]."}, "tab": _TAB},
         ["n"]), "low"),
     (browser_type, _schema(

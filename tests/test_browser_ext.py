@@ -402,8 +402,22 @@ async def test_orchestrator() -> None:
     assert "還沒有連接" in (await run("瀏覽器狀態")).summary
     await B.pair(code, "Mac 的 Chrome", "chrome-extension://abc")
     assert "沒有連上" in (await run("瀏覽器狀態")).summary
+
+    # A browser chore skips the planner: one subtask, the person's own words.
+    for goal in ("看一下我在 https://shop.tw/account/orders 的訂單（有好幾頁），10 月花多少？",
+                 "這是結帳頁，幫我填收件人王小明然後送出", "我開著的這篇文章在講什麼？",
+                 "到 https://shop.tw 搜尋除濕機"):
+        assert B.looks_like_browser_chore(goal), goal
+    for goal in ("整理 https://example.com 的重點", "寫一個 slugify.py",
+                 "幫我翻譯這頁\n[Attachments in workspace]\n- a.pdf (3 KB)"):
+        assert not B.looks_like_browser_chore(goal), goal
+    privacy.begin("plan-1", "tg:999")
+    subs = await Orchestrator._plan(o, TaskRequest(goal="這是結帳頁，幫我填收件人王小明然後送出", session_id="s1"))
+    assert len(subs) == 1 and subs[0].description.startswith("這是結帳頁，幫我填收件人王小明然後送出"), subs
+    assert "不要跟他要網址" in subs[0].description
     assert "已解除" in (await run("解除瀏覽器")).summary and await B.linked("tg:999") == 0
-    print("  ✓ 「連接瀏覽器」 gives this person a code (never from the web); status; 「解除瀏覽器」")
+    print("  ✓ 「連接瀏覽器」 gives this person a code (never from the web); status; 「解除瀏覽器」; "
+          "a browser chore is one subtask in the person's own words")
 
 
 async def main() -> None:

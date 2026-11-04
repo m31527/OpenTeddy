@@ -400,6 +400,36 @@ async def serve(ws: Any) -> None:
         logger.info("Browser offline for %s (%s)", person, conn.label)
 
 
+# ── Is this a chore for the person's own browser? ────────────────────────────
+
+_OWN_PAGE = re.compile(
+    r"((我的|這個|這|目前|現在|開著的?|正在看的?)\s*(瀏覽器|chrome|分頁|頁面|網頁|頁)|這是.{0,8}頁"
+    r"|(開著|正在看|打開著).{0,6}(文章|公告|貼文|網頁|分頁|頁)"
+    r"|\b(this|current) (page|tab)\b|\bmy (browser|chrome|tab)\b)", re.I)
+_URL = re.compile(r"https?://\S+", re.I)
+_WEB_ACTION = re.compile(
+    r"(搜尋|找|點擊|點一下|點選|點進|按下|按一下|按鈕|填|輸入|送出|提交|登入|買|購買|下單|結帳|訂單|表單|留言|"
+    r"申請|預約|報名|下一頁|翻頁|每一頁|好幾頁|"
+    r"\b(search|click|fill|submit|buy|order|log ?in|sign ?in)\b)", re.I)
+
+
+def looks_like_browser_chore(goal: str) -> bool:
+    """「我開著的這頁…」, or a site plus something to do on it. Uploaded
+    files are left to the planner (「這頁」 there is a page of a document)."""
+    g = goal or ""
+    if "[Attachments in workspace" in g:
+        return False
+    return bool(_OWN_PAGE.search(g) or (_URL.search(g) and _WEB_ACTION.search(g)))
+
+
+def chore_description(goal: str) -> str:
+    """The one subtask for a browser chore: the person's own words, then how."""
+    return (f"{goal.strip()}\n\n"
+            "（在使用者自己的瀏覽器完成：browser_open / browser_read / browser_click / browser_type，"
+            "需要時 browser_tabs。他說「這頁」「開著的」就是他正在看的分頁，直接 browser_read，不要跟他要網址。"
+            "照他要的做到最後一步；送出、購買這類按鈕照按，系統會先問他。）")
+
+
 # ── Calls from tools ─────────────────────────────────────────────────────────
 
 async def call(op: str, params: Optional[Dict[str, Any]] = None, timeout: float = 20.0,

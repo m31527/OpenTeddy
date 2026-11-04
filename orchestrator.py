@@ -1945,6 +1945,22 @@ class Orchestrator:
     async def _plan(self, req: TaskRequest) -> List[SubTask]:
         """Ask Gemma to decompose the goal into SubTasks.
         Injects relevant memory context into the system prompt when available."""
+        # A chore in the person's own browser is ONE subtask in their own
+        # words. Split up, what was read on one page and the element numbers
+        # don't reach the next step, and the planner rewrites the request:
+        # the 2026-11-04 web eval lost page 2 of an order history, turned
+        # "buy" into "add to cart", and asked for an address the open tab
+        # already had.
+        try:
+            import browser_bridge as _bb
+            import privacy as _pv
+            if _bb.looks_like_browser_chore(req.goal) and await _bb.linked(_pv.current_person()):
+                logger.info("Browser chore: one subtask, no planner, for task %s", req.id)
+                return [SubTask(parent_task_id=req.id, description=_bb.chore_description(req.goal),
+                                agent=AgentRole.EXECUTOR, order=0)]
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("browser chore check skipped: %s", exc)
+
         active_skills = await self.skill_factory.list_active_skills()
         # Skills named like a tool are hidden: the planner would pick them
         # as a "skill" when it meant the tool (see Executor._try_skill).
