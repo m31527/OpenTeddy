@@ -134,10 +134,14 @@ async def browser_open(url: str) -> Dict[str, Any]:
     return make_result(True, result=_page(r), duration_ms=_ms(t0))
 
 
-async def browser_read(tab: Optional[int] = None, find: str = "") -> Dict[str, Any]:
+async def browser_read(tab: Optional[int] = None, find: str = "", part: int = 1) -> Dict[str, Any]:
     t0 = _start()
     try:
-        r = await B.call("read", {"tab": _tab(tab), "find": str(find or ""), "max_chars": PAGE_CHARS})
+        part = max(1, int(float(part or 1)))
+    except (TypeError, ValueError):
+        part = 1
+    try:
+        r = await B.call("read", {"tab": _tab(tab), "find": str(find or ""), "max_chars": PAGE_CHARS, "part": part})
     except B.BrowserError as exc:
         return make_result(False, error=str(exc), duration_ms=_ms(t0))
     B.set_task_tab(privacy.current_task(), r.get("tab"))
@@ -351,8 +355,10 @@ BROWSER_EXT_TOOLS = [
         "[12]; pass that number to browser_click / browser_type. Numbers change when the page changes — "
         "always use the ones from the latest result. With no `tab` it reads the page the person is looking "
         "at: when they say \"this page\" / 這頁 / 開著的, call it — don't ask them for the address. "
-        "`find` keeps only lines containing those words.",
-        {"tab": _TAB, "find": {"type": "string", "description": "Optional words to look for on a long page."}},
+        "A long page comes in parts (the result says \"part 1 of 3\"): the next part may be where the "
+        "products or results are. `find` keeps only lines containing those words.",
+        {"tab": _TAB, "find": {"type": "string", "description": "Optional words to look for on a long page."},
+         "part": {"type": "integer", "description": "Which part of a long page. Default 1."}},
         []), "low"),
     (browser_click, _schema(
         "browser_click",
@@ -366,6 +372,8 @@ BROWSER_EXT_TOOLS = [
     (browser_type, _schema(
         "browser_type",
         "Type text into field number n — a text box, search box, or a dropdown (give the option's text). "
+        "`text` is what the person asked for (their search words, their message) — never the field's "
+        "placeholder, which is only the site's own suggestion. "
         "submit=true presses Enter afterwards: searches go straight through, other forms ask the person "
         "first. Password, card-number and verification-code fields are refused — ask the person to type "
         "those themselves.",

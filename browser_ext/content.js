@@ -76,7 +76,7 @@
       const t = (el.type || 'text').toLowerCase();
       if (t === 'checkbox' || t === 'radio') return t;
       if (/^(submit|button|reset|image)$/.test(t)) return 'button';
-      if (t === 'search') return 'searchbox';
+      if (t === 'search' || searchyField(el)) return 'searchbox';
       if (t === 'file') return 'file';
       if (t === 'range') return 'slider';
       return 'textbox';
@@ -85,6 +85,11 @@
     if (role) return role;
     if (el.isContentEditable) return 'textbox';
     return 'button';
+  }
+
+  function searchyField(el) {
+    const f = el.form || el.closest('form');
+    return (f && isSearchForm(f)) || /search|keyword|query|^q$|^kw$/i.test(`${el.name || ''} ${el.id || ''}`);
   }
 
   function nameOf(el) {
@@ -103,9 +108,7 @@
     const tag = el.tagName;
     if (tag === 'INPUT' && /^(submit|button|reset)$/i.test(el.type) && el.value) return el.value;
     if (tag === 'INPUT' && el.type === 'image') return el.alt || el.value || '';
-    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') {
-      return el.placeholder || el.title || el.getAttribute('aria-placeholder') || el.name || '';
-    }
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return el.title || '';
     if (squash(el.innerText)) return el.innerText;
     const img = el.querySelector('img[alt]');
     if (img && squash(img.alt)) return img.alt;
@@ -171,13 +174,16 @@
   function line(n, el, container) {
     const kind = kindOf(el);
     const name = clip(nameOf(el), container ? 50 : 80);
+    const field = /^(textbox|searchbox|combobox)$/.test(kind);
     let s = `[${n}] ${kind} "${name}"`;
-    if (!name) {
+    if (!name && !field && kind !== 'select') {
       const hint = hintOf(el);
       s += hint ? ` (no label; its code says: ${hint})` : ' (no label — browser_click_at can find it by how it looks)';
     }
-    if (kind === 'textbox' || kind === 'searchbox' || kind === 'combobox') {
+    if (field) {
       s += isSecret(el) ? ' (password / card / code — the person types this)' : ` = "${clip(valueOf(el), 60)}"`;
+      const ph = squash(el.placeholder || el.getAttribute('aria-placeholder'));
+      if (ph && !isSecret(el)) s += ` (placeholder "${clip(ph, 40)}" — just the site's hint, not what to type)`;
     } else if (kind === 'select') {
       const opts = Array.from(el.options || []).map((o) => clip(o.text, 25)).filter(Boolean);
       s += ` = "${clip(valueOf(el), 40)}"`;
@@ -189,7 +195,7 @@
     return s;
   }
 
-  function snapshot(find, maxChars) {
+  function snapshot(find, maxChars, part) {
     refs = new Map();
     let n = 0;
     let mute = 0;                       // inside a <label> whose words are already its field's name
@@ -245,22 +251,78 @@
     if (document.body) visit(document.body);
     flush();
 
-    let shown = lines;
+    // Shop pages repeat themselves: every product card links its name
+    // from the picture, the carousel and the title, and a filter's label
+    // follows its own checkbox as text. Keep one of each.
+    const ITEM = /^(?:[•#|\s]+)?\[(\d+)\] (\w+) "([^"]*)"(.*)$/;
+    const bare = (t) => t.replace(/\s+/g, '');
+    const kept = [];
+    const recent = [];
+    for (const l of lines) {
+      const m = l.match(ITEM);
+      if (m) {
+        if (m[2] === 'link' && !m[4] && m[3] && recent.includes(m[3])) continue;
+        recent.push(m[3]);
+        if (recent.length > 8) recent.shift();
+        kept.push(l);
+        continue;
+      }
+      const prev = kept.length ? kept[kept.length - 1] : '';
+      const pm = prev.match(ITEM);
+      const b = bare(l.replace(/^[•#|\s]+/, ''));
+      if (b && ((pm && bare(pm[3]).includes(b)) || bare(prev) === b)) continue;
+      kept.push(l);
+    }
+
+    // Long runs of plain links (menus) or of checkboxes (filters) go on
+    // shared lines: momo's search page spent its whole budget on them.
+    const merged = [];
+    const RUNS = [
+      [/^(?:[•#|\s]+)?\[(\d+)\] link "([^"]*)"$/, 'links', (num, label) => `[${num}] ${label}`],
+      [/^(?:[•#|\s]+)?\[(\d+)\] checkbox "([^"]*)" ([✓☐])$/, 'options', (num, label, mark) => `[${num}] ${label} ${mark}`],
+    ];
+    for (let i = 0; i < kept.length;) {
+      const run = RUNS.find(([re]) => re.test(kept[i]));
+      let j = i;
+      while (run && j < kept.length && run[0].test(kept[j])) j += 1;
+      if (run && j - i >= 4) {
+        let row = '';
+        for (let k = i; k < j; k += 1) {
+          const item = run[2](...kept[k].match(run[0]).slice(1));
+          if (row && row.length + item.length > 300) { merged.push(`${run[1]}: ${row}`); row = ''; }
+          row += (row ? ' · ' : '') + item;
+        }
+        if (row) merged.push(`${run[1]}: ${row}`);
+        i = j;
+      } else {
+        merged.push(kept[i]);
+        i += 1;
+      }
+    }
+
+    let shown = merged;
     if (find) {
       const words = find.toLowerCase().split(/\s+/).filter(Boolean);
-      shown = lines.filter((l) => words.some((w) => l.toLowerCase().includes(w)));
+      shown = merged.filter((l) => words.some((w) => l.toLowerCase().includes(w)));
       if (!shown.length) shown = [`(nothing on this page matches "${find}")`];
     }
-    let text = '';
-    let i = 0;
-    for (; i < shown.length; i += 1) {
-      if (text.length + shown[i].length + 1 > maxChars) break;
-      text += `${shown[i]}\n`;
+    // A long page comes in parts rather than cut off: products often sit
+    // below thousands of characters of menus and filters.
+    const parts = [];
+    let cur = '';
+    for (const l of shown) {
+      if (cur && cur.length + l.length + 1 > maxChars) { parts.push(cur); cur = ''; }
+      cur += `${l.length > maxChars ? l.slice(0, maxChars) : l}\n`;
     }
-    if (i < shown.length) {
-      text += `… (${shown.length - i} more lines not shown — browser_read with find="…" looks for something specific)`;
+    if (cur || !parts.length) parts.push(cur);
+    const at = Math.min(Math.max(1, Number(part) || 1), parts.length);
+    let text = parts[at - 1];
+    if (parts.length > 1) {
+      text += at < parts.length
+        ? `… (part ${at} of ${parts.length} — browser_read(part=${at + 1}) shows the next part; find="…" searches the whole page)`
+        : `(part ${at} of ${parts.length}, the end of the page)`;
     }
-    return { page: text || '(this page has no readable text)', elements: n };
+    return { page: text.trim() ? text : '(this page has no readable text)', elements: n, part: at, parts: parts.length };
   }
 
   // ── Acting ────────────────────────────────────────────────────────────────
@@ -291,13 +353,14 @@
     const form = el.form || el.closest('form');
     const name = clip(nameOf(el), 80);
     let box = null;
-    if (!name) {                       // an icon: where it is, for a look at it
+    if (!name && !/^(textbox|searchbox|combobox|select)$/.test(kindOf(el))) {   // an icon: where it is, for a look
       el.scrollIntoView({ block: 'center', inline: 'center' });
       const r = el.getBoundingClientRect();
       box = { x: r.left, y: r.top, w: r.width, h: r.height };
     }
     return {
       n: Number(p.n), kind: kindOf(el), name, hint: name ? '' : hintOf(el), box, tag: el.tagName.toLowerCase(),
+      placeholder: squash(el.placeholder || ''),
       type: (el.type || '').toLowerCase(), role: el.getAttribute('role') || '',
       autocomplete: el.getAttribute('autocomplete') || '', field: squash(`${el.name || ''} ${el.id || ''}`),
       secret: isSecret(el), submits: submits(el),
@@ -565,7 +628,7 @@
   async function run(op, p) {
     try {
       p = p || {};
-      if (op === 'read') { busy(); return snapshot(String(p.find || ''), Number(p.max_chars) || 6000); }
+      if (op === 'read') { busy(); return snapshot(String(p.find || ''), Number(p.max_chars) || 6000, p.part); }
       if (op === 'describe') return describe(p);
       if (op === 'click') return click(p);
       if (op === 'type') return type(p);

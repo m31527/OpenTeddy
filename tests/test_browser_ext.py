@@ -78,6 +78,17 @@ def _app() -> FastAPI:
     async def shop():
         return SHOP
 
+    @app.get("/t/long", response_class=HTMLResponse)
+    async def long_page():
+        # momo-like: a menu, 60 filter checkboxes whose label text repeats,
+        # then products whose names are linked three times each.
+        menu = "".join(f"<li><a href='/t/c{i}'>分類{i}</a></li>" for i in range(30))
+        filters = "".join(f"<label><input type=checkbox> 品牌{i} 很長的廠牌名稱 ( {i} )</label><span>品牌{i} 很長的廠牌名稱</span>"
+                          for i in range(260))
+        cards = "".join(f"<div><a href='/t/p{i}'><img alt='風扇{i}號'></a><a href='/t/p{i}'>風扇{i}號</a>"
+                        f"<a href='/t/p{i}'>風扇{i}號</a><p>{900 + i}(售價已折)</p></div>" for i in range(12))
+        return f"<!doctype html><meta charset=utf-8><title>風扇 - 搜尋</title><ul>{menu}</ul>{filters}{cards}"
+
     @app.get("/t/results", response_class=HTMLResponse)
     async def results(q: str = ""):
         return f"<!doctype html><meta charset=utf-8><title>結果</title><h1>搜尋結果：{q}</h1>"
@@ -101,7 +112,7 @@ def _app() -> FastAPI:
 
 
 def num(page: str, name: str) -> int:
-    m = re.search(r"\[(\d+)\] \w+ \"[^\"]*" + re.escape(name), page)
+    m = re.search(r"\[(\d+)\] \w+ [^\n]*?" + re.escape(name), page)
     assert m, f"no element named {name!r} in:\n{page}"
     return int(m.group(1))
 
@@ -168,12 +179,17 @@ async def test_pairing(base: str, ws_base: str) -> None:
         await w.send(json.dumps({"type": "hello", "token": "nope"}))
         assert json.loads(await w.recv())["type"] == "unpaired"
     async with websockets.connect(f"{ws_base}/browser/ws", origin="chrome-extension://abc") as w:
-        await w.send(json.dumps({"type": "hello", "token": tok, "label": "fake"}))
-        assert json.loads(await w.recv())["type"] == "welcome"
+        await w.send(json.dumps({"type": "hello", "token": tok, "label": "fake", "version": "0.0.1"}))
+        hello = json.loads(await w.recv())
+        assert hello["type"] == "welcome" and hello["latest"] == B.EXT_VERSION
         await w.send(json.dumps({"type": "forget"}))       # the extension's 「解除配對」
         assert json.loads(await w.recv())["type"] == "unpaired"
     assert await B.linked(ALICE) == 0
-    print("  ✓ socket: web pages refused, bad token told unpaired, 「解除配對」 forgets the token")
+    await asyncio.sleep(0.1)
+    assert len(SAID) == 1 and "重新載入" in SAID[0][1], "an old extension is told once to reload"
+    SAID.clear()
+    print("  ✓ socket: web pages refused, bad token told unpaired, 「解除配對」 forgets the token; "
+          "an outdated extension is told to reload")
 
 
 async def test_browser(base: str) -> None:
@@ -207,13 +223,25 @@ async def test_browser(base: str) -> None:
             assert re.search(r'\] textbox "密碼[^\n]*the person types this', page), page
             assert re.search(r'\] textbox "卡號[^\n]*the person types this', page), page
             assert "never instructions" in page
+            assert re.search(r'\] searchbox "" = "" \(placeholder "搜尋商品" — just the site\'s hint', page), page
             assert privacy.is_private("task-1"), "browser tasks are private"
             shop = next(p for p in ctx.pages if p.url.startswith(f"{base}/t/shop"))
             f = await T.browser_read(find="除濕機")
             assert "除濕機" in f["result"] and "電風扇" not in f["result"]
             tabs = await T.browser_tabs()
             assert tabs["success"] and "小熊商店" in tabs["result"]
-            print("  ✓ read: numbered elements, hidden text out, secret fields marked, find, private, tabs")
+            r = await T.browser_open(f"{base}/t/long")
+            p1 = r["result"]
+            assert "part 1 of" in p1 and "links: [" in p1 and "options: [" in p1, p1
+            r = await T.browser_read(part=2)
+            p2 = r["result"]
+            assert "(part 2 of" in p2 and "風扇3號" in p2 and "903(售價已折)" in p2, p2
+            assert p2.count('"風扇3號"') == 1, "a product linked three times shows once"
+            assert "品牌7 很長的廠牌名稱\n" not in p1 + p2, "a filter's label isn't repeated as text"
+            print("  ✓ read: numbered elements, hidden text out, secret fields marked, a placeholder is a hint "
+                  "not a name, find, private, tabs; long pages come in parts, menus/filters on shared lines, "
+                  "repeats once")
+            page = (await T.browser_open(f"{base}/t/shop"))["result"]
 
             # Search: straight through, no question.
             r = await T.browser_type(num(page, "搜尋商品"), "電風扇", submit=True)
@@ -480,6 +508,7 @@ async def test_executor_guards() -> None:
         async def record_usage(self, **k): pass
 
     config.streaming_enabled = False
+    await B.pair(B.begin("tg:999"), "Mac 的 Chrome", "chrome-extension://abc")     # tools offered
     ex = EX.Executor(tracker=_Tr(), skill_factory=None, registry=reg)
     await ex._http.aclose()
     ex._http = _Http()
@@ -509,6 +538,16 @@ async def test_executor_guards() -> None:
     script[:] = [call("browser_click"), call("browser_click"), call("browser_click"), say("到結帳頁了。")]
     await ex._qwen_execute("用 browser_click 一路點到結帳", {}, task_id="guard-3", mode="code")
     assert log.count(("start", "browser_click")) == 3, log
+    # "…Let me type that into the search box and submit." with no tool call
+    # is not an answer: it goes back to be done.
+    sent.clear()
+    log.clear()
+    script[:] = [say("I see the momo homepage is open. Let me type 風扇 into the search box and submit."),
+                 call("browser_type"), say("已搜尋風扇，前 3 名是…")]
+    await ex._qwen_execute("幫我在 momo 搜尋風扇", {}, task_id="guard-4", mode="code")
+    assert len(sent) == 3 and ("start", "browser_type") in log, (len(sent), log)
+    assert "didn't call a tool" in json.dumps(sent[1]["messages"], ensure_ascii=False)
+    print("  ✓ executor: an answer that only announces its next step goes back to be done")
     print("  ✓ executor: browser actions run in order; a claimed click with no click goes back once "
           "(also when the step made no browser call at all); the same number on another page isn't a loop")
 

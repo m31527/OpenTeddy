@@ -41,7 +41,7 @@ from tools import browser_ext_tool as T
 
 
 def num(page: str, name: str) -> int:
-    m = re.search(r"\[(\d+)\] \w+ \"[^\"]*" + re.escape(name), page)
+    m = re.search(r"\[(\d+)\] \w+ [^\n]*?" + re.escape(name), page)
     assert m, f"no {name!r} in:\n{page}"
     return int(m.group(1))
 

@@ -36,6 +36,27 @@ _CLAIMS_ACTION = re.compile(
     r"|點擊了|按了|\b(clicked|pressed|submitted|typed|filled in|added to|liked)\b)", re.I)
 
 
+# A "final answer" that only announces the next step ("…Let me type that
+# into the search box and submit.") — the model meant to call a tool and
+# didn't. Seen on momo, 2026-11-04: sent to the person as done.
+_ONLY_INTENT = re.compile(
+    r"(\b(let me(?! know)|i'?ll|i will|i'?m going to|next,? i|now i)\b|讓我(?!知道)|我來|我先|接下來我|現在我|我將|我會去)"
+    r"[^.。!?！？\n:：]{0,160}[.。…:：]?\s*$", re.I)
+
+def _answer_text(raw: str) -> str:
+    """The answer itself: the "result" of a {"result": …} reply, or the text."""
+    t = (raw or "").strip()
+    m = re.search(r"\{.*\}", t, re.S)
+    if m:
+        try:
+            doc = json.loads(m.group(0))
+            if isinstance(doc, dict) and isinstance(doc.get("result"), str):
+                return doc["result"].strip()
+        except (ValueError, TypeError):
+            pass
+    return t
+
+
 _PAGE_ADDR = re.compile(r"\[tab \d+\][^\n]*\n(https?://\S+)")
 
 
@@ -973,12 +994,17 @@ class Executor:
         # keeps typical runs at 2-4 calls; this margin is for the honest
         # tail, not a licence to explore.
         max_rounds = _MAX_TOOL_ROUNDS + (4 if (context or {}).get("db_context") else 0)
+        # A chore in the person's browser is many cheap steps (open, type,
+        # read, click, read …); ten rounds ran out mid-search on momo.
+        if "browser_" in description:
+            max_rounds += 6
 
         # "Clicked the heart [4]" with no click ever made (web eval
         # 2026-11-04): in the person's browser, a final answer that claims
         # an action needs a successful action call behind it — else it goes
         # back once to do it or say it wasn't done.
         browser_used = browser_acted = claim_checked = False
+        intent_nudges = 0
         # "Click [5]" on the results page and "click [5]" on the product page
         # are different clicks: a browser call's duplicate key includes the
         # page it was made on (the last address a browser result showed).
@@ -1247,6 +1273,16 @@ class Executor:
                 # the answer. Fall back to thinking so we don't return
                 # "" and trip the empty-response → low-confidence loop.
                 raw_text = message.get("content") or message.get("thinking") or ""
+                if tools and mode != "chat" and intent_nudges < 2 and round_idx < max_rounds - 1 \
+                        and _ONLY_INTENT.search(_answer_text(raw_text)):
+                    intent_nudges += 1
+                    logger.info("task=%s answered with its next step instead of doing it — nudged", task_id)
+                    messages.append({"role": "assistant", "content": raw_text})
+                    messages.append({"role": "user", "content": (
+                        "You described your next step but didn't call a tool, so nothing happened. Do it now "
+                        "with the tool. If you're actually finished, give the final answer for the person, in "
+                        "the language they wrote in.")})
+                    continue
                 if (browser_used or "browser_" in description) and not browser_acted and not claim_checked \
                         and _CLAIMS_ACTION.search(raw_text):
                     claim_checked = True

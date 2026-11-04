@@ -108,6 +108,15 @@ async function onMessage(raw) {
   if (m.type === 'welcome') {
     retry = 0;
     await setState('connected');
+    // Loaded from a folder that has since been updated: pick the new files
+    // up (once per version — a stale zip copy would loop otherwise).
+    if (m.latest && m.latest !== VERSION) {
+      const { reloadedFor } = await chrome.storage.local.get({ reloadedFor: '' });
+      if (reloadedFor !== m.latest) {
+        await chrome.storage.local.set({ reloadedFor: m.latest });
+        chrome.runtime.reload();
+      }
+    }
   } else if (m.type === 'ping') {
     send({ type: 'pong' });
   } else if (m.type === 'unpaired') {
@@ -177,7 +186,7 @@ async function openTab(p) {
   const url = String(p.url || '');
   if (!/^https?:\/\//i.test(url)) throw new Error('只能打開 http(s) 網址。');
   const t = await chrome.tabs.create({ url, active: false });
-  await loaded(t.id, 25000);
+  await loaded(t.id, 20000);
   await inPage(t.id, 'settle', {}).catch(() => {});
   return inTab(t.id, 'read', { max_chars: p.max_chars });
 }
@@ -189,19 +198,24 @@ async function pickTab(tab) {
   return front.id;
 }
 
-function loaded(tabId, ms) {
-  return new Promise((resolve) => {
-    let timer = null;
-    const done = () => {
-      chrome.tabs.onUpdated.removeListener(on);
-      clearTimeout(timer);
-      resolve();
-    };
-    const on = (id, info) => { if (id === tabId && info.status === 'complete') done(); };
-    chrome.tabs.onUpdated.addListener(on);
-    timer = setTimeout(done, ms);
-    chrome.tabs.get(tabId).then((t) => { if (t.status === 'complete') done(); }, done);
-  });
+// Ready to read: fully loaded, or the document is usable (readyState past
+// "loading") for over a second. Shops like momo keep "loading" ads and
+// trackers for 25 s+ after their content is there.
+async function loaded(tabId, ms) {
+  const t0 = Date.now();
+  while (Date.now() - t0 < ms) {
+    try {
+      const t = await chrome.tabs.get(tabId);
+      if (t.status === 'complete') return;
+      if (Date.now() - t0 > 1200) {
+        const [r] = await chrome.scripting.executeScript({ target: { tabId }, func: () => document.readyState });
+        if (r && r.result && r.result !== 'loading') return;
+      }
+    } catch {
+      // between pages, or the tab is gone — keep waiting until the cap
+    }
+    await sleep(250);
+  }
 }
 
 async function inPage(tabId, op, p) {
@@ -241,7 +255,7 @@ async function act(tabId, op, p) {
     chrome.tabs.onCreated.removeListener(onCreated);
   }
   const target = opened || tabId;
-  await loaded(target, 15000);
+  await loaded(target, 12000);
   await inPage(target, 'settle', {}).catch(() => {});
   const after = await chrome.tabs.get(target);
   let page = '';

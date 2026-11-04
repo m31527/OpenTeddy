@@ -52,6 +52,19 @@ TOOL_NAMES = frozenset({"browser_tabs", "browser_open", "browser_read", "browser
 VISION_TOOLS = frozenset({"browser_look", "browser_click_at"})
 EVAL_PERSON = "eval:browser"
 
+
+def _ext_version() -> str:
+    try:
+        import json as _json
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "browser_ext", "manifest.json")) as fh:
+            return str(_json.load(fh).get("version") or "")
+    except (OSError, ValueError):
+        return ""
+
+
+EXT_VERSION = _ext_version()            # what this server ships in browser_ext/
+_told_outdated: set = set()             # (person, version) already told to reload
+
 # Said to the person (the model passes these on as they are).
 ONLY_TELEGRAM = ("🔒 瀏覽器只能連到你自己的帳號：請在 Telegram 私訊 OpenTeddy 說「連接瀏覽器」，"
                  "之後也從 Telegram 叫我操作。")
@@ -382,7 +395,13 @@ async def serve(ws: Any) -> None:
     conn = _Conn(ws, person, _hash(token), str(hello.get("label") or label or "")[:60],
                  bool(hello.get("paused")))
     _conns.setdefault(person, []).append(conn)
-    logger.info("Browser online for %s (%s)", person, conn.label)
+    have = str(hello.get("version") or "")
+    logger.info("Browser online for %s (%s, extension %s)", person, conn.label, have or "?")
+    if EXT_VERSION and have != EXT_VERSION and person.startswith("tg:") and (person, have) not in _told_outdated:
+        _told_outdated.add((person, have))
+        asyncio.create_task(_say(person[3:], (
+            f"🧩 你的 OpenTeddy 擴充功能是舊版（{have or '?'}，最新 {EXT_VERSION}）。請到 chrome://extensions，"
+            "在 OpenTeddy 按「重新載入」↻；如果是從 zip 裝的，請重新下載 zip 解壓縮後再載入一次。")))
 
     async def _ping() -> None:
         while True:
@@ -391,7 +410,7 @@ async def serve(ws: Any) -> None:
 
     pinger = asyncio.create_task(_ping())
     try:
-        await conn.send({"type": "welcome"})
+        await conn.send({"type": "welcome", "latest": EXT_VERSION})
         while True:
             await conn.handle(await ws.receive_json())
     except Exception:  # noqa: BLE001 — disconnect, bad frame
