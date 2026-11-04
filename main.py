@@ -741,6 +741,20 @@ async def browser_pair(request: Request) -> dict:
     return {"token": token}
 
 
+@app.post("/browser/eval-code")
+async def browser_eval_code(request: Request) -> dict:
+    """A pairing code for the delivery eval's own throwaway browser. Needs
+    the key in .keys/browser_eval.key (browser_bridge.py)."""
+    import browser_bridge
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        body = {}
+    if not browser_bridge.eval_key_ok(body.get("key")):
+        raise HTTPException(status_code=403, detail="wrong eval key")
+    return {"code": browser_bridge.begin(browser_bridge.EVAL_PERSON)}
+
+
 @app.websocket("/browser/ws")
 async def browser_ws(ws: WebSocket) -> None:
     import browser_bridge
@@ -2079,6 +2093,13 @@ async def _start_task(
     ctx = dict(context or {})
     if privacy:
         ctx["privacy"] = privacy
+    # The delivery eval's own browser person (browser_bridge.py). The key is
+    # checked and dropped here, so it is never stored with the task; a
+    # caller reusing an eval task's id without the key doesn't inherit it.
+    import browser_bridge
+    browser_bridge.unmark_eval_task(task_id)
+    if browser_bridge.eval_key_ok(ctx.pop("eval_browser_key", None)):
+        browser_bridge.mark_eval_task(task_id)
     # Lane. An explicit `mode` pins this task; `auto_lane` lets a
     # conversational message take the chat lane (one call) even in a
     # code/analytic session — the fix for "今天星期幾" running a 4-stage

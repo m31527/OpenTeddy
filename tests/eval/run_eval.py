@@ -11,10 +11,16 @@ the per-call timings from there.
     .venv/bin/python tests/eval/run_eval.py --runs 3           # stability: 3 runs each
     .venv/bin/python tests/eval/run_eval.py --only code_slugify,doc_contract
     .venv/bin/python tests/eval/run_eval.py --executor qwen3.6:35b   # this model for the run, then back
+    .venv/bin/python tests/eval/run_eval.py --category web           # only the web tasks
     .venv/bin/python tests/eval/run_eval.py --compare results/a.json results/b.json
 
 Approvals are answered automatically, except deletes and other dangerous
 commands, which are refused (that is what dangerous_delete tests).
+
+Web tasks (`browser:` in tasks.yaml) run in a headless Chromium with the
+real OpenTeddy extension, paired to the eval's own person, on a test
+website (browser_rig.py, web_site.py). OpenTeddy's "may I?" questions are
+answered on the page as each task says, and counted.
 Between tasks the GPU temperature is checked: at --max-temp it waits until
 the GPU cools to --cool-to — sustained load has powered these boxes off.
 
@@ -180,16 +186,23 @@ def ensure_fixtures(tasks: List[Dict[str, Any]]) -> None:
                        capture_output=True)
 
 
-def run_task(client: httpx.Client, task: Dict[str, Any], ws: str, args: argparse.Namespace) -> Dict[str, Any]:
+def run_task(client: httpx.Client, task: Dict[str, Any], ws: str, args: argparse.Namespace,
+             rig: Any = None) -> Dict[str, Any]:
     os.makedirs(ws, exist_ok=True)
     for name in task.get("files", []):
         shutil.copy(os.path.join(HERE, "fixtures", name), ws)
     log: Dict[str, Any] = {"tools": [], "rejected": [], "guards": 0, "status": "unknown", "answer": "",
                            "timed_out": False}
+    goal = task["goal"]
+    context = {"triggered_by": "eval", "eval_task": task["id"]}
+    if task.get("browser"):
+        rig.begin_task(task["browser"])
+        goal = goal.replace("{site}", rig.site_url)
+        context["eval_browser_key"] = rig.key
     t0 = time.monotonic()
     try:
-        acc = client.post("/tasks", json={"intent": task["goal"], "workspace_dir": ws, "auto_lane": True,
-                                          "context": {"triggered_by": "eval", "eval_task": task["id"]}},
+        acc = client.post("/tasks", json={"intent": goal, "workspace_dir": ws, "auto_lane": True,
+                                          "context": context},
                           timeout=60).json()
     except Exception as exc:  # noqa: BLE001
         return {"id": task["id"], "error": f"could not start: {exc}", "passed": False, "seconds": 0}
@@ -216,7 +229,9 @@ def run_task(client: httpx.Client, task: Dict[str, Any], ws: str, args: argparse
         pass
     ctx = {"ws": ws, "answer": log["answer"] or "", "tools": log["tools"], "rejected": log["rejected"],
            "fixtures": os.path.join(HERE, "fixtures"), "hidden": os.path.join(HERE, "hidden"),
-           "python": sys.executable}
+           "python": sys.executable, "site": {}, "asked": []}
+    if task.get("browser"):
+        ctx.update(rig.end_task())
     results = run_checks(ctx, task["checks"])
     passed = all(r["ok"] for r in results) and not log["timed_out"]
     return {
@@ -226,7 +241,7 @@ def run_task(client: httpx.Client, task: Dict[str, Any], ws: str, args: argparse
         "false_success": (log["status"] == "completed" and not passed),
         "timed_out": log["timed_out"], "seconds": seconds,
         "slow": seconds > float(task.get("seconds", 1e9)),
-        "tools": log["tools"], "rejected": log["rejected"], "guards": log["guards"],
+        "tools": log["tools"], "rejected": log["rejected"], "guards": log["guards"], "asked": len(ctx["asked"]),
         "checks": results, "answer": (log["answer"] or "")[:600],
         **usage(args.db, task_id),
     }
@@ -332,6 +347,7 @@ def main() -> int:
     ap.add_argument("--server", default=os.environ.get("OPENTEDDY_URL", "http://127.0.0.1:8000"))
     ap.add_argument("--tasks", default=os.path.join(HERE, "tasks.yaml"))
     ap.add_argument("--only", default="", help="comma-separated task ids")
+    ap.add_argument("--category", default="", help="only tasks of these categories (comma-separated), e.g. web")
     ap.add_argument("--runs", type=int, default=1)
     ap.add_argument("--timeout", type=float, default=600, help="seconds per task before it's cancelled")
     ap.add_argument("--db", default=os.path.join(ROOT, "openteddy.db"))
@@ -351,6 +367,9 @@ def main() -> int:
     if args.only:
         want = {x.strip() for x in args.only.split(",") if x.strip()}
         tasks = [t for t in tasks if t["id"] in want]
+    if args.category:
+        cats = {x.strip() for x in args.category.split(",") if x.strip()}
+        tasks = [t for t in tasks if t.get("category") in cats]
     stamp = datetime.now().strftime("%Y%m%d-%H%M")
     client = httpx.Client(base_url=args.server.rstrip("/"))
     meta = {"stamp": stamp, "server": args.server, "tasks": len(tasks), "runs": args.runs}
@@ -390,14 +409,51 @@ def main() -> int:
 def _run_all(client: httpx.Client, tasks: List[Dict[str, Any]], args: argparse.Namespace,
              meta: Dict[str, Any], stamp: str) -> int:
     results: List[Dict[str, Any]] = []
+    try:
+        return _run_tasks(client, tasks, args, meta, stamp, results)
+    finally:
+        if _RIG.get("rig"):
+            _RIG["rig"].stop()
+
+
+_RIG: Dict[str, Any] = {}
+
+
+def _browser_rig(args: argparse.Namespace) -> Any:
+    """Started on the first web task; a failure is reported once per task."""
+    if "rig" in _RIG or "error" in _RIG:
+        if "error" in _RIG:
+            raise RuntimeError(_RIG["error"])
+        return _RIG["rig"]
+    try:
+        from browser_rig import BrowserRig
+        key_path = os.path.join(os.path.dirname(os.path.abspath(args.db)), ".keys", "browser_eval.key")
+        rig = BrowserRig(args.server, open(key_path).read().strip())
+        print("   starting the eval browser (Chromium + OpenTeddy extension)…", flush=True)
+        rig.start()
+        print(f"   eval browser paired; test site at {rig.site_url}", flush=True)
+        _RIG["rig"] = rig
+        return rig
+    except Exception as exc:  # noqa: BLE001
+        _RIG["error"] = f"eval browser didn't start: {type(exc).__name__}: {exc}"
+        raise RuntimeError(_RIG["error"]) from None
+
+
+def _run_tasks(client: httpx.Client, tasks: List[Dict[str, Any]], args: argparse.Namespace,
+               meta: Dict[str, Any], stamp: str, results: List[Dict[str, Any]]) -> int:
     cooled = 0.0
+    if any(t.get("browser") for t in tasks):
+        try:
+            _browser_rig(args)
+        except RuntimeError as exc:
+            print(f"   ✗ {exc} — the web tasks will be reported as harness errors", flush=True)
     for run in range(1, args.runs + 1):
         for task in tasks:
             cooled += cool_down(args.max_temp, args.cool_to)
             ws = os.path.join(args.workspace, stamp, f"{task['id']}-r{run}")
             print(f"▸ [{run}/{args.runs}] {task['id']:<24}", end="", flush=True)
             try:
-                r = run_task(client, task, ws, args)
+                r = run_task(client, task, ws, args, _browser_rig(args) if task.get("browser") else None)
             except Exception as exc:  # noqa: BLE001 — one broken task never ends the run
                 r = {"id": task["id"], "category": task.get("category"), "passed": False, "seconds": 0,
                      "status": "harness-error", "error": f"{type(exc).__name__}: {exc}", "checks": []}

@@ -21,7 +21,7 @@ import time
 from contextvars import ContextVar
 from typing import Any, Dict, Optional
 
-NOTE = "🔒 這則回答含有個人資料（Google 行事曆／Gmail），只顯示在本人的 Telegram，不保存在這裡。"
+NOTE = "🔒 這則回答含有個人資料（行事曆、信件或你的瀏覽器），只顯示在本人的 Telegram，不保存在這裡。"
 
 _scope: ContextVar[Optional[Dict[str, Any]]] = ContextVar("openteddy_personal_scope", default=None)
 _private: Dict[str, float] = {}               # task_id → when it was marked
@@ -35,6 +35,9 @@ def person_for_chat(chat_id: Any) -> Optional[str]:
 async def resolve(req: Any, tracker: Any) -> Optional[str]:
     """The person behind this request, or None (web / CLI / MCP / group)."""
     from tools._context import get_triggered_by
+    import browser_bridge
+    if browser_bridge.is_eval_task(req.id):          # the delivery eval's throwaway browser
+        return browser_bridge.EVAL_PERSON
     origin = get_triggered_by()
     if origin == "telegram":
         return person_for_chat((req.context or {}).get("telegram_chat_id"))
@@ -63,9 +66,10 @@ def current_task() -> Optional[str]:
 
 
 def mark(task_id: Optional[str] = None) -> None:
-    """This task now carries personal data."""
+    """This task now carries personal data. (Not the eval's own person: its
+    browser is a throwaway one, and the eval has to read the answer.)"""
     tid = task_id or (_scope.get() or {}).get("task_id")
-    if not tid:
+    if not tid or (current_person() or "").startswith("eval:"):
         return
     now = time.time()
     _private[tid] = now

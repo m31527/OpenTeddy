@@ -15,12 +15,20 @@ a web page the person visits can't. Five wrong codes void every pending
 code. Clicks that send, buy, delete … wait for the person's OK — a real
 click on the card the extension shows on the page, or 好／不要 in Telegram.
 「解除瀏覽器」 forgets every token of that person and closes the connection.
+
+The delivery eval (tests/eval) drives a throwaway headless browser as its
+own person, EVAL_PERSON. The way in is a key in .keys/browser_eval.key next
+to the database (mode 600, made at startup): a Task API call carrying it is that
+person, nothing else is — so only someone who can already read this
+machine's files can use it, and all it reaches is the eval's own browser.
 """
 from __future__ import annotations
 
 import asyncio
 import hashlib
+import hmac
 import logging
+import os
 import re
 import secrets
 import socket
@@ -40,6 +48,7 @@ CONFIRM_TTL_S = 180.0
 EXT_ORIGINS = ("chrome-extension://", "moz-extension://")
 
 TOOL_NAMES = frozenset({"browser_tabs", "browser_open", "browser_read", "browser_click", "browser_type"})
+EVAL_PERSON = "eval:browser"
 
 # Said to the person (the model passes these on as they are).
 ONLY_TELEGRAM = ("🔒 瀏覽器只能連到你自己的帳號：請在 Telegram 私訊 OpenTeddy 說「連接瀏覽器」，"
@@ -61,6 +70,7 @@ _bad_codes = 0
 _conns: Dict[str, List["_Conn"]] = {}             # person → live connections, newest last
 _confirms: Dict[str, Dict[str, Any]] = {}         # person → {id, future}
 _task_tab: Dict[str, Tuple[int, float]] = {}      # task_id → (tab it works in, when)
+_eval_tasks: Dict[str, float] = {}                # task_id → when the eval started it
 
 # Telegram message to a chat id; telegram_bridge._send_reply unless a test swaps it.
 say_in_chat: Optional[Callable[[str, str], Awaitable[None]]] = None
@@ -96,6 +106,51 @@ async def start(tracker: Any) -> None:
     _tracker = tracker
     await _db()
     await tracker.db.commit()
+    eval_key()
+
+
+# ── The eval's own person ────────────────────────────────────────────────────
+
+def eval_key_path() -> str:
+    """.keys/browser_eval.key next to the database. The folder carries its
+    own `*` .gitignore, so a checkout never shows (or commits) the key."""
+    from config import config
+    folder = os.path.join(os.path.dirname(os.path.abspath(config.db_path)) or ".", ".keys")
+    os.makedirs(folder, mode=0o700, exist_ok=True)
+    ignore = os.path.join(folder, ".gitignore")
+    if not os.path.exists(ignore):
+        with open(ignore, "w") as fh:
+            fh.write("*\n")
+    return os.path.join(folder, "browser_eval.key")
+
+
+def eval_key() -> str:
+    path = eval_key_path()
+    if not os.path.exists(path):
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w") as fh:
+            fh.write(secrets.token_urlsafe(32))
+    with open(path) as fh:
+        return fh.read().strip()
+
+
+def eval_key_ok(given: Any) -> bool:
+    return bool(given) and hmac.compare_digest(str(given), eval_key())
+
+
+def mark_eval_task(task_id: str) -> None:
+    now = time.time()
+    _eval_tasks[task_id] = now
+    for k in [k for k, t in _eval_tasks.items() if now - t > 86400]:
+        _eval_tasks.pop(k, None)
+
+
+def unmark_eval_task(task_id: str) -> None:
+    _eval_tasks.pop(task_id, None)
+
+
+def is_eval_task(task_id: Optional[str]) -> bool:
+    return bool(task_id) and task_id in _eval_tasks
 
 
 async def linked(person: Optional[str]) -> int:
