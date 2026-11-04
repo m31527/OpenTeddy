@@ -461,6 +461,14 @@ async def test_orchestrator() -> None:
     subs = await Orchestrator._plan(o, TaskRequest(goal="這是結帳頁，幫我填收件人王小明然後送出", session_id="s1"))
     assert len(subs) == 1 and subs[0].description.startswith("這是結帳頁，幫我填收件人王小明然後送出"), subs
     assert "不要跟他要網址" in subs[0].description
+    subs = await Orchestrator._plan(o, TaskRequest(goal="那幫我去 momo 購物網站看看vivo x300 最便宜多少錢", session_id="s1"))
+    assert "https://www.momoshop.com.tw/search/searchShop.jsp?keyword=" in subs[0].description, \
+        "a site named outright comes with its real address — the model made up momo.kgtw.com"
+    import orchestrator as OR
+    privacy.begin("private-1", "tg:999")
+    assert not OR._is_local_only()
+    privacy.mark("private-1")
+    assert OR._is_local_only(), "a task that touched someone's personal data never goes to a cloud model"
     assert "已解除" in (await run("解除瀏覽器")).summary and await B.linked("tg:999") == 0
     print("  ✓ 「連接瀏覽器」 gives this person a code (never from the web); status; 「解除瀏覽器」; "
           "a browser chore is one subtask in the person's own words")

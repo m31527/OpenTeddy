@@ -566,9 +566,13 @@ def _plan_prompt_for_mode(mode: str, model_name: str = "") -> str:
 
 
 def _is_local_only() -> bool:
-    """Thin wrapper so orchestrator code reads cleanly at call sites."""
+    """No cloud calls for this task: the session opted out, or the task has
+    touched someone's personal data (calendar, mail, their own browser —
+    privacy.py). A failed browser chore was escalated to DeepSeek on
+    2026-11-05 with the page it had read; that can't happen to a person's."""
     from config import is_session_local_only
-    return is_session_local_only()
+    import privacy
+    return is_session_local_only() or privacy.is_private(privacy.current_task())
 
 
 # ── Response-framing language detection ─────────────────────────────────
@@ -2523,6 +2527,15 @@ class Orchestrator:
                 st.id, attempt + 1, max_local_retries, confidence,
             )
 
+        # A chore in the person's browser can't be finished by a cloud model —
+        # it has no browser — and on 2026-11-05 one escalated anyway and made
+        # up a story about "the previous failure". It fails honestly instead.
+        if "browser_" in (st.description or "") and not _is_local_only():
+            logger.info("Subtask %s is a browser chore — not escalating to a cloud model.", st.id)
+            st.status = TaskStatus.FAILED
+            st.error = ((st.error or "") + "\n\n瀏覽器的工作不交給雲端模型：它沒辦法操作你的瀏覽器。").strip()
+            await self.tracker.update_subtask(st)
+            return st
         # 所有重試都失敗 → 才升級到 Claude（本地端模式除外）
         if _is_local_only():
             logger.info(

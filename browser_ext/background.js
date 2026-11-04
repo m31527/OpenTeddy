@@ -53,6 +53,10 @@ function friendly(e) {
     return '這個頁面（瀏覽器設定頁、擴充功能商店、新分頁等）擴充功能不能讀取或操作。';
   }
   if (/No tab with id/i.test(m)) return '那個分頁已經關掉了。用 browser_tabs 看現在開著哪些。';
+  if (/error page/i.test(m)) {
+    return "This address didn't open (the site doesn't exist or can't be reached). Check the address — "
+      + "don't guess one; look it up with web_search if you're not sure.";
+  }
   if (/frame.*removed|Frame with ID/i.test(m)) return 'The page changed while it was being read — call browser_read again.';
   return m || '瀏覽器回報失敗';
 }

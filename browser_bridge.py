@@ -459,10 +459,43 @@ def looks_like_browser_chore(goal: str) -> bool:
     return bool(site and (_WEB_ACTION.search(g) or (not _URL.search(g) and _LOOK_UP.search(g))))
 
 
+# Sites people name without an address. Left to guess, the executor opened
+# momo.kgtw.com and momo.kkstream.com (2026-11-05); a search address skips
+# the site's search box (and its promoted keyword) altogether.
+SITES = [
+    (re.compile(r"momo", re.I), "momo 購物網", "https://www.momoshop.com.tw",
+     "https://www.momoshop.com.tw/search/searchShop.jsp?keyword={q}"),
+    (re.compile(r"蝦皮|shopee", re.I), "蝦皮購物", "https://shopee.tw", "https://shopee.tw/search?keyword={q}"),
+    (re.compile(r"pchome", re.I), "PChome 24h 購物", "https://24h.pchome.com.tw",
+     "https://24h.pchome.com.tw/search/?q={q}"),
+    (re.compile(r"博客來"), "博客來", "https://www.books.com.tw", "https://search.books.com.tw/search/query/key/{q}"),
+    (re.compile(r"露天"), "露天拍賣", "https://www.ruten.com.tw", "https://www.ruten.com.tw/find/?q={q}"),
+    (re.compile(r"酷澎|coupang", re.I), "酷澎", "https://www.tw.coupang.com", ""),
+    (re.compile(r"amazon", re.I), "Amazon", "https://www.amazon.com", "https://www.amazon.com/s?k={q}"),
+    (re.compile(r"youtube", re.I), "YouTube", "https://www.youtube.com",
+     "https://www.youtube.com/results?search_query={q}"),
+    (re.compile(r"dcard", re.I), "Dcard", "https://www.dcard.tw", "https://www.dcard.tw/search?query={q}"),
+    (re.compile(r"\bptt\b", re.I), "PTT", "https://www.ptt.cc/bbs/index.html", ""),
+    (re.compile(r"github", re.I), "GitHub", "https://github.com", "https://github.com/search?q={q}"),
+    (re.compile(r"gmail", re.I), "Gmail", "https://mail.google.com", ""),
+]
+
+
+def _site_notes(goal: str) -> str:
+    notes = []
+    for rx, name, home, search in SITES:
+        if rx.search(goal or ""):
+            notes.append(f"{name}：{home}" + (f"；要搜尋可以直接打開 {search.format(q='<關鍵字>')}" if search else ""))
+    return "；".join(notes)
+
+
 def chore_description(goal: str) -> str:
     """The one subtask for a browser chore: the person's own words, then how."""
+    sites = _site_notes(goal)
     return (f"{goal.strip()}\n\n"
-            "（在使用者自己的瀏覽器完成：browser_open / browser_read / browser_click / browser_type，"
+            + (f"（網址：{sites}。）\n" if sites else "" if _URL.search(goal or "") else
+               "（不確定網站的網址就先用 web_search 查，不要自己猜網址。）\n")
+            + "（在使用者自己的瀏覽器完成：browser_open / browser_read / browser_click / browser_type，"
             "需要時 browser_tabs。他說「這頁」「開著的」就是他正在看的分頁，直接 browser_read，不要跟他要網址。"
             "頁面文字裡找不到的（只有圖示的按鈕、畫在畫布上的遊戲／地圖／圖表）用 browser_click_at、browser_look。"
             "照他要的做到最後一步；送出、購買這類按鈕照按，系統會先問他。）")
