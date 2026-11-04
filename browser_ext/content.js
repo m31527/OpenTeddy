@@ -351,6 +351,69 @@
     return res;
   }
 
+  // ── By position, for what the vision model found on a screenshot ──────────
+
+  function viewport(p) {
+    const down = Number(p.scroll_down) || 0;
+    if (down) window.scrollBy(0, Math.round(window.innerHeight * 0.8 * down));
+    if (hostEl) hostEl.style.display = 'none';
+    return { width: window.innerWidth, height: window.innerHeight, scroll_y: Math.round(window.scrollY) };
+  }
+
+  function unhide() {
+    if (hostEl) hostEl.style.display = '';
+    return {};
+  }
+
+  function elementAt(x, y) {
+    if (hostEl) hostEl.style.display = 'none';
+    const el = document.elementFromPoint(Number(x), Number(y));
+    if (hostEl) hostEl.style.display = '';
+    if (!el) throw new Error(`Nothing at (${Math.round(x)}, ${Math.round(y)}) on the page.`);
+    return el;
+  }
+
+  function describeAt(p) {
+    const at = elementAt(p.x, p.y);
+    const el = at.closest('a[href],button,input,select,textarea,summary,[role=button],[role=link],[onclick]') || at;
+    const form = el.form || el.closest('form');
+    return {
+      kind: isInteractive(el) ? kindOf(el) : el.tagName.toLowerCase(), name: clip(nameOf(el), 80),
+      tag: el.tagName.toLowerCase(), type: (el.type || '').toLowerCase(), submits: submits(el),
+      form: form ? { search: isSearchForm(form) } : null,
+    };
+  }
+
+  function ring(x, y) {
+    stack();
+    const r = node('div', 'ring');
+    r.style.left = `${x - 14}px`;
+    r.style.top = `${y - 14}px`;
+    root.append(r);
+    setTimeout(() => r.remove(), 900);
+  }
+
+  function clickAt(p) {
+    const x = Number(p.x);
+    const y = Number(p.y);
+    const el = elementAt(x, y);
+    const what = `${isInteractive(el) ? kindOf(el) : el.tagName.toLowerCase()} "${clip(nameOf(el), 60)}"`;
+    busy();
+    ring(x, y);
+    // Events carry the position, so pages drawn on a canvas (maps, games,
+    // charts) see the click where the vision model found the thing.
+    setTimeout(() => {
+      const o = { bubbles: true, cancelable: true, composed: true, button: 0, buttons: 1, clientX: x, clientY: y };
+      el.dispatchEvent(new PointerEvent('pointerdown', { ...o, pointerType: 'mouse', isPrimary: true }));
+      el.dispatchEvent(new MouseEvent('mousedown', o));
+      if (typeof el.focus === 'function') el.focus({ preventScroll: true });
+      el.dispatchEvent(new PointerEvent('pointerup', { ...o, buttons: 0, pointerType: 'mouse', isPrimary: true }));
+      el.dispatchEvent(new MouseEvent('mouseup', { ...o, buttons: 0 }));
+      el.dispatchEvent(new MouseEvent('click', { ...o, buttons: 0 }));
+    }, 30);
+    return { clicked: what };
+  }
+
   function settle(max = 2500, quiet = 350) {
     return new Promise((resolve) => {
       let t = null;
@@ -389,6 +452,9 @@
     .row { display: flex; justify-content: flex-end; gap: 8px; }
     .no { background: #eaeef2; color: #1f2328; }
     .yes { background: #c2410c; color: #fff; }
+    .ring { position: fixed; width: 28px; height: 28px; box-sizing: border-box; border-radius: 50%;
+      border: 3px solid #c2410c; pointer-events: none; animation: ring .9s ease-out forwards; }
+    @keyframes ring { to { transform: scale(1.8); opacity: 0; } }
   `;
 
   function node(tag, cls, text) {
@@ -467,6 +533,10 @@
       if (op === 'click') return click(p);
       if (op === 'type') return type(p);
       if (op === 'settle') return await settle();
+      if (op === 'viewport') return viewport(p);
+      if (op === 'unhide') return unhide();
+      if (op === 'describe_at') return describeAt(p);
+      if (op === 'click_at') return clickAt(p);
       return { error: `unknown operation ${op}` };
     } catch (e) {
       return { error: String((e && e.message) || e) };

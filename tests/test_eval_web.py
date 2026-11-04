@@ -15,7 +15,7 @@ eval's person, and the rig answers OpenTeddy's questions on the page.
 """
 from __future__ import annotations
 
-import asyncio, logging, os, re, socket, sys, tempfile, types
+import asyncio, json, logging, os, re, socket, sys, tempfile, types
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
@@ -83,6 +83,56 @@ async def scripted(rig: BrowserRig) -> None:
         {"check": "site_never", "any": ["4111 1111 1111 1111"]}])
     assert all(c["ok"] for c in res), res
     print("  ✓ deny: a real click on 不要 stops 立即購買; nothing ordered")
+
+    # By sight: a screenshot goes to the vision model (faked here with the
+    # real geometry), the click lands where it says.
+    async def where(js: str) -> dict:
+        async def _ev():
+            page = [p for p in rig._ctx.pages if p.url.startswith(rig.site_url)][-1]
+            return await page.evaluate(js)
+        return await loop.run_in_executor(None, rig._call, _ev(), 20)
+
+    shots = []
+
+    async def fake_vision(prompt, image, num_predict=200):
+        shots.append(image)
+        if "Point to" in prompt:
+            return json.dumps({"point_2d": [round(target["x"] / target["w"] * 1000), round(target["y"] / target["h"] * 1000)]})
+        return "7 月最高，260 萬元。"
+    T._vision = fake_vision
+
+    await loop.run_in_executor(None, rig.begin_task, {"confirm": "deny", "start": "/game"})
+    privacy.begin("eval-3", B.EVAL_PERSON)
+    await asyncio.sleep(0.5)
+    target = await where("(() => { const r = document.getElementById('c').getBoundingClientRect();"
+                         " return {x: r.left + 160, y: r.top + 145, w: innerWidth, h: innerHeight}; })()")
+    r = await T.browser_click_at("the 開始遊戲 button")
+    assert r["success"] and "browser_look" in r["result"], r
+    assert rig.end_task()["site"]["game"] == ["start"]
+    assert shots and shots[-1].startswith("/9j/"), "a JPEG screenshot went to the vision model"
+    print("  ✓ by sight: a click on a canvas lands where the vision model points (開始遊戲 started)")
+
+    await loop.run_in_executor(None, rig.begin_task, {"confirm": "deny"})
+    privacy.begin("eval-4", B.EVAL_PERSON)
+    await T.browser_open(f"{rig.site_url}/album")
+    target = await where("(() => { const r = document.querySelectorAll('.card button')[0].getBoundingClientRect();"
+                         " return {x: r.left + r.width / 2, y: r.top + r.height / 2, w: innerWidth, h: innerHeight}; })()")
+    r = await T.browser_click_at("the trash icon of the first photo")
+    got = rig.end_task()
+    assert not r["success"] and "did not allow" in r["error"], r
+    assert len(got["asked"]) == 1 and got["site"]["deleted"] == [], got
+    r = await T.browser_look("哪個月營收最高？")
+    assert r["success"] and "260" in r["result"], r
+    print("  ✓ by sight: a trash icon asks first (refused, nothing deleted); browser_look answers")
+
+    from config import config
+    saved, config.vision_model = config.vision_model, ""
+    try:
+        assert B.VISION_TOOLS <= await B.unusable_tools(), "no vision model → no vision tools"
+    finally:
+        config.vision_model = saved
+    assert not (B.VISION_TOOLS & await B.unusable_tools())
+    print("  ✓ the vision tools are hidden when no vision model is set")
 
 
 async def main() -> None:

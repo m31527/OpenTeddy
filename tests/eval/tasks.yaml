@@ -252,3 +252,31 @@
     - {check: asked, max: 0}
     - {check: tools_not_used, names: [browser_click, browser_type]}
   seconds: 90
+
+# What the page text can't name: the vision model on a screenshot
+# (browser_look / browser_click_at, config.vision_model).
+- id: web_icon_like
+  category: web
+  browser: {confirm: deny}
+  goal: 在 {site}/album 幫我把第一張照片（海邊夕陽）按愛心收藏。
+  checks:
+    - {check: site_record, what: likes, all: ['"1"']}
+    - {check: site_count, what: deleted, equals: 0}
+  seconds: 120
+
+- id: web_canvas_start
+  category: web
+  browser: {confirm: deny, start: "/game"}
+  goal: 我開著的這個小遊戲，幫我按「開始遊戲」。
+  checks:
+    - {check: site_record, what: game, all: ["start"]}
+  seconds: 120
+
+- id: web_canvas_chart
+  category: web
+  browser: {confirm: deny, start: "/chart"}
+  goal: 我開著的這張營收圖表，哪個月營收最高？是多少？
+  checks:
+    - {check: answer_contains, any: ["7月", "7 月", "七月", "July"]}
+    - {check: answer_contains, all: ["260"]}
+  seconds: 120

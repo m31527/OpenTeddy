@@ -47,7 +47,9 @@ PING_EVERY_S = 20.0
 CONFIRM_TTL_S = 180.0
 EXT_ORIGINS = ("chrome-extension://", "moz-extension://")
 
-TOOL_NAMES = frozenset({"browser_tabs", "browser_open", "browser_read", "browser_click", "browser_type"})
+TOOL_NAMES = frozenset({"browser_tabs", "browser_open", "browser_read", "browser_click", "browser_type",
+                        "browser_look", "browser_click_at"})
+VISION_TOOLS = frozenset({"browser_look", "browser_click_at"})
 EVAL_PERSON = "eval:browser"
 
 # Said to the person (the model passes these on as they are).
@@ -164,11 +166,16 @@ async def linked(person: Optional[str]) -> int:
 
 
 async def unusable_tools() -> set:
-    """Browser tools are only there for a person who paired a browser."""
+    """Browser tools are only there for a person who paired a browser; the
+    two that look at screenshots also need a vision model."""
+    from config import config
     try:
-        return set() if await linked(privacy.current_person()) else set(TOOL_NAMES)
+        hide = set() if await linked(privacy.current_person()) else set(TOOL_NAMES)
     except RuntimeError:                               # not started (tests, CLI)
-        return set(TOOL_NAMES)
+        hide = set(TOOL_NAMES)
+    if not (getattr(config, "vision_model", "") or "").strip():
+        hide |= VISION_TOOLS
+    return hide
 
 
 async def _person_for_token(token: str) -> Tuple[Optional[str], str]:
@@ -427,6 +434,7 @@ def chore_description(goal: str) -> str:
     return (f"{goal.strip()}\n\n"
             "（在使用者自己的瀏覽器完成：browser_open / browser_read / browser_click / browser_type，"
             "需要時 browser_tabs。他說「這頁」「開著的」就是他正在看的分頁，直接 browser_read，不要跟他要網址。"
+            "頁面文字裡找不到的（只有圖示的按鈕、畫在畫布上的遊戲／地圖／圖表）用 browser_click_at、browser_look。"
             "照他要的做到最後一步；送出、購買這類按鈕照按，系統會先問他。）")
 
 

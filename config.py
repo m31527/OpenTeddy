@@ -157,6 +157,12 @@ class Config:
     # putting a third large model into memory next to planner + executor.
     voice_model: str = field(default_factory=lambda: os.getenv("VOICE_MODEL", "").strip())
 
+    # Vision model for the person's own browser (tools/browser_ext_tool.py):
+    # finds what the page text can't name — an icon-only button, something
+    # drawn on a canvas — on a screenshot. An *instruct* build: the thinking
+    # one spends seconds to minutes per lookup. Empty = those tools are off.
+    vision_model: str = field(default_factory=lambda: os.getenv("VISION_MODEL", "qwen3-vl:8b-instruct").strip())
+
     # ── Ad-spend guard (spend_guard.py) ──────────────────────────────────
     # Hard caps on ad-platform calls that spend money, enforced on every
     # http_post regardless of approval. Amounts are in the platform's
@@ -804,6 +810,8 @@ class Config:
             self.gemma_model = settings["orchestrator_model"]
         if _s("executor_model"):
             self.qwen_model = settings["executor_model"]
+        if "vision_model" in settings:
+            self.vision_model = (settings["vision_model"] or "").strip()
         if _s("claude_model"):
             self.claude_model = settings["claude_model"]
         if _s("gemma_base_url"):

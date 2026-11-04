@@ -915,6 +915,8 @@ class Executor:
             "browser_read":       10,
             "browser_click":      12,
             "browser_type":        8,
+            "browser_look":        6,
+            "browser_click_at":    8,
             # Shell read-only commands the user reported hitting the cap
             # on (ls, cat, grep …). Idempotent; multiple distinct calls
             # are fine, just not the same one repeatedly (that's caught
@@ -1517,6 +1519,7 @@ class Executor:
                     "browser_fetch",
                     # Same for pages read in the person's own browser.
                     "browser_open", "browser_read", "browser_click", "browser_type",
+                    "browser_look", "browser_click_at",
                     # doc_to_markdown is markitdown-backed; its output is
                     # *the document content itself*, identical signal
                     # shape to read_file. A user's invoice PDF that

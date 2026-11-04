@@ -135,9 +135,32 @@ async function run(op, p) {
   if (op === 'tabs') return listTabs();
   if (op === 'open') return openTab(p);
   const tabId = await pickTab(p.tab);
-  if (op === 'read' || op === 'describe') return inTab(tabId, op, p);
-  if (op === 'click' || op === 'type') return act(tabId, op, p);
+  if (op === 'read' || op === 'describe' || op === 'describe_at') return inTab(tabId, op, p);
+  if (op === 'click' || op === 'type' || op === 'click_at') return act(tabId, op, p);
+  if (op === 'screenshot') return screenshot(tabId, p);
   throw new Error(`unknown operation ${op}`);
+}
+
+// What the page looks like, for the vision model (icon-only buttons,
+// canvas). Only the visible part of the tab can be captured, so the tab is
+// brought to the front first; OpenTeddy's own bar is hidden meanwhile.
+async function screenshot(tabId, p) {
+  const t = await chrome.tabs.get(tabId);
+  if (!t.active) {
+    await chrome.tabs.update(tabId, { active: true });
+    await sleep(400);
+  }
+  const vp = await inPage(tabId, 'viewport', { scroll_down: p.scroll_down || 0 });
+  let image;
+  try {
+    image = await chrome.tabs.captureVisibleTab(t.windowId, { format: 'jpeg', quality: 80 });
+  } finally {
+    await inPage(tabId, 'unhide', {}).catch(() => {});
+  }
+  return {
+    tab: tabId, url: t.url, title: t.title, host: hostOf(t.url),
+    image: image.split(',')[1], width: vp.width, height: vp.height,
+  };
 }
 
 async function listTabs() {

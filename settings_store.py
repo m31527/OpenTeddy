@@ -32,6 +32,13 @@ SETTINGS_META: dict[str, dict[str, Any]] = {
         "description": "Local Ollama model used for task execution",
         "type":        "model_select",
     },
+    "vision_model": {
+        "label":       "Vision Model (browser)",
+        "description": "Local Ollama vision model that finds icon-only buttons and canvas content on a "
+                       "screenshot of the person's own browser (an instruct build, e.g. qwen3-vl:8b-instruct). "
+                       "Empty turns that off.",
+        "type":        "model_select",
+    },
     "claude_model": {
         "label":       "Claude Model (Escalation)",
         "description": "Anthropic Claude model for escalation and skill generation",
@@ -554,6 +561,7 @@ def _defaults_from_config() -> dict[str, str]:
     return {
         "orchestrator_model":       config.gemma_model,
         "executor_model":           config.qwen_model,
+        "vision_model":             getattr(config, "vision_model", ""),
         "claude_model":             config.claude_model,
         "anthropic_api_key":        config.anthropic_api_key,
         "llm_provider":             getattr(config, "llm_provider", "anthropic"),
@@ -840,6 +848,8 @@ class SettingsStore:
             config.gemma_model = settings["orchestrator_model"]
         if "executor_model" in settings:
             config.qwen_model = settings["executor_model"]
+        if "vision_model" in settings:
+            config.vision_model = (settings["vision_model"] or "").strip()
         if "claude_model" in settings:
             config.claude_model = settings["claude_model"]
         if settings.get("anthropic_api_key"):
