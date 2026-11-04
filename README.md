@@ -1263,8 +1263,22 @@ extension) removes it.
 - Tasks that used the browser are private: no content on the web UI or in
   memory.
 
-Not yet: pages drawn on a canvas (maps, Figma) and icon-only buttons need a
-vision model (planned: Qwen3-VL); cross-origin iframes aren't read.
+**By sight, when there's no text.** Icon-only buttons (heart, trash, gear)
+and anything drawn on a canvas (games, maps, charts) aren't in the page
+text. For those OpenTeddy screenshots the tab for a local vision model
+(default `qwen3-vl:8b-instruct`, Settings → Vision Model; empty turns it
+off): `browser_look` answers a question about the screen, `browser_click_at`
+clicks what it was told to find. Before a button with no words is clicked,
+the vision model says what icon it is — a trash can still asks first. Use
+an *instruct* build: plain `qwen3-vl:8b` is the thinking one and took
+seconds to minutes per lookup.
+
+**Eval.** `tests/eval` has 11 web tasks run on the real extension
+(`--category web`). On 2026-11-04, on home (qwen3.6:35b), two runs each:
+21 of 22 passed, p50 17 s; the miss stopped to ask, was refused, and
+clicked nothing.
+
+Not yet: cross-origin iframes aren't read.
 
 ## Claude Code ↔ OpenTeddy
 
