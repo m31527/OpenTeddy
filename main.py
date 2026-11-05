@@ -2100,19 +2100,19 @@ async def _start_task(
     browser_bridge.unmark_eval_task(task_id)
     if browser_bridge.eval_key_ok(ctx.pop("eval_browser_key", None)):
         browser_bridge.mark_eval_task(task_id)
-    # Lane. An explicit `mode` pins this task; `auto_lane` lets a
-    # conversational message take the chat lane (one call) even in a
-    # code/analytic session — the fix for "今天星期幾" running a 4-stage
-    # pipeline. The flag is explicit so a default TaskRequest never
+    # Lane. An explicit `mode` pins this task; `auto_lane` starts it in the
+    # chat lane, where the model answers it (one call) or hands it to the
+    # session's mode (lane.py, gate.py) — the fix for "今天星期幾" running a
+    # 4-stage pipeline. The flag is explicit so a default TaskRequest never
     # overrides the session's mode by accident.
     if mode is not None:
         ctx["mode_override"] = True
     elif auto_lane:
-        from lane import pick_mode
-        _picked = await pick_mode(goal, resolved_mode.value)
-        if _picked != resolved_mode.value:
+        from lane import auto_lane as _auto_lane
+        _picked, _lane_ctx = _auto_lane(resolved_mode.value)
+        if _lane_ctx:
             resolved_mode = SessionMode(_picked)
-            ctx["mode_override"] = True
+            ctx.update(_lane_ctx)
     req = TaskRequest(
         id=task_id, goal=goal, context=ctx, priority=priority,
         session_id=session_id, mode=resolved_mode,

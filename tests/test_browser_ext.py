@@ -39,7 +39,6 @@ from fastapi.responses import HTMLResponse
 from playwright.async_api import async_playwright
 
 import browser_bridge as B
-import lane
 import main as M
 import privacy
 from tools import browser_ext_tool as T
@@ -395,8 +394,6 @@ async def test_who() -> None:
     assert B.parse_command("幫我打開瀏覽器查天氣") is None
     assert B.parse_command("連接瀏覽器" + "然後" * 30) is None
     assert B.answer_from_chat(BOB, "好") is None, "no question pending → a normal message"
-    for q in ("看一下我 Chrome 開著的頁面？", "這個分頁在講什麼？"):
-        assert not lane.looks_conversational(q), q
     assert T._risky_click({"name": "刪除", "submits": False})
     assert T._risky_click({"name": "下一步", "submits": True, "form": {"search": False}})
     assert not T._risky_click({"name": "搜尋", "submits": True, "form": {"search": False}})

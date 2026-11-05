@@ -1,80 +1,57 @@
 """
-OpenTeddy lane picker — which lane does this message deserve?
+OpenTeddy lane — where a message nobody picked a mode for starts.
 
-A Telegram session is created in code mode, so "今天星期幾" ran the full
-plan → subtask → execute → summarise pipeline on a 27B model: 579 s for
-one sentence. The question needed one chat call. Session mode is the
-right default for WORK; a conversational message should take the chat
-lane regardless of the session it arrived in.
+A Telegram session is created in code mode, so "今天星期幾" once ran the
+full plan → subtask → execute → summarise pipeline on a 27B model: 579 s
+for one sentence. It needed one chat call.
 
-Deliberately conservative: a message is treated as conversational only
-when it is short, question- or greeting-shaped, and carries no sign of
-work (action verbs, deliverables, paths, URLs, attachments). Misrouting
-work to chat would answer in words instead of doing it; misrouting chat
-to work only costs time. So ties go to work.
+This module used to guess the lane with keyword rules: short, question-
+shaped and no work verbs → chat. Every new kind of job needed another rule,
+and the misses were the bad kind: 「去 momo 購物官網看看 vivo x300 最便宜多少
+錢」 looked like a question (多少), took the chat lane — no browser — and got
+「請稍候，我正在執行搜尋…」 with nothing behind it (2026-11-05). On 186
+labelled past Telegram messages the rules sent 6 of 139 jobs to the chat
+lane (「目前機器記憶體還剩下多少」 among them: no tool, so a made-up number)
+and 25 of 47 chats down the pipeline. The model deciding for itself
+(gate.py, gemma4:e4b, p50 0.24 s) sent 2 chats down the pipeline and kept
+6 jobs — each one a follow-up it answered by asking for the missing detail
+or explaining, none a promise.
 
-Every call also feeds the decision engine in shadow (kind "lane.auto"),
-so the heuristic can later be replaced by a calibrated model on evidence.
+Now such a message starts in the chat lane with the gate: the chat model
+answers it, or calls start_task and it goes to the session's own mode.
+Only what isn't a judgment call is decided here: files attached means
+work, and a session the person set to chat stays chat.
 """
 
 from __future__ import annotations
 
-import re
-from typing import Optional
-
-MAX_CHAT_CHARS = 60
-
-_WORK = re.compile(
-    r"(幫我|請你|請幫|幫忙|去查|查一下|查詢|統計|分析|產生|生成|做一份|寫一|寫個|建立|新增|刪除|修改|更新|"
-    r"安裝|部署|執行|跑一下|下載|上傳|寄|發送|傳給|通知|排程|每天|每週|每月|報告|報表|圖表|檔案|"
-    r"瀏覽器|分頁|網頁|頁面|chrome|點一下|按一下|填寫|填入|"
-    r"\b(do|make|create|build|write|generate|analy[sz]e|deploy|install|run|fetch|download|upload|send|"
-    r"email|schedule|every|report|chart|file|script|query|search|find|fix|update|delete|refactor)\b)",
-    re.IGNORECASE,
-)
-_WORK_SHAPE = re.compile(r"(https?://|www\.|/[\w.-]+/|\.(csv|xlsx|json|md|html|py|sql|pdf)\b|```)", re.IGNORECASE)
-_CHAT_SHAPE = re.compile(
-    r"(^\s*(早安|午安|晚安|你好|哈囉|嗨|謝謝|謝了|辛苦|hi|hello|hey|thanks|thank you)\b"
-    r"|[？?]\s*$"
-    r"|(星期幾|幾點|幾號|是誰|是什麼|什麼意思|為什麼|怎麼樣|好嗎|還好嗎|在嗎|多久|多少)"
-    r"|\b(what|who|when|where|why|how|is|are|do|does|can|could)\b.*[?？]"
-    r")",
-    re.IGNORECASE,
-)
+import asyncio
+from typing import Any, Dict, Tuple
 
 
-def looks_conversational(text: str, has_attachments: bool = False) -> bool:
-    t = (text or "").strip()
-    if not t or has_attachments or len(t) > MAX_CHAT_CHARS:
-        return False
-    if _WORK.search(t) or _WORK_SHAPE.search(t):
-        return False
-    # 「去 momo 購物官網看看 vivo x300 最便宜多少錢」 is a question in shape
-    # (多少) but a job on a website: in the chat lane the model, with no
-    # browser, answered 「請稍候，我正在執行搜尋…」 and nothing ran (2026-11-05).
+def auto_lane(session_mode: str, has_attachments: bool = False) -> Tuple[str, Dict[str, Any]]:
+    """The mode a message starts in, and what goes into its context."""
+    mode = session_mode or "code"
+    if has_attachments or mode == "chat":
+        return mode, {}
+    return "chat", {"mode_override": True, "gate": mode}
+
+
+def log_verdict(text: str, verdict: str) -> None:
+    """The gate's verdict ("chat" / "work") to the decision engine's shadow
+    log (kind "lane.auto"), so a smaller model can be measured against it."""
+    async def _log():
+        try:
+            import decide as _decide
+            probe = await _decide.probe_choice(
+                "lane.auto", text, "這則訊息是閒聊／簡單提問，還是要求執行一件工作？",
+                {"chat": "打招呼、閒聊、問一個不需要工具就能回答的簡單問題",
+                 "work": "要求去查、做、產生、分析、修改、部署、寄送或排程某件事"},
+            )
+            await _decide.log_probe(probe, verdict, provider="llm")
+        except Exception:  # noqa: BLE001
+            pass
     try:
-        from browser_bridge import looks_like_browser_chore
-        if looks_like_browser_chore(t):
-            return False
-    except Exception:  # noqa: BLE001
+        asyncio.get_running_loop().create_task(_log())
+    except RuntimeError:
         pass
-    return bool(_CHAT_SHAPE.search(t))
-
-
-async def pick_mode(text: str, session_mode: str, has_attachments: bool = False) -> str:
-    """Return the mode this message should run in. Logs a shadow probe so
-    the decision engine accumulates evidence for a model-based lane."""
-    chat = looks_conversational(text, has_attachments)
-    chosen = "chat" if chat else (session_mode or "code")
-    try:
-        import asyncio
-        import decide as _decide
-        probe = await _decide.probe_choice(
-            "lane.auto", text, "這則訊息是閒聊／簡單提問，還是要求執行一件工作？",
-            {"chat": "打招呼、閒聊、問一個不需要工具就能回答的簡單問題",
-             "work": "要求去查、做、產生、分析、修改、部署、寄送或排程某件事"},
-        )
-        asyncio.create_task(_decide.log_probe(probe, "chat" if chat else "work", provider="rule"))
-    except Exception:  # noqa: BLE001
-        pass
-    return chosen

@@ -21,30 +21,15 @@ import local_engine as L
 
 
 def test_lane() -> None:
-    chat = ["今天是星期幾", "你好", "早安！", "現在幾點？", "你是誰", "謝謝",
-            "what day is it?", "hi", "are you there?", "為什麼會這樣？", "momo 是什麼公司？"]
-    work = ["幫我查今天的訂單", "分析 sales.csv 產出報告", "每天早上 8 點查昨日營收",
-            "部署最新版 OpenTeddy", "寫一個 CSV 轉 JSON 的 CLI", "請你整理一下客訴",
-            "deploy the app", "generate a chart from ~/data.csv", "run the tests",
-            "https://example.com 這頁在講什麼", "查一下上個月北區退貨率？",
-            "今天是星期幾" * 12,                      # 72 chars > MAX_CHAT_CHARS → work
-            # A question in shape, a job on a website (2026-11-05: answered
-            # 「請稍候，我正在執行搜尋…」 in the chat lane, nothing ran).
-            "去 momo 購物官網看看 vivo x300 最便宜多少錢", "momo 上 vivo x300 多少錢？",
-            "蝦皮的 airpods 現在多少？"]
-    for q in chat:
-        assert lane.looks_conversational(q), f"should be chat: {q!r}"
-    for q in work:
-        assert not lane.looks_conversational(q), f"should be work: {q!r}"
-    assert not lane.looks_conversational("你好", has_attachments=True)
-    print("  ✓ conversational detector: %d chat / %d work cases, ties go to work" % (len(chat), len(work)))
-
-    async def run():
-        assert await lane.pick_mode("今天是星期幾", "code") == "chat"
-        assert await lane.pick_mode("幫我查訂單", "analytic") == "analytic"
-        assert await lane.pick_mode("早安", "chat") == "chat"
-    asyncio.run(run())
-    print("  ✓ pick_mode: chat for conversation, session mode otherwise")
+    """No keyword rules any more: a message nobody picked a mode for starts
+    in the chat lane with the gate; files attached go straight to work; a
+    session the person set to chat stays chat."""
+    assert lane.auto_lane("code") == ("chat", {"mode_override": True, "gate": "code"})
+    assert lane.auto_lane("analytic") == ("chat", {"mode_override": True, "gate": "analytic"})
+    assert lane.auto_lane("code", has_attachments=True) == ("code", {})
+    assert lane.auto_lane("chat") == ("chat", {})
+    assert not hasattr(lane, "looks_conversational"), "the keyword rules are gone"
+    print("  ✓ auto_lane: chat lane with the gate; attachments → work; a chat session stays chat")
 
 
 def test_think() -> None:
@@ -128,7 +113,7 @@ def test_chat_promise() -> None:
             try:
                 await O.Orchestrator._fast_chat_response(fake, auto, "chat", {"confidence": 0.9})
                 raise AssertionError(f"promise accepted as an answer: {answer!r}")
-            except O._ChatPromisedWork:
+            except O._NeedsWork:
                 pass
         said["text"] = promise
         r = await O.Orchestrator._fast_chat_response(fake, mine, "chat", {"confidence": 0.9})
@@ -157,7 +142,7 @@ def test_chat_promise() -> None:
             return {"needs_tools": False, "is_pure_chat": True, "confidence": 0.95}
         async def chat(*a, **k):
             seen.append("chat")
-            raise O._ChatPromisedWork(promise[:80])
+            raise O._NeedsWork(promise[:80])
         async def plan(req):
             seen.append(("planner", str(getattr(req.mode, "value", req.mode))))
             raise _Planned()
@@ -178,9 +163,106 @@ def test_chat_promise() -> None:
           "a chat session the person picked stays chat")
 
 
+def test_gate() -> None:
+    """The gate: one call to the chat model with start_task. An answer is
+    the answer; a start_task call sends the request to the session's own
+    mode; the prompt lists the registered tools."""
+    import types
+    from models import SessionMode, TaskRequest, TaskStatus
+    import gate as G
+    import orchestrator as O
+    from tool_registry import tool_registry
+
+    tool_registry.auto_register_all()
+    G._system_cache.clear()
+    sp = G.system_prompt()
+    assert "- browser_open:" in sp and "- weather_forecast:" in sp and "start_task" in sp, sp[:400]
+    print("  ✓ gate prompt: the agent's abilities come from the tool registry (%d tools)"
+          % sp.count("\n- "))
+
+    reply = {}
+    sent = []
+
+    class _Resp:
+        def raise_for_status(self): pass
+        def json(self): return {"message": dict(reply), "eval_count": 3, "eval_duration": 10**7}
+
+    async def post(url, json=None):
+        sent.append((url, json))
+        return _Resp()
+
+    async def no_recent(*a, **k): return ""
+    async def _rec(*a, **k): pass
+    trk = types.SimpleNamespace(create_subtask=_rec, update_subtask=_rec, update_task_status=_rec, record_usage=_rec)
+    fake = types.SimpleNamespace(memory=None, _recent_turns_block=no_recent, tracker=trk,
+                                 _http=types.SimpleNamespace(post=post))
+    req = TaskRequest(goal="去 momo 購物官網看看 vivo x300 最便宜多少錢", session_id="s", mode="chat",
+                      context={"mode_override": True, "gate": "code"})
+
+    async def run():
+        reply.clear()
+        reply.update({"content": "", "tool_calls": [{"function": {"name": "start_task",
+                                                                  "arguments": {"what": "momo 查 vivo x300 價格"}}}]})
+        try:
+            await O.Orchestrator._fast_chat_response(fake, req, "chat", {"confidence": 0.9})
+            raise AssertionError("start_task was not followed")
+        except O._NeedsWork as exc:
+            assert "momo 查 vivo x300 價格" in str(exc), exc
+        url, body = sent[-1]
+        assert url.endswith("/api/chat") and body["tools"][0]["function"]["name"] == "start_task"
+        assert body["messages"][0]["role"] == "system" and "vivo x300" in body["messages"][1]["content"]
+        reply.clear()
+        reply.update({"content": "今天是星期四。"})
+        r = await O.Orchestrator._fast_chat_response(fake, req, "chat", {"confidence": 0.9})
+        assert r.status == TaskStatus.COMPLETED and r.summary == "今天是星期四。", r
+        reply.clear()
+        reply.update({"content": "好的，我去 momo 幫你查，請稍候…"})
+        try:
+            await O.Orchestrator._fast_chat_response(fake, req, "chat", {"confidence": 0.9})
+            raise AssertionError("a written promise got through the gate")
+        except O._NeedsWork:
+            pass
+
+        # Through run(): start_task → the planner, in the session's own mode.
+        class _Tracker:
+            async def get_session(self, sid): return {"id": sid, "mode": "analytic"}
+            async def create_task(self, req): pass
+            async def update_task_status(self, *a, **k): pass
+            async def create_subtask(self, st): pass
+            async def update_subtask(self, st): pass
+            async def list_tasks(self, **k): return []
+        seen = []
+        async def no_event(*a, **k): pass
+        async def classify(*a, **k):
+            seen.append("classifier")
+            return {"needs_tools": False, "is_pure_chat": True, "confidence": 0.95}
+        async def chat(*a, **k):
+            seen.append("gate")
+            raise O._NeedsWork("start_task: 查營收")
+        async def plan(r):
+            seen.append(("planner", r.mode.value))
+            raise RuntimeError("stop here")
+        o = types.SimpleNamespace(tracker=_Tracker(), _emit_task_event=no_event, _plan=plan,
+                                  _classify_intent=classify, _fast_chat_response=chat)
+        for name in ("_finish_direct", "_asked_again", "_typhoon", "_direct_print", "_recent_uploads"):
+            setattr(o, name, (lambda n: lambda *a, **k: getattr(O.Orchestrator, n)(o, *a, **k))(name))
+        r2 = TaskRequest(goal="上個月北區營收多少", session_id="s1", mode="chat",
+                         context={"mode_override": True, "gate": "analytic"})
+        try:
+            await O.Orchestrator.run(o, r2)
+        except Exception:  # noqa: BLE001
+            pass
+        assert seen == ["gate", ("planner", "analytic")], seen
+        assert r2.mode == SessionMode.ANALYTIC
+    asyncio.run(run())
+    print("  ✓ gate: start_task → the session's own mode (analytic stays analytic); an answer is the answer; "
+          "a written promise still goes to work")
+
+
 if __name__ == "__main__":
     test_lane()
     test_think()
     test_fast_chat_sentinel()
     test_chat_promise()
+    test_gate()
     print("\nALL LANE TESTS PASS")

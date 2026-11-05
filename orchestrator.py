@@ -69,7 +69,7 @@ _PROMISES_WORK = re.compile(
     r"|\b(one moment|please wait|hold on)\b)", re.IGNORECASE)
 
 
-class _ChatPromisedWork(RuntimeError):
+class _NeedsWork(RuntimeError):
     """The chat lane answered with a promise to act (see _PROMISES_WORK)."""
 
 # ── Mode-specific plan prompts ────────────────────────────────────────────────
@@ -1184,27 +1184,27 @@ class Orchestrator:
         # in a chat session goes from 2 LLM calls (classifier + answer)
         # to 1 (answer only) — typically the difference between feeling
         # snappy and feeling sluggish on a local model.
-        # A home request picked for the chat lane automatically (Telegram's
-        # lane guess) still needs its tools; an explicit chat session stays chat.
+        # A home request that reached the chat lane without the person
+        # picking it still needs its tools; an explicit chat session stays chat.
         def _to_work_lane() -> str:
-            # The executor gates tools on req.mode, not on session_mode:
-            # leaving only session_mode behind left the plan in chat mode,
-            # web_search its only tool.
+            # Back to the session's own mode (the gate keeps it in
+            # context["gate"]). The executor gates tools on req.mode, not on
+            # session_mode: leaving only session_mode behind left the plan in
+            # chat mode, web_search its only tool.
             from models import SessionMode
-            req.mode = SessionMode.CODE
-            return "code"
+            back = str((req.context or {}).get("gate") or "code")
+            req.mode = SessionMode(back if back in ("code", "analytic") else "code")
+            return req.mode.value
 
         if (session_mode == "chat"
                 and ((req.context or {}).get("home_request") or (req.context or {}).get("asked_again"))
                 and (req.context or {}).get("mode_override")):
             session_mode = _to_work_lane()
         if session_mode == "chat":
-            logger.info(
-                "Chat-mode fast-path engaged (skipped intent classifier): task=%s",
-                req.id,
-            )
+            _gated = bool((req.context or {}).get("gate"))
+            logger.info("Chat lane (%s): task=%s", "gate" if _gated else "chat session", req.id)
             try:
-                return await self._fast_chat_response(
+                _res = await self._fast_chat_response(
                     req, session_mode,
                     # Synthetic intent dict — fast-path persists the
                     # classifier's confidence on the synthetic subtask
@@ -1215,12 +1215,18 @@ class Orchestrator:
                         "needs_tools":  False,
                         "is_pure_chat": True,
                         "confidence":   0.95,
-                        "rationale":    "explicit chat session mode",
+                        "rationale":    "gate: answered" if _gated else "explicit chat session mode",
                     },
                 )
-            except _ChatPromisedWork as exc:
-                logger.info("Chat lane only promised to act (%r) — task %s goes to the work lane",
-                            str(exc), req.id)
+                if _gated:
+                    from lane import log_verdict
+                    log_verdict(req.goal, "chat")
+                return _res
+            except _NeedsWork as exc:
+                logger.info("Chat lane → work lane for task %s (%s)", req.id, str(exc))
+                if _gated:
+                    from lane import log_verdict
+                    log_verdict(req.goal, "work")
                 session_mode = _to_work_lane()
                 req.context["chat_promised_work"] = True
             except Exception as exc:  # noqa: BLE001
@@ -3129,13 +3135,22 @@ class Orchestrator:
         # Stream so the user gets tokens as they generate — same UX as
         # the full-loop chat-mode finalize step.
         recent = await self._recent_turns_block(req)
-        answer = await self._orchestrator_complete(
-            _clock_note() + mem_block
-            + ((recent + "\n\n使用者現在說：" + req.goal) if recent else req.goal),
-            system,
-            task_id=req.id,
-            task_description=f"[fast-chat] {req.goal[:100]}",
-        )
+        prompt = (_clock_note() + mem_block
+                  + ((recent + "\n\n使用者現在說：" + req.goal) if recent else req.goal))
+        if (req.context or {}).get("gate"):
+            # Nobody picked a lane for this message: the model answers it,
+            # or hands it to the agent by calling start_task (gate.py).
+            import gate as _gate
+            answer, what = await _gate.ask(self, prompt, task_id=req.id)
+            if what:
+                raise _NeedsWork(f"start_task: {what}")
+            if not answer:
+                self._last_gemma_error = "the model neither answered nor called start_task"
+        else:
+            answer = await self._orchestrator_complete(
+                prompt, system, task_id=req.id,
+                task_description=f"[fast-chat] {req.goal[:100]}",
+            )
         if not answer or not answer.strip() or answer.strip() == "[]":
             # "[]" is _gemma_complete's on-error sentinel (a timeout, a
             # refused request). It passed the old emptiness check and
@@ -3144,11 +3159,13 @@ class Orchestrator:
             why = getattr(self, "_last_gemma_error", "") or "empty response"
             logger.warning("Fast-path produced no answer (%s)", why)
             raise RuntimeError(f"planner model gave no answer — {why}")
-        # Only a lane someone picked FOR the person (Telegram's guess, the
-        # intent classifier) gives way; a session they set to chat stays chat.
+        # Backstop for the same mistake when the model writes the promise
+        # instead of calling start_task. Only a lane someone picked FOR the
+        # person (the gate, the intent classifier) gives way; a session they
+        # set to chat themselves stays chat.
         if (((req.context or {}).get("mode_override") or session_mode != "chat")
                 and len(answer.strip()) <= 200 and _PROMISES_WORK.search(answer)):
-            raise _ChatPromisedWork(answer.strip()[:80])
+            raise _NeedsWork(answer.strip()[:80])
 
         # Synthetic subtask record. Confidence carries the classifier's
         # confidence so the Usage tab perf stats can distinguish fast-
