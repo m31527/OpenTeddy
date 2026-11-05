@@ -22,12 +22,16 @@ import local_engine as L
 
 def test_lane() -> None:
     chat = ["今天是星期幾", "你好", "早安！", "現在幾點？", "你是誰", "謝謝",
-            "what day is it?", "hi", "are you there?", "為什麼會這樣？"]
+            "what day is it?", "hi", "are you there?", "為什麼會這樣？", "momo 是什麼公司？"]
     work = ["幫我查今天的訂單", "分析 sales.csv 產出報告", "每天早上 8 點查昨日營收",
             "部署最新版 OpenTeddy", "寫一個 CSV 轉 JSON 的 CLI", "請你整理一下客訴",
             "deploy the app", "generate a chart from ~/data.csv", "run the tests",
             "https://example.com 這頁在講什麼", "查一下上個月北區退貨率？",
-            "今天是星期幾" * 12]                      # 72 chars > MAX_CHAT_CHARS → work
+            "今天是星期幾" * 12,                      # 72 chars > MAX_CHAT_CHARS → work
+            # A question in shape, a job on a website (2026-11-05: answered
+            # 「請稍候，我正在執行搜尋…」 in the chat lane, nothing ran).
+            "去 momo 購物官網看看 vivo x300 最便宜多少錢", "momo 上 vivo x300 多少錢？",
+            "蝦皮的 airpods 現在多少？"]
     for q in chat:
         assert lane.looks_conversational(q), f"should be chat: {q!r}"
     for q in work:
@@ -99,8 +103,84 @@ def test_fast_chat_sentinel() -> None:
     print("  ✓ fast chat: '[]' sentinel raises with the planner's error; a real answer passes")
 
 
+def test_chat_promise() -> None:
+    """A chat-lane answer that only promises to act goes to the work lane —
+    unless the person set the session to chat themselves."""
+    import types
+    from models import SessionMode, TaskRequest, TaskStatus
+    import orchestrator as O
+
+    promise = "好的，我會為您查詢 momo 購物網上 Vivo X300 的最低價格。\n\n請稍候，我正在執行搜尋..."
+    said = {"text": promise}
+    async def complete(*a, **k): return said["text"]
+    async def no_recent(*a, **k): return ""
+    async def _rec(*a, **k): pass
+    fake = types.SimpleNamespace(memory=None, _orchestrator_complete=complete, _recent_turns_block=no_recent,
+                                 tracker=types.SimpleNamespace(create_subtask=_rec, update_subtask=_rec,
+                                                               update_task_status=_rec))
+    auto = TaskRequest(goal="去 momo 購物官網看看 vivo x300 最便宜多少錢", session_id="s",
+                       mode="chat", context={"mode_override": True})
+    mine = TaskRequest(goal="你會幫我查資料嗎", session_id="s", mode="chat")
+
+    async def run():
+        for answer in (promise, "Sure — let me check momo for you.", "稍等一下，我馬上幫你查"):
+            said["text"] = answer
+            try:
+                await O.Orchestrator._fast_chat_response(fake, auto, "chat", {"confidence": 0.9})
+                raise AssertionError(f"promise accepted as an answer: {answer!r}")
+            except O._ChatPromisedWork:
+                pass
+        said["text"] = promise
+        r = await O.Orchestrator._fast_chat_response(fake, mine, "chat", {"confidence": 0.9})
+        assert r.status == TaskStatus.COMPLETED, "an explicit chat session stays chat"
+        for answer in ("今天是星期四。", "我會為您查詢的話，需要先連接瀏覽器。" + "說明" * 100):
+            said["text"] = answer
+            r = await O.Orchestrator._fast_chat_response(fake, auto, "chat", {"confidence": 0.9})
+            assert r.status == TaskStatus.COMPLETED, answer[:30]
+
+        # Through run(): the promise never reaches the person; the planner
+        # gets the request in the work lane, with tools.
+        class _Tracker:
+            async def get_session(self, sid): return {"id": sid, "mode": "code"}
+            async def create_task(self, req): pass
+            async def update_task_status(self, *a, **k): pass
+            async def create_subtask(self, st): pass
+            async def update_subtask(self, st): pass
+            async def list_tasks(self, **k): return []
+
+        class _Planned(Exception):
+            pass
+        seen = []
+        async def no_event(*a, **k): pass
+        async def classify(*a, **k):
+            seen.append("classifier")
+            return {"needs_tools": False, "is_pure_chat": True, "confidence": 0.95}
+        async def chat(*a, **k):
+            seen.append("chat")
+            raise O._ChatPromisedWork(promise[:80])
+        async def plan(req):
+            seen.append(("planner", str(getattr(req.mode, "value", req.mode))))
+            raise _Planned()
+        o = types.SimpleNamespace(tracker=_Tracker(), _emit_task_event=no_event, _plan=plan,
+                                  _classify_intent=classify, _fast_chat_response=chat)
+        for name in ("_finish_direct", "_asked_again", "_typhoon", "_direct_print", "_recent_uploads"):
+            setattr(o, name, (lambda n: lambda *a, **k: getattr(O.Orchestrator, n)(o, *a, **k))(name))
+        req = TaskRequest(goal="你好嗎？我想知道 momo 的事", session_id="s1", mode="chat",
+                          context={"mode_override": True})
+        try:
+            await O.Orchestrator.run(o, req)
+        except Exception:  # noqa: BLE001 — the fake stops short of a real pipeline
+            pass
+        assert seen == ["chat", ("planner", "code")], seen
+        assert req.mode == SessionMode.CODE
+    asyncio.run(run())
+    print("  ✓ chat lane: 「請稍候，我正在執行搜尋…」 goes to the planner in the work lane; "
+          "a chat session the person picked stays chat")
+
+
 if __name__ == "__main__":
     test_lane()
     test_think()
     test_fast_chat_sentinel()
+    test_chat_promise()
     print("\nALL LANE TESTS PASS")

@@ -57,6 +57,21 @@ _BARE_CD_RE = re.compile(
 # Strip leading "執行 " / "run " when merging descriptions.
 _LEADING_VERB_RE = re.compile(r"^(?:執行|run)\s+", re.IGNORECASE)
 
+# A chat-lane answer that only promises to go and do something. The chat
+# lane has no tools to keep the promise: 「去 momo 購物官網看看 vivo x300 最
+# 便宜多少錢」 got 「好的，我會為您查詢…請稍候，我正在執行搜尋…」 marked done in
+# 1.2 s, and nothing ran (2026-11-05). Such an answer sends the request to
+# the work lane instead of to the person.
+_PROMISES_WORK = re.compile(
+    r"(請稍候|請稍等|稍等一下|正在(為您|幫您|幫你)?(執行|搜尋|查詢|查找|查看|處理|開啟|打開)"
+    r"|我(會|將|來|去|馬上|立即|現在)(為您|幫您|幫你|替您|替你)?(搜尋|查詢|查找|查看|查|找|打開|開啟|執行|處理)"
+    r"|\b(let me|i'?ll|i will|i'?m going to) (check|look|search|find|open|browse)"
+    r"|\b(one moment|please wait|hold on)\b)", re.IGNORECASE)
+
+
+class _ChatPromisedWork(RuntimeError):
+    """The chat lane answered with a promise to act (see _PROMISES_WORK)."""
+
 # ── Mode-specific plan prompts ────────────────────────────────────────────────
 # Each session now has an explicit mode (chat / code / analytic). Rather than
 # making one prompt try to handle every case and mis-classify on edge cases
@@ -1171,10 +1186,18 @@ class Orchestrator:
         # snappy and feeling sluggish on a local model.
         # A home request picked for the chat lane automatically (Telegram's
         # lane guess) still needs its tools; an explicit chat session stays chat.
+        def _to_work_lane() -> str:
+            # The executor gates tools on req.mode, not on session_mode:
+            # leaving only session_mode behind left the plan in chat mode,
+            # web_search its only tool.
+            from models import SessionMode
+            req.mode = SessionMode.CODE
+            return "code"
+
         if (session_mode == "chat"
                 and ((req.context or {}).get("home_request") or (req.context or {}).get("asked_again"))
                 and (req.context or {}).get("mode_override")):
-            session_mode = "code"
+            session_mode = _to_work_lane()
         if session_mode == "chat":
             logger.info(
                 "Chat-mode fast-path engaged (skipped intent classifier): task=%s",
@@ -1195,6 +1218,11 @@ class Orchestrator:
                         "rationale":    "explicit chat session mode",
                     },
                 )
+            except _ChatPromisedWork as exc:
+                logger.info("Chat lane only promised to act (%r) — task %s goes to the work lane",
+                            str(exc), req.id)
+                session_mode = _to_work_lane()
+                req.context["chat_promised_work"] = True
             except Exception as exc:  # noqa: BLE001
                 if (req.context or {}).get("mode_override"):
                     # This message was routed to the chat lane because it
@@ -1234,6 +1262,7 @@ class Orchestrator:
         if (getattr(config, "intent_classifier_enabled", True)
                 and not (req.context or {}).get("db_context")
                 and not (req.context or {}).get("home_request")
+                and not (req.context or {}).get("chat_promised_work")
                 and not (req.context or {}).get("asked_again")):
             # db_context guard: in a DB-connected session, a data question
             # ("how many factories does brand X have") is easily
@@ -3115,6 +3144,11 @@ class Orchestrator:
             why = getattr(self, "_last_gemma_error", "") or "empty response"
             logger.warning("Fast-path produced no answer (%s)", why)
             raise RuntimeError(f"planner model gave no answer — {why}")
+        # Only a lane someone picked FOR the person (Telegram's guess, the
+        # intent classifier) gives way; a session they set to chat stays chat.
+        if (((req.context or {}).get("mode_override") or session_mode != "chat")
+                and len(answer.strip()) <= 200 and _PROMISES_WORK.search(answer)):
+            raise _ChatPromisedWork(answer.strip()[:80])
 
         # Synthetic subtask record. Confidence carries the classifier's
         # confidence so the Usage tab perf stats can distinguish fast-

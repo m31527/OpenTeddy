@@ -445,7 +445,8 @@ _SITE = re.compile(
     r"((去|到|在|上|打開|開啟|用)\s*[A-Za-z0-9\u4e00-\u9fff .\-]{1,24}?(網站|網頁|購物網|官網|商城)"
     r"|\b(momo|shopee|pchome|amazon|coupang|youtube|facebook|instagram|threads|dcard|ptt|gmail|github)\b"
     r"|蝦皮|博客來|露天|酷澎|淘寶|天貓|yahoo\s*(拍賣|購物))", re.I)
-_LOOK_UP = re.compile(r"(看看|看一下|多少錢|價格|價錢|有沒有|查一下|查查)")
+_LOOK_UP = re.compile(r"(看看|看一下|多少錢|價格|價錢|售價|便宜|最低價|特價|優惠|現在多少|賣多少|"
+                      r"有沒有|有貨|查一下|查查)")
 
 
 def looks_like_browser_chore(goal: str) -> bool:

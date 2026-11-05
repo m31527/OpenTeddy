@@ -352,7 +352,10 @@ async def test_orchestrator() -> None:
         calls.append("classifier")
         return {"needs_tools": False, "is_pure_chat": True, "confidence": 0.95}
     async def chat(*a, **k): calls.append("chat"); raise _ReachedPlanner()
-    async def plan(*a, **k): calls.append("planner"); raise _ReachedPlanner()
+    async def plan(req, *a, **k):
+        calls.append("planner")
+        calls.append(str(getattr(req.mode, "value", req.mode)))
+        raise _ReachedPlanner()
     _Client.assist_reply = {"response": {"response_type": "error", "data": {"code": "no_intent_match"}}}
     o = fake()
     o._classify_intent, o._fast_chat_response, o._plan = classify, chat, plan
@@ -369,7 +372,7 @@ async def test_orchestrator() -> None:
                                               mode="chat", context={"mode_override": True}))
     except Exception:  # noqa: BLE001
         pass
-    assert "chat" not in calls, f"auto chat lane kept for a home request: {calls}"
+    assert "chat" not in calls and calls[-2:] == ["planner", "code"], f"auto chat lane kept for a home request: {calls}"
     print("  ✓ home requests Assist can't handle skip the classifier and the auto chat lane")
 
     res = await run("家裡有哪些設備離線")

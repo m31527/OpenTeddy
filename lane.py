@@ -49,6 +49,15 @@ def looks_conversational(text: str, has_attachments: bool = False) -> bool:
         return False
     if _WORK.search(t) or _WORK_SHAPE.search(t):
         return False
+    # 「去 momo 購物官網看看 vivo x300 最便宜多少錢」 is a question in shape
+    # (多少) but a job on a website: in the chat lane the model, with no
+    # browser, answered 「請稍候，我正在執行搜尋…」 and nothing ran (2026-11-05).
+    try:
+        from browser_bridge import looks_like_browser_chore
+        if looks_like_browser_chore(t):
+            return False
+    except Exception:  # noqa: BLE001
+        pass
     return bool(_CHAT_SHAPE.search(t))
 
 
