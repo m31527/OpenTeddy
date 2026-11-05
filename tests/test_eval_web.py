@@ -114,6 +114,49 @@ async def scripted(rig: BrowserRig) -> None:
     assert shots and shots[-1].startswith("/9j/"), "a JPEG screenshot went to the vision model"
     print("  ✓ by sight: a click on a canvas lands where the vision model points (開始遊戲 started)")
 
+    # The owner's own pointing service (contrib/locateanything's contract):
+    # used when set; when it's down, the vision model points instead.
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from config import config
+    asked_service: list = []
+
+    class _Point(BaseHTTPRequestHandler):
+        def log_message(self, *a): pass
+
+        def do_POST(self):
+            req = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)))
+            asked_service.append(req["query"])
+            body = json.dumps({"point": [round(target["x"] / target["w"] * 1000),
+                                         round(target["y"] / target["h"] * 1000)]}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    svc = ThreadingHTTPServer(("127.0.0.1", 0), _Point)
+    threading.Thread(target=svc.serve_forever, daemon=True).start()
+    config.grounding_url = f"http://127.0.0.1:{svc.server_address[1]}/point"
+    try:
+        await loop.run_in_executor(None, rig.begin_task, {"confirm": "deny", "start": "/game"})
+        privacy.begin("eval-3b", B.EVAL_PERSON)
+        await asyncio.sleep(0.5)
+        n_vision = len(shots)
+        r = await T.browser_click_at("the 開始遊戲 button")
+        assert r["success"] and rig.end_task()["site"]["game"] == ["start"], r
+        assert asked_service == ["the 開始遊戲 button"] and len(shots) == n_vision, "the service pointed, not the VLM"
+        svc.shutdown()
+        svc.server_close()
+        await loop.run_in_executor(None, rig.begin_task, {"confirm": "deny", "start": "/game"})
+        privacy.begin("eval-3c", B.EVAL_PERSON)
+        await asyncio.sleep(0.5)
+        r = await T.browser_click_at("the 開始遊戲 button")
+        assert r["success"] and rig.end_task()["site"]["game"] == ["start"] and len(shots) > n_vision, r
+    finally:
+        config.grounding_url = ""
+    print("  ✓ an owner-run pointing service points when set; when it's down the vision model does")
+
     await loop.run_in_executor(None, rig.begin_task, {"confirm": "deny"})
     privacy.begin("eval-4", B.EVAL_PERSON)
     await T.browser_open(f"{rig.site_url}/album")

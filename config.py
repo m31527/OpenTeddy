@@ -162,6 +162,10 @@ class Config:
     # drawn on a canvas — on a screenshot. An *instruct* build: the thinking
     # one spends seconds to minutes per lookup. Empty = those tools are off.
     vision_model: str = field(default_factory=lambda: os.getenv("VISION_MODEL", "qwen3-vl:8b-instruct").strip())
+    # Optional pointing service for browser_click_at, run and installed by
+    # the owner (e.g. contrib/locateanything/ — NVIDIA's non-commercial
+    # license, see README). Empty = the vision model points, the default.
+    grounding_url: str = field(default_factory=lambda: os.getenv("GROUNDING_URL", "").strip())
 
     # ── Ad-spend guard (spend_guard.py) ──────────────────────────────────
     # Hard caps on ad-platform calls that spend money, enforced on every
@@ -812,6 +816,8 @@ class Config:
             self.qwen_model = settings["executor_model"]
         if "vision_model" in settings:
             self.vision_model = (settings["vision_model"] or "").strip()
+        if "grounding_url" in settings:
+            self.grounding_url = (settings["grounding_url"] or "").strip()
         if _s("claude_model"):
             self.claude_model = settings["claude_model"]
         if _s("gemma_base_url"):

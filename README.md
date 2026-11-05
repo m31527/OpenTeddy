@@ -1280,6 +1280,46 @@ clicked nothing.
 
 Not yet: cross-origin iframes aren't read.
 
+### Optional: NVIDIA LocateAnything for pointing (install it yourself)
+
+OpenTeddy does **not** ship, download or enable
+[nvidia/LocateAnything-3B](https://huggingface.co/nvidia/LocateAnything-3B);
+the vision model above (`qwen3-vl:8b-instruct`) does the pointing by default.
+
+> ⚠️ **License.** LocateAnything-3B is under the
+> [NVIDIA License](https://huggingface.co/nvidia/LocateAnything-3B/blob/main/LICENSE)
+> for **non-commercial use — academic and non-profit research only**;
+> commercial use is not permitted (except by NVIDIA and its affiliates). The
+> limit is on *use*: running it as an everyday assistant, or in a commercial
+> product or service, is outside it. Whether to install it, and whether your
+> use fits the license, is your call and your responsibility. OpenTeddy only
+> offers a setting for any pointing service, plus an example adapter.
+
+If your use fits (research, evaluation, comparisons):
+
+1. On a machine with an NVIDIA GPU, in a **separate** Python environment
+   (the model pins its own library versions):
+   ```bash
+   python -m venv ~/la-venv && ~/la-venv/bin/pip install -r contrib/locateanything/requirements.txt
+   ```
+2. After reading the license, start it. It refuses to start without
+   `ACCEPT_NVIDIA_NONCOMMERCIAL_LICENSE=yes`; the first run downloads ~8 GB
+   of weights from Hugging Face:
+   ```bash
+   ACCEPT_NVIDIA_NONCOMMERCIAL_LICENSE=yes ~/la-venv/bin/python contrib/locateanything/server.py --port 8090
+   ```
+3. Set OpenTeddy's "Pointing service" to `http://127.0.0.1:8090/point` (or
+   `POST /settings {"grounding_url": "…"}`).
+
+`browser_click_at` then asks it where things are; when it isn't running,
+the vision model points again. Clear the setting to stop using it.
+`browser_look` and icon recognition stay on the vision model —
+LocateAnything only locates.
+
+The contract is small — `POST {"image": base64, "query": "the heart icon"}`
+→ `{"point": [x, y]}` on 0–1000, or `{"point": null}` — so any pointing
+model whose license fits your use can sit behind it.
+
 ## Claude Code ↔ OpenTeddy
 
 Claude Code is the better engineer; OpenTeddy is the one that is always on

@@ -1,0 +1,12 @@
+# For contrib/locateanything/server.py only — its own environment, not
+# OpenTeddy's. Versions from the LocateAnything-3B model card; install
+# torch for your GPU / CUDA first if pip's default build doesn't fit.
+torch
+torchvision
+transformers==4.57.1
+Pillow==11.1.0
+numpy==1.25.0
+opencv-python-headless==4.11.0.86
+peft
+decord==0.6.0
+lmdb==1.7.5

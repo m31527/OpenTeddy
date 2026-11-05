@@ -39,6 +39,13 @@ SETTINGS_META: dict[str, dict[str, Any]] = {
                        "Empty turns that off.",
         "type":        "model_select",
     },
+    "grounding_url": {
+        "label":       "Pointing service (browser, optional)",
+        "description": "Address of a pointing service you run yourself for browser_click_at, e.g. "
+                       "http://127.0.0.1:8090/point from contrib/locateanything (NVIDIA non-commercial "
+                       "license — research/evaluation only; see README). Empty = the vision model points.",
+        "type":        "text",
+    },
     "claude_model": {
         "label":       "Claude Model (Escalation)",
         "description": "Anthropic Claude model for escalation and skill generation",
@@ -562,6 +569,7 @@ def _defaults_from_config() -> dict[str, str]:
         "orchestrator_model":       config.gemma_model,
         "executor_model":           config.qwen_model,
         "vision_model":             getattr(config, "vision_model", ""),
+        "grounding_url":            getattr(config, "grounding_url", ""),
         "claude_model":             config.claude_model,
         "anthropic_api_key":        config.anthropic_api_key,
         "llm_provider":             getattr(config, "llm_provider", "anthropic"),
@@ -850,6 +858,8 @@ class SettingsStore:
             config.qwen_model = settings["executor_model"]
         if "vision_model" in settings:
             config.vision_model = (settings["vision_model"] or "").strip()
+        if "grounding_url" in settings:
+            config.grounding_url = (settings["grounding_url"] or "").strip()
         if "claude_model" in settings:
             config.claude_model = settings["claude_model"]
         if settings.get("anthropic_api_key"):

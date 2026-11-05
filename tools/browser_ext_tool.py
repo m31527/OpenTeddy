@@ -32,12 +32,16 @@ import time
 from typing import Any, Dict, Optional, Tuple
 from urllib.parse import urlparse
 
+import logging
+
 import httpx
 
 import browser_bridge as B
 import privacy
 from config import config
 from tool_registry import make_result
+
+logger = logging.getLogger(__name__)
 
 PAGE_CHARS = 6000
 AFTER_CHARS = 3000
@@ -279,6 +283,21 @@ def _point(text: str, width: float, height: float) -> Optional[Tuple[float, floa
     return round(x * width / 1000, 1), round(y * height / 1000, 1)
 
 
+async def _point_service(what: str, image_b64: str) -> Optional[Tuple[float, float]]:
+    """The owner's own pointing service (config.grounding_url), if any:
+    POST {"image": <base64 JPEG>, "query": what} → {"point": [x, y]} on a
+    0–1000 scale, or {"point": null}. Raises when it can't be reached, so
+    the caller falls back to the vision model."""
+    url = (getattr(config, "grounding_url", "") or "").strip()
+    async with httpx.AsyncClient(timeout=60) as c:
+        r = await c.post(url, json={"image": image_b64, "query": what})
+    r.raise_for_status()
+    pt = (r.json() or {}).get("point")
+    if not (isinstance(pt, list) and len(pt) == 2):
+        return None
+    return float(pt[0]), float(pt[1])
+
+
 async def browser_look(question: str, tab: Optional[int] = None, scroll_down: int = 0) -> Dict[str, Any]:
     t0 = _start()
     try:
@@ -303,10 +322,23 @@ async def browser_click_at(description: str, tab: Optional[int] = None) -> Dict[
     try:
         shot = await B.call("screenshot", {"tab": tab}, timeout=30)
         tab = shot.get("tab") or tab
-        answer = await _vision(f"Point to {what} in this screenshot of a web page. Reply with JSON only: "
-                               "{\"point_2d\": [x, y]}. If it isn't there, reply {\"point_2d\": null}.",
-                               shot["image"], num_predict=60)
-        at = _point(answer, float(shot["width"]), float(shot["height"]))
+        at = None
+        served = False
+        if (getattr(config, "grounding_url", "") or "").strip():
+            try:
+                rel = await _point_service(what, shot["image"])
+                served = True
+                if rel and 0 <= rel[0] <= 1000 and 0 <= rel[1] <= 1000:
+                    at = (round(rel[0] * float(shot["width"]) / 1000, 1),
+                          round(rel[1] * float(shot["height"]) / 1000, 1))
+            except Exception as exc:  # noqa: BLE001 — not running / broken: the vision model points
+                logger.info("pointing service %s unavailable (%s) — using the vision model",
+                            config.grounding_url, exc)
+        if not served:
+            answer = await _vision(f"Point to {what} in this screenshot of a web page. Reply with JSON only: "
+                                   "{\"point_2d\": [x, y]}. If it isn't there, reply {\"point_2d\": null}.",
+                                   shot["image"], num_predict=60)
+            at = _point(answer, float(shot["width"]), float(shot["height"]))
         if not at:
             return make_result(False, error=(
                 f"Couldn't see {what} on the visible part of the page. If it may be further down, "

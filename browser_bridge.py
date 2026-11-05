@@ -187,7 +187,9 @@ async def unusable_tools() -> set:
     except RuntimeError:                               # not started (tests, CLI)
         hide = set(TOOL_NAMES)
     if not (getattr(config, "vision_model", "") or "").strip():
-        hide |= VISION_TOOLS
+        hide.add("browser_look")
+        if not (getattr(config, "grounding_url", "") or "").strip():
+            hide.add("browser_click_at")
     return hide
 
 

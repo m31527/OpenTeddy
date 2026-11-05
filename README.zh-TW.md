@@ -557,6 +557,28 @@ OpenTeddy 也會主動開口。背景有四項檢查（不用模型），會在 
 
 目前限制：跨網域的 iframe（例如某些付款框）還讀不到。
 
+### 選用：用 NVIDIA LocateAnything 找位置（自行安裝）
+
+OpenTeddy **沒有內建、不會下載，也不會預設啟用** [nvidia/LocateAnything-3B](https://huggingface.co/nvidia/LocateAnything-3B)。預設由上面的看圖模型（`qwen3-vl:8b-instruct`）找位置。
+
+> ⚠️ **授權**：LocateAnything-3B 採 [NVIDIA 授權](https://huggingface.co/nvidia/LocateAnything-3B/blob/main/LICENSE)，**只限非商業的學術與非營利研究**，**不允許商業使用**（NVIDIA 與其關係企業除外）。它限制的是用途：拿它當日常助理使用、或用在商業產品與服務裡，都不在允許範圍內。要不要安裝、用途是否符合授權，由安裝的人自行判斷並負責。OpenTeddy 只提供一個可以接任何「定位服務」的設定，和一支範例轉接程式。
+
+如果你的用途符合授權（例如研究、評估比較），可以這樣接上：
+
+1. 在有 NVIDIA GPU 的機器上，用**另一個** Python 環境安裝（模型指定了自己的套件版本，不要裝進 OpenTeddy 的環境）：
+   ```bash
+   python -m venv ~/la-venv && ~/la-venv/bin/pip install -r contrib/locateanything/requirements.txt
+   ```
+2. 讀過授權後啟動。沒有設定 `ACCEPT_NVIDIA_NONCOMMERCIAL_LICENSE=yes` 會拒絕啟動；第一次執行會從 Hugging Face 下載約 8 GB 的權重：
+   ```bash
+   ACCEPT_NVIDIA_NONCOMMERCIAL_LICENSE=yes ~/la-venv/bin/python contrib/locateanything/server.py --port 8090
+   ```
+3. 在 OpenTeddy 設定「Pointing service」為 `http://127.0.0.1:8090/point`（或 `POST /settings {"grounding_url": "…"}`）。
+
+接上後，`browser_click_at` 改由它找位置；它沒在跑時，自動改回看圖模型。清空這個設定就停用。`browser_look`（看畫面回答問題）和圖示辨識仍然用看圖模型，因為 LocateAnything 只負責找位置。
+
+服務介面很簡單：`POST {"image": base64, "query": "愛心圖示"}`，回傳 `{"point": [x, y]}`（0–1000）或 `{"point": null}`。任何授權允許你使用的定位模型，都可以照這個格式接上。
+
 ## Claude Code ↔ OpenTeddy
 
 Claude Code 是比較強的工程師，OpenTeddy 是一直在線、連著實體世界的管家。兩者可以雙向合作。
