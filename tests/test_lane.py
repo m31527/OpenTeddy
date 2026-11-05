@@ -223,8 +223,19 @@ def test_gate() -> None:
             assert "shell_exec_readonly" in str(exc), exc
         reply.clear()
         reply.update({"content": "今天是星期四。"})
+        asked_memory = []
+        async def mem_ctx(goal, session_id=None, **kw):
+            asked_memory.append(kw)
+            return "【之前的筆記，僅供參考】\n[Past task result]: 上週查過天氣"
+        async def _noop(*a, **k): pass
+        fake.memory = types.SimpleNamespace(is_available=True, get_context_for_task=mem_ctx, summarize_and_store=_noop)
+        fake._maybe_promote_pattern_to_skill = _noop
         r = await O.Orchestrator._fast_chat_response(fake, req, "chat", {"confidence": 0.9})
+        fake.memory = None
         assert r.status == TaskStatus.COMPLETED and r.summary == "今天是星期四。", r
+        assert asked_memory == [{"lessons": False, "heading": "【之前的筆記，僅供參考】"}], asked_memory
+        user_msg = sent[-1][1]["messages"][1]["content"]
+        assert "上週查過天氣" in user_msg and "memory" not in user_msg.lower(), user_msg
         reply.clear()
         reply.update({"content": "好的，我去 momo 幫你查，請稍候…"})
         try:

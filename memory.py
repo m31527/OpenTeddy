@@ -278,6 +278,7 @@ class MemoryManager:
 
     async def get_context_for_task(
         self, task_description: str, session_id: Optional[str] = None,
+        lessons: bool = True, heading: str = "=== Relevant Memory ===",
     ) -> str:
         """
         Retrieve the top-5 most relevant memories and format them as a
@@ -287,12 +288,19 @@ class MemoryManager:
         search_lessons) and listed FIRST: a "don't repeat this mistake"
         warning must outrank ordinary context.
 
+        `lessons=False` leaves them out — for the chat gate (gate.py): they
+        coach the agent doing the work, and in front of the gate they read
+        as the subject: 「目前機器記憶體還剩下多少」 under "=== Relevant
+        Memory ===" plus two lessons about saving reports got "I'm a
+        language model, I have no machine memory" instead of a hand-off.
+
         Returns empty string if no memories exist or ChromaDB is unavailable.
         """
         memories = await self.search_memory(
             task_description, n_results=5, session_id=session_id,
         )
-        lessons = await self.search_lessons(task_description, n_results=2)
+        want_lessons = lessons
+        lessons = await self.search_lessons(task_description, n_results=2) if want_lessons else []
         if lessons:
             lesson_ids = {m["id"] for m in lessons}
             memories = [m for m in memories if m["id"] not in lesson_ids]
@@ -307,7 +315,7 @@ class MemoryManager:
             "lesson":         "⚠️ LESSON from a past FAILED task — avoid repeating this",
         }
 
-        lines = ["=== Relevant Memory ==="]
+        lines = [heading]
         for mem in lessons + memories:
             label   = _LABELS.get(mem["type"], mem["type"].replace("_", " ").title())
             snippet = mem["content"][:400]

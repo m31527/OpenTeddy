@@ -3111,11 +3111,16 @@ class Orchestrator:
         """
         # Pull memory context the same way _plan does so the answer
         # benefits from session history.
+        # The gate gets past notes without the failure lessons and without
+        # the word "memory": both pulled 「目前機器記憶體還剩下多少」 into a
+        # chat about the model's own memory (memory.get_context_for_task).
+        gated = bool((req.context or {}).get("gate"))
         memory_ctx = ""
         if self.memory is not None and self.memory.is_available:
             try:
                 memory_ctx = await self.memory.get_context_for_task(
                     req.goal, session_id=req.session_id,
+                    **({"lessons": False, "heading": "【之前的筆記，僅供參考】"} if gated else {}),
                 )
             except Exception:  # noqa: BLE001
                 pass
@@ -3130,14 +3135,14 @@ class Orchestrator:
             "tools — answer directly. Keep the response tight and "
             "useful; use markdown for structure where it helps."
         )
-        mem_block = ("--- Relevant memory ---\n" + memory_ctx + "\n\n") if memory_ctx else ""
+        mem_block = ((memory_ctx if gated else "--- Relevant memory ---\n" + memory_ctx) + "\n\n") if memory_ctx else ""
 
         # Stream so the user gets tokens as they generate — same UX as
         # the full-loop chat-mode finalize step.
         recent = await self._recent_turns_block(req)
         prompt = (_clock_note() + mem_block
                   + ((recent + "\n\n使用者現在說：" + req.goal) if recent else req.goal))
-        if (req.context or {}).get("gate"):
+        if gated:
             # Nobody picked a lane for this message: the model answers it,
             # or hands it to the agent by calling start_task (gate.py).
             import gate as _gate
