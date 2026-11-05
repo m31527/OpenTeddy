@@ -66,17 +66,22 @@ def system_prompt() -> str:
 
 
 def _task_from(tool_calls: Any) -> Optional[str]:
+    """Any tool call is a hand-off. Shown the agent's tool list, the model
+    sometimes calls one of those directly (「目前機器記憶體還剩下多少」 →
+    shell_exec_readonly) instead of start_task; that too means "this needs
+    the agent", and dropping it left an empty answer."""
     for c in tool_calls or []:
         fn = (c or {}).get("function") or {}
+        args = fn.get("arguments") or {}
+        if isinstance(args, str):
+            import json
+            try:
+                args = json.loads(args)
+            except ValueError:
+                args = {}
         if fn.get("name") == "start_task":
-            args = fn.get("arguments") or {}
-            if isinstance(args, str):
-                import json
-                try:
-                    args = json.loads(args)
-                except ValueError:
-                    args = {}
             return str((args or {}).get("what") or "").strip() or "start_task"
+        return f"{fn.get('name') or 'a tool'} {args}"[:120]
     return None
 
 
@@ -90,9 +95,9 @@ async def ask(orch: Any, prompt: str, task_id: str = "") -> Tuple[str, Optional[
         hist = provider.new_history()
         hist.add_user_message(prompt)
         r = await provider.complete_with_tools(hist, [START_TASK], system=system_prompt(), max_tokens=2048)
-        for u in r.tool_uses or []:
-            if u.name == "start_task":
-                return "", str((u.input or {}).get("what") or "").strip() or "start_task"
+        for u in r.tool_uses or []:               # any tool call is a hand-off (see _task_from)
+            return "", (str((u.input or {}).get("what") or "").strip() if u.name == "start_task"
+                        else f"{u.name} {u.input}"[:120]) or "start_task"
         return (r.text or "").strip(), None
 
     import local_engine

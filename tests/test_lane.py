@@ -211,6 +211,16 @@ def test_gate() -> None:
         url, body = sent[-1]
         assert url.endswith("/api/chat") and body["tools"][0]["function"]["name"] == "start_task"
         assert body["messages"][0]["role"] == "system" and "vivo x300" in body["messages"][1]["content"]
+        # Shown the agent's tool list, the model may call one of those
+        # directly; that is a hand-off too, never an empty answer.
+        reply.clear()
+        reply.update({"content": "", "tool_calls": [{"function": {"name": "shell_exec_readonly",
+                                                                  "arguments": {"command": "free -h"}}}]})
+        try:
+            await O.Orchestrator._fast_chat_response(fake, req, "chat", {"confidence": 0.9})
+            raise AssertionError("a direct tool call was dropped")
+        except O._NeedsWork as exc:
+            assert "shell_exec_readonly" in str(exc), exc
         reply.clear()
         reply.update({"content": "今天是星期四。"})
         r = await O.Orchestrator._fast_chat_response(fake, req, "chat", {"confidence": 0.9})
