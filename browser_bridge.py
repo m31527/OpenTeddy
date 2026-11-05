@@ -489,6 +489,10 @@ def _site_notes(goal: str) -> str:
     for rx, name, home, search in SITES:
         if rx.search(goal or ""):
             notes.append(f"{name}：{home}" + (f"；要搜尋可以直接打開 {search.format(q='<關鍵字>')}" if search else ""))
+    if notes and any(s for rx, _, _, s in SITES if rx.search(goal or "")):
+        # Hand-encoded, 風扇 came out as 「騎扇」 (2026-11-05); the browser
+        # encodes plain text itself.
+        notes.append("網址裡的關鍵字直接寫原字（例如 keyword=風扇），不要自己轉成 %E9… 編碼")
     return "；".join(notes)
 
 

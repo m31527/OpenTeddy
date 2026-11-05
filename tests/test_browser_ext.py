@@ -464,6 +464,12 @@ async def test_orchestrator() -> None:
     subs = await Orchestrator._plan(o, TaskRequest(goal="那幫我去 momo 購物網站看看vivo x300 最便宜多少錢", session_id="s1"))
     assert "https://www.momoshop.com.tw/search/searchShop.jsp?keyword=" in subs[0].description, \
         "a site named outright comes with its real address — the model made up momo.kgtw.com"
+    assert "keyword=風扇" in subs[0].description and "不要自己轉成" in subs[0].description
+    from urllib.parse import urlparse
+    from tools.browser_ext_tool import _encoded_words
+    assert _encoded_words(urlparse("https://www.momoshop.com.tw/search/searchShop.jsp?keyword=%E9%A8%8E%E6%89%87")) \
+        == ["騎扇"], "a hand-encoded 風扇 that came out as 騎扇 is shown as 騎扇"
+    assert _encoded_words(urlparse("https://www.momoshop.com.tw/search/searchShop.jsp?keyword=風扇")) == []
     import orchestrator as OR
     privacy.begin("private-1", "tg:999")
     assert not OR._is_local_only()

@@ -11,7 +11,9 @@
   goal: 幫我在 momo 搜尋風扇，列出前 3 個商品和價格
   checks:
     - {check: answer_contains, any: ["扇"]}
-    - {check: answer_not_contains, any: ["Nintendo", "任天堂", "Roborock", "石頭科技"]}
+    - {check: answer_contains, any: ["$", "元", "NT"]}
+    # 2026-11-05: a hand-encoded 風扇 searched 「騎扇」/「騎行箱」.
+    - {check: answer_not_contains, any: ["Nintendo", "任天堂", "Roborock", "石頭科技", "騎"]}
     - {check: asked, max: 0}
   seconds: 120
 

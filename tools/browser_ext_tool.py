@@ -30,7 +30,7 @@ import json
 import re
 import time
 from typing import Any, Dict, Optional, Tuple
-from urllib.parse import urlparse
+from urllib.parse import parse_qsl, unquote, urlparse
 
 import logging
 
@@ -125,6 +125,19 @@ async def browser_tabs() -> Dict[str, Any]:
     return make_result(True, result="\n".join(lines) or "(no web pages open)", duration_ms=_ms(t0))
 
 
+def _encoded_words(u) -> list:
+    """Words a URL carries %-encoded, in plain text. The model encodes
+    Chinese by hand and gets bytes wrong: 風扇 came out as %E9%A8%8E%E6%89%87
+    — 「騎扇」 — and it reopened the same wrong address until the loop guard
+    stopped it (2026-11-05 live momo). Seeing the word it really searched
+    for is what lets it notice."""
+    words = []
+    for raw in [v for _, v in parse_qsl(u.query, keep_blank_values=True)] + [unquote(u.path)]:
+        if raw and not raw.isascii() and raw not in words:
+            words.append(raw)
+    return words if "%" in u.geturl() else []
+
+
 async def browser_open(url: str) -> Dict[str, Any]:
     t0 = _start()
     u = urlparse(str(url or "").strip())
@@ -135,7 +148,11 @@ async def browser_open(url: str) -> Dict[str, Any]:
     except B.BrowserError as exc:
         return make_result(False, error=str(exc), duration_ms=_ms(t0))
     B.set_task_tab(privacy.current_task(), r.get("tab"))
-    return make_result(True, result=_page(r), duration_ms=_ms(t0))
+    words = _encoded_words(u)
+    note = (f"(This address searches for / opens: {'、'.join('「' + w + '」' for w in words)}. If that isn't "
+            "what was asked, the encoding is wrong — write the words as plain text in the address, "
+            "e.g. keyword=風扇, never %E9… by hand.)\n") if words else ""
+    return make_result(True, result=note + _page(r), duration_ms=_ms(t0))
 
 
 async def browser_read(tab: Optional[int] = None, find: str = "", part: int = 1) -> Dict[str, Any]:
