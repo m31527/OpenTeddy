@@ -205,6 +205,12 @@ async def scripted(rig: BrowserRig) -> None:
         assert "qdr:w" in out, "freshness reaches the search address"
         await asyncio.sleep(0.5)
         assert not [u for u in await open_urls() if "/search" in u], "the search tab is closed again"
+        conn = B._live(B.EVAL_PERSON)
+        saved_v, conn.version = conn.version, "0.2.1"
+        r = await S.web_search("優克美股份有限公司")
+        conn.version = saved_v
+        assert isinstance(r, dict) and not r["success"] and "too old to search" in r["error"] \
+            and r["duration_ms"] < 2000, ("an old extension is skipped at once, not waited out", r)
         r = await S.web_search("要驗證")
         assert isinstance(r, dict) and not r["success"] and "confirm it's a human" in r["error"], r
         await asyncio.sleep(0.5)

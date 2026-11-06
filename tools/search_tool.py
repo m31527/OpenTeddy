@@ -209,13 +209,23 @@ async def _in_their_browser(q: str, n: int, freshness: str) -> Tuple[Any, str]:
         from urllib.parse import quote_plus
         from config import config as cfg
         person = privacy.current_person()
-        if not person or not B._live(person):
+        conn = B._live(person) if person else None
+        if not conn:
             return None, ""
+        # Extensions before 0.2.3 have no "search": don't wait out a timeout
+        # (2026-11-06: an 0.2.1 copy cost 30 s per search, twice).
+        try:
+            too_old = tuple(int(x) for x in (conn.version or "0").split(".")) < (0, 2, 3)
+        except ValueError:
+            too_old = True
+        if too_old:
+            return None, (f"(The person's Chrome extension is version {conn.version or '?'}, too old to search; "
+                          "they need to update it to the current one in chrome://extensions.)")
         url = (getattr(cfg, "browser_search_url", "") or "https://www.google.com/search?q={q}").replace(
             "{q}", quote_plus(q))
         if freshness in _GOOGLE_FRESHNESS:
             url += ("&" if "?" in url else "?") + "tbs=" + _GOOGLE_FRESHNESS[freshness]
-        r = await B.call("search", {"url": url, "max_results": n}, timeout=30, person=person)
+        r = await B.call("search", {"url": url, "max_results": n}, timeout=20, person=person)
     except Exception as exc:  # noqa: BLE001 — BrowserError, an old extension, …
         logger.info("web_search in the person's browser didn't work: %s", exc)
         return None, f"(Searching in the person's Chrome didn't work: {exc})"
