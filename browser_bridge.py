@@ -441,15 +441,18 @@ _OWN_PAGE = re.compile(
     r"|(開著|正在看|打開著).{0,6}(文章|公告|貼文|網頁|分頁|頁)|(開著|正在看|打開著)的?(這|那)"
     r"|\b(this|current) (page|tab)\b|\bmy (browser|chrome|tab)\b)", re.I)
 _URL = re.compile(r"https?://\S+", re.I)
+# Not \b: Chinese characters are word characters too, so 「去pchome 幫我找」
+# has no \b before "pchome" and the site went unseen (2026-11-06).
+_W0, _W1 = r"(?<![A-Za-z0-9])", r"(?![A-Za-z0-9])"
 _WEB_ACTION = re.compile(
     r"(搜尋|找|點擊|點一下|點選|點進|按(?!照|時|期|摩|揭|理)|填|輸入|送出|提交|登入|買|購買|下單|結帳|訂單|表單|留言|"
     r"收藏|分享|刪除|申請|預約|報名|下一頁|翻頁|每一頁|好幾頁|"
-    r"\b(search|click|fill|submit|buy|order|log ?in|sign ?in)\b)", re.I)
+    rf"{_W0}(search|click|fill|submit|buy|order|log ?in|sign ?in){_W1})", re.I)
 
 
 _SITE = re.compile(
     r"((去|到|在|上|打開|開啟|用)\s*[A-Za-z0-9\u4e00-\u9fff .\-]{1,24}?(網站|網頁|購物網|官網|商城)"
-    r"|\b(momo|shopee|pchome|amazon|coupang|youtube|facebook|instagram|threads|dcard|ptt|gmail|github)\b"
+    rf"|{_W0}(momo|shopee|pchome|amazon|coupang|youtube|facebook|instagram|threads|dcard|ptt|gmail|github){_W1}"
     r"|蝦皮|博客來|露天|酷澎|淘寶|天貓|yahoo\s*(拍賣|購物))", re.I)
 _LOOK_UP = re.compile(r"(看看|看一下|多少錢|價格|價錢|售價|便宜|最低價|特價|優惠|現在多少|賣多少|"
                       r"有沒有|有貨|查一下|查查)")
@@ -484,7 +487,7 @@ SITES = [
     (re.compile(r"youtube", re.I), "YouTube", "https://www.youtube.com",
      "https://www.youtube.com/results?search_query={q}"),
     (re.compile(r"dcard", re.I), "Dcard", "https://www.dcard.tw", "https://www.dcard.tw/search?query={q}"),
-    (re.compile(r"\bptt\b", re.I), "PTT", "https://www.ptt.cc/bbs/index.html", ""),
+    (re.compile(rf"{_W0}ptt{_W1}", re.I), "PTT", "https://www.ptt.cc/bbs/index.html", ""),
     (re.compile(r"github", re.I), "GitHub", "https://github.com", "https://github.com/search?q={q}"),
     (re.compile(r"gmail", re.I), "Gmail", "https://mail.google.com", ""),
 ]

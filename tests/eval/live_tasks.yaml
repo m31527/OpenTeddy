@@ -29,3 +29,32 @@
     - {check: answer_not_contains, any: ["石頭", "掃地機", "Roborock", "Nintendo", "歡迎頁面"]}
     - {check: asked, max: 0}
   seconds: 120
+
+# 2026-11-06: 「去pchome」 right against Chinese went unseen as a site (\b),
+# so the planner split it, opened the PChome portal (its search is news), and
+# the model — sure from memory that the Pixel 11 wasn't out — reported only
+# cases while phones from NT$26,111 were on the first part of the page.
+- id: real_pchome_cheapest
+  category: web
+  browser: {confirm: deny}
+  goal: 去pchome 幫我找最便宜的google Pixel 11 手機價格
+  checks:
+    - {check: answer_contains, any: ["Pixel 11"]}
+    - {check: answer_contains, any: ["$", "元", "NT"]}
+    - {check: answer_not_contains, any: ["尚未發售", "尚未正式", "沒有 Google Pixel 11", "Pixel 8"]}
+    - {check: asked, max: 0}
+  seconds: 150
+
+# The same day, no site named: the planner wrote "python_exec + urllib", the
+# executor scraped store.google.com/product/pixel_8_pro instead, and the
+# answer said the Pixel 11 wasn't released. In the rig Google may well ask
+# for a captcha; then an honest "couldn't search" passes, a Pixel 8 doesn't.
+- id: real_pixel_price
+  category: web
+  browser: {confirm: deny}
+  goal: 我想買最便宜的 google Pixel 11 手機，請問價格多少
+  checks:
+    - {check: answer_contains, any: ["Pixel 11"]}
+    - {check: answer_not_contains, any: ["尚未發售", "尚未正式", "Pixel 8"]}
+    - {check: asked, max: 0}
+  seconds: 180

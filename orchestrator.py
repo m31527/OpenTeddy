@@ -118,6 +118,16 @@ _PLAN_SYSTEM_CODE = """\
   ❌ 錯誤：先一個「cd /path/to/project」，再一個「docker compose up」
 docker compose 也可以用 `-f /path/to/docker-compose.yml` 取代 cd。
 
+【查資料：價格、消息、產品、公司或人 — 使用者沒給網址】
+要查網路上的事實（現在多少錢、最便宜的、最新消息、某產品／公司／人的資料），
+又沒給網址、沒指定網站 → **1 個 subtask，先用 `web_search`**（在本人的 Chrome
+用 Google 搜），需要細節再用 browser_open / fetch_url 打開最相關的結果頁：
+    [{"description": "用 web_search 搜「Google Pixel 11 價格」，打開最相關的 1–2 個結果頁，列出各型號價格和來源網址",
+      "skill_hint": null, "order": 0}]
+不要自己猜網址寫 python_exec 去爬 — 猜錯網址只會拿到別的東西。
+產品名照使用者的原字搜：沒聽過的型號多半只是比你的知識新，不要換成你知道的舊型號。
+指定了網站（momo、PChome…）就照下面「使用者自己的瀏覽器」那條，在那個網站搜。
+
 【爬蟲 / 抓網頁資料任務 — 最重要規則，違反這條會浪費十分鐘以上】
 
 如果用戶的目標含「爬」/「抓」/「scrape」/「crawl」/「擷取網頁」/
@@ -524,7 +534,10 @@ def _clock_note() -> str:
         f"[Now: {now.strftime('%Y-%m-%d %H:%M')} {now.strftime('%A')} / {weekday_zh}, "
         f"{now.tzname() or ''} (UTC{off[:3]}:{off[3:]}). Use this as today / 今天 / now / 現在, "
         "not your training cutoff. Derive any 農曆 date from it; if you can't compute it "
-        "reliably, say so.]\n\n"
+        "reliably, say so. Your knowledge stops before today, so products, models, versions, "
+        "prices and events newer than it exist: never call something unreleased or nonexistent "
+        "because you haven't heard of it, or swap it for an older one you know — look it up, and go by what the "
+        "pages say, even over an earlier answer in this conversation.]\n\n"
     )
 
 

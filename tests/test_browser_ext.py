@@ -457,8 +457,11 @@ async def test_orchestrator() -> None:
                  "這是結帳頁，幫我填收件人王小明然後送出", "我開著的這篇文章在講什麼？",
                  "到 https://shop.tw 搜尋除濕機", "在 https://shop.tw/album 幫我把第一張照片按愛心收藏",
                  "我開著的這張營收圖表，哪個月最高？", "那幫我去 momo 購物網站看看vivo x300 最便宜多少錢",
-                 "去蝦皮看看 iPhone 17 多少錢"):
+                 "去蝦皮看看 iPhone 17 多少錢",
+                 # A site name right against Chinese: no \b there (2026-11-06).
+                 "去pchome 幫我找最便宜的google Pixel 11 手機價格", "在momo看看風扇多少錢", "上youtube搜尋貓"):
         assert B.looks_like_browser_chore(goal), goal
+    assert not B._SITE.search("我想去 pchomeland 玩") and not B._SITE.search("momoshop 是什麼")
     for goal in ("整理 https://example.com 的重點", "寫一個 slugify.py", "請按照 https://x.com 的說明安裝",
                  "冷氣開著的話很耗電嗎", "momo 是什麼公司？", "看看今天天氣",
                  "幫我翻譯這頁\n[Attachments in workspace]\n- a.pdf (3 KB)"):
