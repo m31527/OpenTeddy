@@ -394,6 +394,15 @@ async def test_who() -> None:
     assert B.parse_command("幫我打開瀏覽器查天氣") is None
     assert B.parse_command("連接瀏覽器" + "然後" * 30) is None
     assert B.answer_from_chat(BOB, "好") is None, "no question pending → a normal message"
+    # Two copies of the extension connected (2026-11-05: 0.2.2 and an old
+    # 0.2.1 on one Mac): the up-to-date one is used, whichever came last.
+    new_c, old_c = B._Conn(None, "tg:two", "h", "Mac", False), B._Conn(None, "tg:two", "h", "Mac", False)
+    new_c.version, old_c.version = B.EXT_VERSION, "0.2.1"
+    B._conns["tg:two"] = [new_c, old_c]
+    assert B._live("tg:two") is new_c
+    B._conns["tg:two"] = [old_c]
+    assert B._live("tg:two") is old_c, "an old copy is still used when it's the only one"
+    B._conns.pop("tg:two")
     assert T._risky_click({"name": "刪除", "submits": False})
     assert T._risky_click({"name": "下一步", "submits": True, "form": {"search": False}})
     assert not T._risky_click({"name": "搜尋", "submits": True, "form": {"search": False}})

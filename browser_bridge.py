@@ -317,6 +317,7 @@ class _Conn:
     def __init__(self, ws: Any, person: str, token_hash: str, label: str, paused: bool) -> None:
         self.ws, self.person, self.token_hash = ws, person, token_hash
         self.label, self.paused = label, paused
+        self.version = ""
         self.pending: Dict[str, asyncio.Future] = {}
         self._lock = asyncio.Lock()
 
@@ -371,8 +372,12 @@ class _Conn:
 
 
 def _live(person: str) -> Optional[_Conn]:
+    """The person's connected browser — an up-to-date copy of the extension
+    first. (2026-11-05: one Mac had 0.2.2 and an old 0.2.1 connected, and
+    whichever connected last was used.)"""
     live = _conns.get(person) or []
-    return live[-1] if live else None
+    current = [c for c in live if EXT_VERSION and c.version == EXT_VERSION]
+    return (current or live)[-1] if live else None
 
 
 async def serve(ws: Any) -> None:
@@ -396,8 +401,9 @@ async def serve(ws: Any) -> None:
         return
     conn = _Conn(ws, person, _hash(token), str(hello.get("label") or label or "")[:60],
                  bool(hello.get("paused")))
-    _conns.setdefault(person, []).append(conn)
     have = str(hello.get("version") or "")
+    conn.version = have
+    _conns.setdefault(person, []).append(conn)
     logger.info("Browser online for %s (%s, extension %s)", person, conn.label, have or "?")
     if EXT_VERSION and have != EXT_VERSION and person.startswith("tg:") and (person, have) not in _told_outdated:
         _told_outdated.add((person, have))

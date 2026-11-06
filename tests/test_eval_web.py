@@ -182,6 +182,39 @@ async def scripted(rig: BrowserRig) -> None:
     assert r["success"] and "260" in r["result"], r
     print("  ✓ by sight: a trash icon asks first (refused, nothing deleted); browser_look answers")
 
+    # web_search in the person's own Chrome: a results page in a background
+    # tab, read by shape (no class names), the tab closed; a "verify you're
+    # human" page is reported, not touched.
+    from tools import search_tool as S
+
+    async def open_urls():
+        async def _ev():
+            return [p.url for p in rig._ctx.pages]
+        return await loop.run_in_executor(None, rig._call, _ev(), 20)
+
+    saved_search = config.browser_search_url
+    config.browser_search_url = rig.site_url + "/search?q={q}"
+    try:
+        await loop.run_in_executor(None, rig.begin_task, {"confirm": "deny"})
+        privacy.begin("eval-search", B.EVAL_PERSON)
+        out = await S.web_search("優克美股份有限公司", max_results=5, freshness="pw")
+        assert isinstance(out, str), out
+        assert "[優克美股份有限公司 - 公司簡介](https://ucom.example.tw/about)" in out and "導電膠" in out, out
+        assert "統一編號 12345678" in out and "Side panel: 優克美股份有限公司 電子材料公司" in out, out
+        assert "ads.example" not in out and "related" not in out and "› about" not in out, out
+        assert "qdr:w" in out, "freshness reaches the search address"
+        await asyncio.sleep(0.5)
+        assert not [u for u in await open_urls() if "/search" in u], "the search tab is closed again"
+        r = await S.web_search("要驗證")
+        assert isinstance(r, dict) and not r["success"] and "confirm it's a human" in r["error"], r
+        await asyncio.sleep(0.5)
+        assert not [u for u in await open_urls() if "/sorry/" in u], "the verification page is closed, untouched"
+        rig.end_task()
+    finally:
+        config.browser_search_url = saved_search
+    print("  ✓ web_search in the person's Chrome: results by shape (no ads, no engine links), tab closed; "
+          "a human check is reported, not touched")
+
     from config import config
     saved, config.vision_model = config.vision_model, ""
     try:

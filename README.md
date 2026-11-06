@@ -151,7 +151,7 @@ Claude Pro auto-renewing.
 - **Per-step deliverable verification** — LLM-as-judge confirms each produced file actually matches the goal, catching the "wrote a report *about* the game instead of the game" failure mode. Toggleable for big-model setups where extra calls are too costly.
 - **Loop hardening for small models** — adaptive prompts, a parallel low-risk tool fan-out, per-tool-name caps, a circuit breaker, discovery memos, a context watchdog that compresses old turns before busting `num_ctx`, and pinned session-workspace context that prevents "model wanders to the wrong directory" drift.
 - **Forever-command guard** — shell tool refuses `tail -f`, `journalctl -f`, `watch …`, and auto-adds `-d` to `docker compose up` so a runaway log stream can't hang an entire subtask.
-- **Web search built in** — Chat mode exposes the `web_search` tool (Brave Search API) so the local model can ground answers in current data instead of hallucinating recent events / version numbers / today's prices.
+- **Web search built in** — `web_search` searches Google in the asking person's own Chrome when they paired the extension (no key; their language and region), else the Brave Search API, so the local model can ground answers in current data instead of hallucinating recent events / version numbers / today's prices.
 - **Reconnect-safe streaming** — the WebSocket carries a 600-event ring buffer so a flaky network or a tab refresh replays the missed events instead of leaving the UI stuck.
 - **Web dashboard** — submit tasks, watch tool calls stream live, review pending approvals, manage memory, render Markdown/GFM tables, embed Chart.js datalabels in HTML reports, see live "Saved $X vs GPT-4" in the sidebar, and tune settings.
 - **Persistent artifact chips** — files produced by a task keep their 📎 download + 👁 preview buttons after switching sessions, closing the tab, or opening from another device.
@@ -252,7 +252,7 @@ not just fast enough to look impressive on a single tool call:
 | **WS reconnect + replay** | The dashboard WebSocket carries a 600-event ring buffer keyed by sequence number — a refreshed tab or a wifi blip replays missed events on reconnect. |
 | **Pinned workspace context** | Every executor round prepends `WORKSPACE: <abs-path>` to the user message, and shell-tool refusals embed the correct path — small models stop drifting to "their idea of the project root" and re-emitting `working_dir=/home/.../OpenTeddy` round after round. |
 | **Forever-command guard** | `_sanitize_command` auto-adds `-d` to `docker compose up`, strips `-f`/`--follow` from `docker logs` / `docker compose logs`, and refuses `tail -f`, `journalctl -f`, `watch …` outright. Stops a container in a restart-crash loop from holding a subtask hostage forever. |
-| **Web-search grounding** | Chat mode exposes the `web_search` tool (Brave Search) so the local model can ground answers in current data instead of hallucinating events / version numbers / prices past its training cutoff. |
+| **Web-search grounding** | Chat mode exposes the `web_search` tool (Google in the person's own Chrome, else Brave Search) so the local model can ground answers in current data instead of hallucinating events / version numbers / prices past its training cutoff. |
 
 ## File Structure
 
@@ -1263,6 +1263,8 @@ extension) removes it.
 - Tasks that used the browser are private: no content on the web UI or in
   memory.
 
+**Web search goes through your Chrome too.** Once it's connected, `web_search` opens a background tab, searches Google, reads the results and closes the tab — no API key, and your Chrome's language and region apply. Without a connected browser (the Mac asleep, a scheduled run, someone else asking) it uses Brave Search if `BRAVE_SEARCH_API_KEY` is set; with neither it says it can't search rather than passing guesses off as results. Two things to know: these searches land in your Google account's search history, and if Google asks the browser to prove it's human, OpenTeddy leaves that page alone and asks you to search once on google.com yourself.
+
 **By sight, when there's no text.** Icon-only buttons (heart, trash, gear)
 and anything drawn on a canvas (games, maps, charts) aren't in the page
 text. For those OpenTeddy screenshots the tab for a local vision model
@@ -1732,7 +1734,8 @@ without a server restart.
 | `GEMMA_MODEL` | `gemma4:e2b` | Orchestrator model tag. |
 | `QWEN_BASE_URL` | `http://localhost:11434` | Ollama base URL for the executor. |
 | `QWEN_MODEL` | `qwen3.5:2b` | Executor model tag. On capable hardware, the recommended value is `qwen3.6:35b` — see [Recommended models](#recommended-models-capable-hardware). |
-| `BRAVE_SEARCH_API_KEY` | — | Optional. Powers the Chat-mode `web_search` tool. Free tier covers 2,000 queries/month at [api-dashboard.search.brave.com](https://api-dashboard.search.brave.com/). Without it, the local model answers from training data and warns the user about staleness. |
+| `BRAVE_SEARCH_API_KEY` | — | Optional. `web_search` for people without a connected browser and for scheduled runs (with one connected, it searches Google in their Chrome). Free tier covers 2,000 queries/month at [api-dashboard.search.brave.com](https://api-dashboard.search.brave.com/). With neither, `web_search` fails and says so — it never passes guesses off as results. |
+| `BROWSER_SEARCH_URL` | `https://www.google.com/search?q={q}` | The results page `web_search` reads in the person's own Chrome. |
 | `DB_PATH` | `openteddy.db` | SQLite database path. |
 | `MEMORY_DB_PATH` | `./memory_db` | ChromaDB directory. |
 | `SKILLS_DIR` | `skills` | Directory for skill files. |

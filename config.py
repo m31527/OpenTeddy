@@ -166,6 +166,11 @@ class Config:
     # the owner (e.g. contrib/locateanything/ — NVIDIA's non-commercial
     # license, see README). Empty = the vision model points, the default.
     grounding_url: str = field(default_factory=lambda: os.getenv("GROUNDING_URL", "").strip())
+    # web_search in the asking person's own Chrome, when it's connected
+    # (tools/search_tool.py): the results page this address gives, {q} the
+    # query. Their Chrome's language and region apply.
+    browser_search_url: str = field(default_factory=lambda: os.getenv(
+        "BROWSER_SEARCH_URL", "https://www.google.com/search?q={q}").strip())
 
     # ── Ad-spend guard (spend_guard.py) ──────────────────────────────────
     # Hard caps on ad-platform calls that spend money, enforced on every

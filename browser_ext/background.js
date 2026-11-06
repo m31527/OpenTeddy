@@ -147,6 +147,7 @@ async function run(op, p) {
   if ((await stored()).paused) throw new Error(PAUSED_MSG);
   if (op === 'tabs') return listTabs();
   if (op === 'open') return openTab(p);
+  if (op === 'search') return search(p);
   const tabId = await pickTab(p.tab);
   if (op === 'read' || op === 'describe' || op === 'describe_at') return inTab(tabId, op, p);
   if (op === 'click' || op === 'type' || op === 'click_at') return act(tabId, op, p);
@@ -193,6 +194,66 @@ async function openTab(p) {
   await loaded(t.id, 20000);
   await inPage(t.id, 'settle', {}).catch(() => {});
   return inTab(t.id, 'read', { max_chars: p.max_chars });
+}
+
+// web_search in the person's own Chrome: the results page in a background
+// tab, read, and the tab closed again. Google changes its markup often, so
+// results are found by shape — a link around an <h3>, and the largest block
+// around it holding no other <h3> — not by class names. A "verify you're
+// human" page is reported, never touched.
+async function search(p) {
+  const url = String(p.url || '');
+  if (!/^https?:\/\//i.test(url)) throw new Error('搜尋網址不對。');
+  const t = await chrome.tabs.create({ url, active: false });
+  try {
+    await loaded(t.id, 15000);
+    const [r] = await chrome.scripting.executeScript({
+      target: { tabId: t.id }, func: pageResults, args: [Math.max(1, Math.min(10, p.max_results || 5))],
+    });
+    const tab = await chrome.tabs.get(t.id);
+    return { ...((r && r.result) || {}), url: tab.url };
+  } finally {
+    chrome.tabs.remove(t.id).catch(() => {});
+  }
+}
+
+// Runs inside the results page; must not use anything from this file.
+function pageResults(n) {
+  if (location.pathname.startsWith('/sorry') || document.querySelector('#captcha-form, #recaptcha, iframe[src*="recaptcha"]')) {
+    return { blocked: 'captcha' };
+  }
+  const clean = (s) => (s || '').replace(/\s+/g, ' ').trim();
+  const root = document.querySelector('#search') || document.querySelector('#rso') || document.querySelector('main') || document.body;
+  const out = [];
+  const seen = new Set();
+  for (const h3 of root.querySelectorAll('h3')) {
+    const a = h3.closest('a[href]') || h3.querySelector('a[href]');
+    if (!a) continue;
+    let href = a.href;
+    let host = '';
+    try {
+      const u = new URL(href);
+      if (u.pathname === '/url' && u.searchParams.get('q')) href = u.searchParams.get('q');
+      host = new URL(href).hostname;
+    } catch { continue; }
+    if (!/^https?:/i.test(href) || seen.has(href) || /^www\.google\./.test(host)) continue;
+    seen.add(href);
+    let box = a;
+    while (box.parentElement && box.parentElement !== root && box.parentElement.querySelectorAll('h3').length === 1) {
+      box = box.parentElement;
+    }
+    const title = clean(h3.innerText);
+    let snippet = clean(box.innerText).replace(title, '');
+    for (const c of box.querySelectorAll('cite')) snippet = snippet.replace(clean(c.innerText), '');
+    out.push({ title, url: href, snippet: clean(snippet).slice(0, 300) });
+    if (out.length >= n) break;
+  }
+  const side = document.querySelector('#rhs');
+  return {
+    results: out,
+    panel: side ? clean(side.innerText).slice(0, 600) : '',
+    text: out.length ? '' : clean(root.innerText).slice(0, 3000),
+  };
 }
 
 async function pickTab(tab) {

@@ -49,6 +49,24 @@ def reset() -> None:
 reset()
 
 
+def _engine(query: str, tbs: str) -> str:
+    """A search results page shaped like Google's — results as a link around
+    an <h3> inside a block, a side panel, an ad-like link without <h3>, a
+    search-engine link of its own — but none of its class names: web_search
+    finds results by shape. 「要驗證」 redirects to the verification page."""
+    hits = [("優克美股份有限公司 - 公司簡介", "https://ucom.example.tw/about",
+             "優克美是一家 2015 年成立的台灣電子材料公司，主要產品為導電膠與散熱材料。"),
+            ("優克美股份有限公司 - 台灣公司網", "https://www.twincn.example/item.aspx?no=12345678",
+             "統一編號 12345678，代表人 王大明，資本額 5,000 萬元，登記地址 桃園市。")]
+    blocks = "".join(
+        f'<div class="r{i}"><div><a href="{url}"><h3>{html.escape(t)}</h3><div><cite>{url.split("/")[2]} › about</cite></div></a></div>'
+        f'<div class="s{i}"><span>{html.escape(sn)}</span></div></div>' for i, (t, url, sn) in enumerate(hits))
+    return _page(f"{query} - 搜尋", (
+        f'<div id="search"><div id="rso"><a href="https://ads.example/x">贊助 優克美</a>{blocks}'
+        f'<div><a href="https://www.google.com/search?q=related"><h3>相關搜尋</h3></a></div></div></div>'
+        f'<div id="rhs"><h2>優克美股份有限公司</h2><p>電子材料公司，總部在桃園。{html.escape(tbs)}</p></div>'))
+
+
 def _page(title: str, body: str) -> str:
     return (f"<!doctype html><html lang='zh-Hant'><head><meta charset='utf-8'><title>{html.escape(title)}</title>"
             "<style>body{font-family:sans-serif;max-width:760px;margin:24px auto;padding:0 16px}"
@@ -233,6 +251,16 @@ class _Handler(BaseHTTPRequestHandler):
             return self._send(_game())
         if u.path == "/chart":
             return self._send(_chart())
+        if u.path == "/search" and q.get("q") == "要驗證":     # → the "are you human" page
+            self.send_response(302)
+            self.send_header("Location", "/sorry/index")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        if u.path == "/search":
+            return self._send(_engine(q.get("q", ""), q.get("tbs", "")))
+        if u.path.startswith("/sorry/"):
+            return self._send(_page("驗證", '<form id="captcha-form"><p>請確認你不是機器人</p></form>'), 429)
         self._send(_page("找不到", "<h1>找不到這一頁</h1>"), 404)
 
     def do_POST(self) -> None:
