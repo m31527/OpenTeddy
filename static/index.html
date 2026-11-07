@@ -21,29 +21,99 @@
        inherit datalabels by default unless they explicitly opt out. -->
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.2.0/dist/chartjs-plugin-datalabels.min.js"></script>
   <script src="/static/i18n.js"></script>
+  <!-- Theme fonts (fall back to the system UI font offline) -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <script>
+    // Icons JS swaps in at runtime, and the theme's colors for code that
+    // paints on a canvas (it can't use var(--…) directly).
+    window.OT_ICONS = {"send": "<svg class=\"ico\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M4.5 10.5L12 3m0 0l7.5 7.5M12 3v18\"/></svg>", "stop": "<svg class=\"ico\" viewBox=\"0 0 24 24\" fill=\"currentColor\" stroke=\"none\" aria-hidden=\"true\"><rect x=\"7\" y=\"7\" width=\"10\" height=\"10\" rx=\"1.5\"/></svg>", "lock": "<svg class=\"ico\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z\"/></svg>", "unlock": "<svg class=\"ico\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M13.5 10.5V6.75a4.5 4.5 0 119 0v3.75M3.75 21.75h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H3.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z\"/></svg>"};
+    window.themeColor = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  </script>
   <style>
+    /* ── Theme tokens ────────────────────────────────────────────────────
+       Everything below this block (and the JS, via var(--…) or
+       themeColor('--…')) uses only these names, so a theme is one block
+       of them — here Obsidian, from the 2026-11 Stitch design. Another
+       theme: the same names under :root[data-theme="name"] { … } and
+       data-theme="name" on <html>. */
     :root {
-      --bg-primary:    #faf9f7;
-      --bg-secondary:  #f3f1ed;
-      --bg-sidebar:    #171717;
-      --sidebar-text:  rgba(255,255,255,0.88);
-      --sidebar-muted: rgba(255,255,255,0.55);
-      --sidebar-hover: rgba(255,255,255,0.06);
-      --sidebar-active:rgba(255,255,255,0.12);
-      --sidebar-border:rgba(255,255,255,0.08);
-      --surface:       #ffffff;
-      --border:        #e5e0d8;
-      --text-primary:  #1a1a1a;
-      --text-secondary:#6b6b6b;
-      --text-muted:    #9b9b9b;
-      --accent:        #d97757;
-      --accent-hover:  #c4623e;
-      --accent-light:  #fdf0eb;
-      --purple:        #7c5cbf;
-      --purple-light:  #f0ecfa;
-      --success:       #2a7d46;
-      --warning:       #b45309;
-      --error:         #cc3333;
+      color-scheme: dark;
+      /* Surfaces, darkest → lightest */
+      --bg-primary:    #07080a;   /* page */
+      --bg-secondary:  #10131a;   /* quiet fills, bars */
+      --surface:       #0b0d13;   /* cards, panels */
+      --surface-2:     #161922;   /* raised: user bubble, inputs, chips */
+      --surface-3:     #1d212d;   /* selected segment */
+      --border:        #1d212d;
+      --border-strong: #262b3a;
+      --border-hover:  #343a4d;
+      /* Text */
+      --text-strong:   #f8fafc;
+      --text-primary:  #e2e8f0;
+      --text-secondary:#94a3b8;
+      --text-muted:    #7c8698;
+      --on-accent:     #ffffff;   /* text on filled accent / danger buttons */
+      /* Sidebar */
+      --bg-sidebar:    #0b0d13;
+      --sidebar-text:  #e2e8f0;
+      --sidebar-muted: #94a3b8;
+      --sidebar-hover: rgba(22,25,34,0.65);
+      --sidebar-active:#10131a;
+      --sidebar-border:#1d212d;
+      /* Overlays: lighten on a dark theme (a light theme darkens instead) */
+      --overlay-1: rgba(255,255,255,0.03);
+      --overlay-2: rgba(255,255,255,0.06);
+      --overlay-3: rgba(255,255,255,0.12);
+      --overlay-4: rgba(255,255,255,0.2);
+      --overlay-5: rgba(255,255,255,0.45);
+      --overlay-text: rgba(255,255,255,0.65);
+      --glass:    rgba(16,19,26,0.78);   /* frosted header */
+      --scrim:    rgba(11,13,19,0.85);   /* frosted cover over a busy control */
+      --backdrop: rgba(0,0,0,0.55);      /* behind modals */
+      /* Shadows */
+      --shadow-weak:   rgba(0,0,0,0.25);
+      --shadow-mid:    rgba(0,0,0,0.4);
+      --shadow-strong: rgba(0,0,0,0.55);
+      --shadow-panel:  0 8px 30px rgba(0,0,0,0.45);
+      --glow-accent:   0 0 25px -5px rgba(249,115,22,0.25);
+      /* Accent */
+      --accent:        #f97316;
+      --accent-hover:  #fb923c;
+      --accent-strong: #ea580c;   /* filled buttons */
+      --accent-soft:   #fdba74;
+      --accent-text:   #fed7aa;   /* text on an accent tint */
+      --accent-faint:  rgba(249,115,22,0.07);
+      --accent-light:  rgba(249,115,22,0.12);
+      --accent-bg-strong: rgba(249,115,22,0.22);
+      --accent-border: rgba(249,115,22,0.35);
+      /* Status: color, tint background, border */
+      --success: #34d399; --success-soft: #6ee7b7; --success-pale: #a7f3d0;
+      --success-bg: rgba(52,211,153,0.12); --success-bg-strong: rgba(52,211,153,0.2);
+      --success-border: rgba(52,211,153,0.3); --success-ring: rgba(52,211,153,0.5);
+      --warning: #fbbf24; --warning-dim: #d99a2b;
+      --warning-bg: rgba(251,191,36,0.12); --warning-bg-strong: rgba(251,191,36,0.2);
+      --warning-border: rgba(251,191,36,0.32);
+      --error: #f87171; --error-bg: rgba(248,113,113,0.12); --error-border: rgba(248,113,113,0.35);
+      --error-ring: rgba(220,38,38,0.5); --danger-solid: #dc2626; --danger-solid-hover: #b91c1c;
+      --info: #93c5fd; --info-bg: rgba(96,165,250,0.12); --info-border: rgba(96,165,250,0.35);
+      --purple: #c084fc; --purple-light: rgba(168,85,247,0.12); --purple-border: rgba(192,132,252,0.35);
+      --violet-solid: #7c3aed; --violet-solid-hover: #6d28d9;
+      --indigo: #a5b4fc; --indigo-bg: rgba(102,126,234,0.14); --indigo-bg-strong: rgba(102,126,234,0.24);
+      --indigo-border: rgba(102,126,234,0.4);
+      --neutral-text: #cbd5e1; --neutral-bg: rgba(148,163,184,0.12);
+      --gold-from: #f4b860; --gold-to: #c46d4f; --gold-glow: rgba(255,230,180,0.7);
+      /* Session modes (sidebar badges, mode switch) */
+      --mode-chat: #7dd3fc;     --mode-chat-bg: rgba(56,189,248,0.10);     --mode-chat-border: rgba(56,189,248,0.25);
+      --mode-code: #34d399;     --mode-code-bg: rgba(16,185,129,0.10);     --mode-code-border: rgba(16,185,129,0.25);
+      --mode-analytic: #c084fc; --mode-analytic-bg: rgba(168,85,247,0.10); --mode-analytic-border: rgba(168,85,247,0.25);
+      /* Logs / terminal output */
+      --code-bg: #05060a; --code-text: #d4d4d4;
+      /* Type and shape */
+      --font-sans: Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang TC', 'Noto Sans TC', 'Microsoft JhengHei', sans-serif;
+      --font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+      --radius-sm: 6px; --radius-md: 8px; --radius-lg: 12px; --radius-xl: 16px; --radius-pill: 999px;
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     html { height: 100%; height: -webkit-fill-available; }
@@ -51,7 +121,8 @@
     body {
       background: var(--bg-primary);
       color: var(--text-primary);
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-family: var(--font-sans);
+      -webkit-font-smoothing: antialiased;
     }
 
     /* ── App Layout ──────────────────────────────────────────────────────── */
@@ -74,7 +145,7 @@
       height: 100vh;
       height: 100dvh;
       overflow: hidden;
-      border-right: 1px solid #000;
+      border-right: 1px solid var(--sidebar-border);
       transition: width 0.2s ease, min-width 0.2s ease;
     }
     .sidebar-header { padding: 0.75rem 0.75rem 0.5rem; }
@@ -122,7 +193,7 @@
     }
     .new-chat-btn {
       width: 100%;
-      background: rgba(255,255,255,0.03);
+      background: var(--overlay-1);
       border: 1px solid var(--sidebar-border);
       color: var(--sidebar-text);
       border-radius: 10px;
@@ -137,7 +208,7 @@
       justify-content: flex-start;
       transition: background 0.15s, border-color 0.15s;
     }
-    .new-chat-btn:hover { background: var(--sidebar-hover); border-color: rgba(255,255,255,0.2); }
+    .new-chat-btn:hover { background: var(--sidebar-hover); border-color: var(--overlay-4); }
     .new-chat-btn .plus-icon {
       display: inline-flex;
       width: 18px; height: 18px;
@@ -164,7 +235,7 @@
     }
     .session-list-wrap::-webkit-scrollbar { width: 6px; }
     .session-list-wrap::-webkit-scrollbar-thumb {
-      background: rgba(255,255,255,0.12);
+      background: var(--overlay-3);
       border-radius: 3px;
     }
     .session-list { display: flex; flex-direction: column; gap: 1px; }
@@ -190,8 +261,8 @@
       text-overflow: ellipsis;
     }
     .session-item-title.editing {
-      background: rgba(255,255,255,0.08);
-      outline: 1px solid rgba(255,255,255,0.25);
+      background: var(--overlay-2);
+      outline: 1px solid var(--overlay-4);
       border-radius: 4px;
       padding: 1px 4px;
       margin: -1px -4px;
@@ -200,7 +271,7 @@
       cursor: text;
       color: var(--sidebar-text);
     }
-    .session-item-title.editing:focus { outline-color: rgba(255,255,255,0.45); }
+    .session-item-title.editing:focus { outline-color: var(--overlay-5); }
     .session-item-actions {
       display: flex;
       gap: 2px;
@@ -225,7 +296,7 @@
       line-height: 1;
       font-family: inherit;
     }
-    .session-action-btn:hover { background: rgba(255,255,255,0.1); color: var(--sidebar-text); }
+    .session-action-btn:hover { background: var(--overlay-3); color: var(--sidebar-text); }
 
     .sidebar-footer {
       border-top: 1px solid var(--sidebar-border);
@@ -287,23 +358,23 @@
       width: calc(100% - 0.6rem);
       margin: 0.4rem 0.3rem 0.2rem;
       padding: 0.55rem 0.75rem;
-      background: linear-gradient(135deg, #f4b860 0%, #c46d4f 100%);
-      border: 1px solid rgba(196, 109, 79, 0.35);
+      background: linear-gradient(135deg, var(--gold-from) 0%, var(--gold-to) 100%);
+      border: 1px solid var(--accent-border);
       border-radius: 9px;
-      color: #ffffff;
+      color: var(--on-accent);
       font-family: inherit;
       cursor: pointer;
       text-align: left;
-      box-shadow: 0 1px 2px rgba(196, 109, 79, 0.18);
+      box-shadow: 0 1px 2px var(--accent-bg-strong);
       transition: transform 0.08s, box-shadow 0.15s, filter 0.12s;
     }
     .upgrade-pill[hidden] { display: none !important; }
-    .upgrade-pill:hover   { filter: brightness(1.06); box-shadow: 0 2px 6px rgba(196, 109, 79, 0.28); }
+    .upgrade-pill:hover   { filter: brightness(1.06); box-shadow: 0 2px 6px var(--accent-bg-strong); }
     .upgrade-pill:active  { transform: scale(0.98); }
     .upgrade-pill-icon {
       flex-shrink: 0;
       font-size: 1rem;
-      filter: drop-shadow(0 0 4px rgba(255, 230, 180, 0.7));
+      filter: drop-shadow(0 0 4px var(--gold-glow));
     }
     .upgrade-pill-body {
       flex: 1; min-width: 0;
@@ -344,7 +415,7 @@
       width: calc(100% - 0.6rem);
       margin: 0.25rem 0.3rem 0.1rem;
       padding: 0.45rem 0.7rem;
-      background: rgba(255, 255, 255, 0.04);
+      background: var(--overlay-1);
       border: 1px solid var(--sidebar-border);
       border-radius: 9px;
       color: var(--sidebar-text);
@@ -356,21 +427,21 @@
     }
     .cloud-pill[hidden] { display: none !important; }
     .cloud-pill:hover {
-      background: rgba(255, 255, 255, 0.10);
-      border-color: rgba(255, 255, 255, 0.20);
+      background: var(--overlay-3);
+      border-color: var(--overlay-4);
     }
     /* Signed-in state: muted-green accent so the user sees at a
        glance "the cloud-sync indicator is in its happy state". The
        green is the same hue as --success but tinted into the dark
        sidebar palette so it doesn't clash. */
     .cloud-pill.signed-in {
-      background: rgba(47, 156, 94, 0.16);
-      border-color: rgba(47, 156, 94, 0.42);
-      color: #b3e5c4;   /* light green that reads on dark sidebar */
+      background: var(--success-bg);
+      border-color: var(--success-border);
+      color: var(--success-soft);   /* light green that reads on dark sidebar */
     }
     .cloud-pill.signed-in:hover {
-      background: rgba(47, 156, 94, 0.24);
-      border-color: rgba(47, 156, 94, 0.55);
+      background: var(--success-bg-strong);
+      border-color: var(--success-border);
     }
     .cloud-pill-icon { flex-shrink: 0; font-size: 0.95rem; }
     .cloud-pill-label {
@@ -392,14 +463,14 @@
       font-weight: 700;
       letter-spacing: 0.06em;
       text-transform: uppercase;
-      background: rgba(255, 255, 255, 0.14);
+      background: var(--overlay-3);
       border-radius: 4px;
-      color: #d8f0e0;
+      color: var(--success-pale);
     }
     .cloud-pill.signed-in .cloud-pill-action { display: inline-block; }
     .cloud-pill.signed-in:hover .cloud-pill-action {
-      background: rgba(255, 255, 255, 0.22);
-      color: #ffffff;
+      background: var(--overlay-4);
+      color: var(--on-accent);
     }
     .sidebar.collapsed .cloud-pill {
       justify-content: center;
@@ -423,9 +494,9 @@
       margin: 0.4rem 0.3rem 0.1rem;
       padding: 0.5rem 0.7rem;
       background: linear-gradient(135deg,
-                                  rgba(196, 109, 79, 0.10) 0%,
-                                  rgba(47, 156, 94,  0.10) 100%);
-      border: 1px solid rgba(47, 156, 94, 0.22);
+                                  var(--accent-light) 0%,
+                                  var(--success-bg) 100%);
+      border: 1px solid var(--success-border);
       border-radius: 9px;
       color: var(--sidebar-text);
       font-family: inherit;
@@ -435,9 +506,9 @@
     }
     .savings-pill:hover {
       background: linear-gradient(135deg,
-                                  rgba(196, 109, 79, 0.16) 0%,
-                                  rgba(47, 156, 94,  0.16) 100%);
-      border-color: rgba(47, 156, 94, 0.42);
+                                  var(--accent-light) 0%,
+                                  var(--success-bg) 100%);
+      border-color: var(--success-border);
     }
     .savings-pill:active { transform: scale(0.98); }
     .savings-pill-icon { font-size: 1.05rem; flex-shrink: 0; }
@@ -450,7 +521,7 @@
     .savings-pill-amount {
       font-size: 0.92rem;
       font-weight: 700;
-      color: #2f9c5e;          /* same green as --success */
+      color: var(--success);          /* same green as --success */
       font-variant-numeric: tabular-nums;
     }
     .savings-pill-sub {
@@ -461,8 +532,8 @@
     /* Brief pulse when the amount ticks up — JS adds .pulsing for ~1.2s. */
     .savings-pill.pulsing { animation: savingsPulse 1.2s ease-out; }
     @keyframes savingsPulse {
-      0%   { box-shadow: 0 0 0 0   rgba(47, 156, 94, 0.5);  }
-      100% { box-shadow: 0 0 0 12px rgba(47, 156, 94, 0);   }
+      0%   { box-shadow: 0 0 0 0   var(--success-ring);  }
+      100% { box-shadow: 0 0 0 12px transparent;   }
     }
     .sidebar.collapsed .savings-pill {
       justify-content: center;
@@ -506,7 +577,7 @@
       margin: 0.25rem 0.3rem 0.1rem;
       padding: 0.45rem 0.65rem;
       background: transparent;
-      border: 1px dashed var(--sidebar-border, rgba(255,255,255,0.12));
+      border: 1px dashed var(--sidebar-border);
       border-radius: 8px;
       color: var(--sidebar-muted);
       font-size: 0.78rem;
@@ -618,9 +689,9 @@
       width: 32px;
       height: 32px;
       padding: 0;
-      border: 1.5px solid var(--sidebar-border, rgba(255,255,255,0.16));
+      border: 1.5px solid var(--sidebar-border);
       border-radius: 50%;
-      background: var(--sidebar-bg, rgba(255,255,255,0.04));
+      background: var(--bg-sidebar);
       cursor: pointer;
       display: flex;
       align-items: center;
@@ -630,11 +701,11 @@
       transition: transform 0.08s, border-color 0.12s, box-shadow 0.12s;
     }
     .profile-avatar:hover {
-      border-color: var(--accent, #c46d4f);
-      box-shadow: 0 0 0 3px rgba(196, 109, 79, 0.18);
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-bg-strong);
     }
     .profile-avatar:active { transform: scale(0.95); }
-    .profile-avatar.signed-in { border-color: rgba(47, 156, 94, 0.5); }
+    .profile-avatar.signed-in { border-color: var(--success-border); }
     .profile-avatar-img {
       width: 100%;
       height: 100%;
@@ -662,13 +733,13 @@
       width: 14px;
       height: 14px;
       border-radius: 50%;
-      background: var(--success, #2f9c5e);
-      color: #fff;
+      background: var(--success);
+      color: var(--on-accent);
       font-size: 0.55rem;
       font-weight: 700;
       line-height: 14px;
       text-align: center;
-      border: 2px solid var(--sidebar-bg, #0e0e0e);
+      border: 2px solid var(--bg-sidebar);
       box-sizing: content-box;
     }
 
@@ -680,13 +751,13 @@
       right: 0;
       bottom: calc(100% + 8px);
       width: 240px;
-      background: var(--surface, #1a1a1a);
-      color: var(--text-primary, #fafafa);
-      border: 1px solid var(--border, rgba(255,255,255,0.12));
+      background: var(--surface);
+      color: var(--text-primary);
+      border: 1px solid var(--border);
       border-radius: 10px;
       box-shadow:
-        0 1px 2px rgba(0, 0, 0, 0.18),
-        0 12px 28px rgba(0, 0, 0, 0.32);
+        0 1px 2px var(--shadow-mid),
+        0 12px 28px var(--shadow-strong);
       padding: 6px;
       z-index: 100;
       font-size: 0.82rem;
@@ -723,7 +794,7 @@
     }
     .profile-popover-email {
       font-size: 0.74rem;
-      color: var(--text-muted, #999);
+      color: var(--text-muted);
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
@@ -731,7 +802,7 @@
     }
     .profile-popover-divider {
       height: 1px;
-      background: var(--border, rgba(255,255,255,0.12));
+      background: var(--border);
       margin: 2px 0;
     }
     .profile-popover-item {
@@ -749,7 +820,7 @@
       transition: background 0.1s;
     }
     .profile-popover-item:hover {
-      background: var(--bg-secondary, rgba(255,255,255,0.06));
+      background: var(--bg-secondary);
     }
 
     /* ── Update pill (sidebar footer) + modal ─────────────────────────── */
@@ -757,10 +828,10 @@
       display: inline-flex; align-items: center; gap: 6px;
       margin-top: 4px;
       padding: 4px 10px;
-      background: rgba(196,109,79,0.15);
-      border: 1px solid rgba(196,109,79,0.35);
+      background: var(--accent-light);
+      border: 1px solid var(--accent-border);
       border-radius: 999px;
-      color: #ffe1d6;
+      color: var(--accent-text);
       cursor: pointer;
       font-family: inherit;
       font-size: 0.74rem;
@@ -768,7 +839,7 @@
       letter-spacing: 0.01em;
       transition: background 0.12s, border-color 0.12s;
     }
-    .update-pill:hover { background: rgba(196,109,79,0.28); border-color: rgba(196,109,79,0.55); }
+    .update-pill:hover { background: var(--accent-bg-strong); border-color: var(--accent-border); }
     .update-pill[hidden] { display: none; }
     .update-pill-icon { font-size: 0.85rem; line-height: 1; }
     .sidebar.collapsed .update-pill .update-pill-text { display: none; }
@@ -776,7 +847,7 @@
 
     .update-modal-backdrop {
       position: fixed; inset: 0; z-index: 2200;
-      background: rgba(0,0,0,0.45);
+      background: var(--backdrop);
       display: none;
       align-items: center; justify-content: center;
       padding: 1rem;
@@ -790,7 +861,7 @@
       max-height: 88vh;
       display: flex; flex-direction: column;
       overflow: hidden;
-      box-shadow: 0 8px 32px rgba(0,0,0,0.18);
+      box-shadow: 0 8px 32px var(--shadow-mid);
     }
     .update-modal-head {
       padding: 1rem 1.25rem 0.7rem;
@@ -832,7 +903,7 @@
     .update-modal-foot .secondary { background: var(--surface); color: var(--text-primary); }
     .update-modal-foot .secondary:hover { background: var(--bg-primary); }
     .update-modal-foot .primary {
-      background: var(--accent); color: white; border-color: var(--accent);
+      background: var(--accent-strong); color: var(--on-accent); border-color: var(--accent-strong);
       font-weight: 500;
     }
     .update-modal-foot .primary:hover { background: var(--accent-hover); }
@@ -852,7 +923,7 @@
     .update-step.error   .update-step-icon { color: var(--error); }
     .update-step.error   .update-step-name { color: var(--error); }
     .update-log {
-      background: #0f0f0f; color: #d4d4d4;
+      background: var(--code-bg); color: var(--code-text);
       font-family: "SF Mono", Menlo, monospace;
       font-size: 0.74rem; line-height: 1.45;
       padding: 0.7rem 0.85rem;
@@ -962,14 +1033,14 @@
     .mode-btn.active {
       background: var(--surface);
       color: var(--text-primary);
-      box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+      box-shadow: 0 1px 3px var(--shadow-weak);
       /* Each mode gets a themed bottom border when active so the
          switch isn't just a subtle white-on-beige contrast — you can
          tell at a glance which mode is on, especially after a switch. */
     }
-    .mode-btn.active[data-mode="chat"]     { box-shadow: 0 0 0 1px #93c5fd, 0 1px 3px rgba(0,0,0,0.08); }
-    .mode-btn.active[data-mode="code"]     { box-shadow: 0 0 0 1px #86efac, 0 1px 3px rgba(0,0,0,0.08); }
-    .mode-btn.active[data-mode="analytic"] { box-shadow: 0 0 0 1px #c4b5fd, 0 1px 3px rgba(0,0,0,0.08); }
+    .mode-btn.active[data-mode="chat"]     { box-shadow: 0 0 0 1px var(--mode-chat-border), 0 1px 3px var(--shadow-weak); }
+    .mode-btn.active[data-mode="code"]     { box-shadow: 0 0 0 1px var(--mode-code-border), 0 1px 3px var(--shadow-weak); }
+    .mode-btn.active[data-mode="analytic"] { box-shadow: 0 0 0 1px var(--mode-analytic-border), 0 1px 3px var(--shadow-weak); }
     /* Locked state: the pill itself goes slightly muted so users see
        at a glance that the segmented control is no longer interactive,
        beyond just the disabled buttons. */
@@ -1018,24 +1089,24 @@
     /* Warn when memory is getting big — 10+ records is usually where
        cross-project contamination starts to bite. */
     .mem-btn.high-memory {
-      background: #fff4ec;
+      background: var(--warning-bg);
       color: var(--warning);
-      border-color: #fdba74;
+      border-color: var(--warning-border);
     }
     .mem-btn.high-memory:hover {
-      background: #fde8d6;
+      background: var(--warning-bg-strong);
     }
 
     /* Privacy pill (local-only mode) — uses the same chip shape as 🧠
        but with a distinct palette so "this session is sealed off from
        the cloud" is obvious at a glance. */
     #privacyBtn.local-only {
-      background: #eef4ff;
-      color: #1d4ed8;
-      border-color: #93c5fd;
+      background: var(--success-bg);
+      color: var(--success-soft);
+      border-color: var(--success-border);
       font-weight: 600;
     }
-    #privacyBtn.local-only:hover { background: #dce6ff; }
+    #privacyBtn.local-only:hover { background: var(--success-bg-strong); }
 
     /* ── Chat-header overflow (mobile) ────────────────────────────────────
        On wider viewports the memory + privacy pills sit inline in the
@@ -1108,7 +1179,7 @@
         background: var(--surface);
         border: 1px solid var(--border);
         border-radius: 12px;
-        box-shadow: 0 8px 24px rgba(0,0,0,0.14), 0 1px 3px rgba(0,0,0,0.06);
+        box-shadow: 0 8px 24px var(--shadow-mid), 0 1px 3px var(--shadow-weak);
         z-index: 200;
       }
       .header-overflow.open .mem-btn {
@@ -1129,12 +1200,12 @@
       padding: 1px 5px;
       border-radius: 4px;
       flex-shrink: 0;
-      background: rgba(255,255,255,0.08);
+      background: var(--overlay-2);
       color: var(--sidebar-muted);
     }
-    .session-mode-badge.mode-chat     { color: #93c5fd; background: rgba(147,197,253,0.12); }
-    .session-mode-badge.mode-code     { color: #86efac; background: rgba(134,239,172,0.12); }
-    .session-mode-badge.mode-analytic { color: #c4b5fd; background: rgba(196,181,253,0.12); }
+    .session-mode-badge.mode-chat     { color: var(--mode-chat); background: var(--mode-chat-bg); border-color: var(--mode-chat-border); }
+    .session-mode-badge.mode-code     { color: var(--mode-code); background: var(--mode-code-bg); border-color: var(--mode-code-border); }
+    .session-mode-badge.mode-analytic { color: var(--mode-analytic); background: var(--mode-analytic-bg); border-color: var(--mode-analytic-border); }
 
     /* ── Container / Cards ───────────────────────────────────────────────── */
     .container { max-width: 960px; margin: 2rem auto; padding: 0 1.25rem; }
@@ -1144,7 +1215,7 @@
       border-radius: 12px;
       padding: 1.5rem;
       margin-bottom: 1.5rem;
-      box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+      box-shadow: 0 1px 3px var(--shadow-weak);
     }
     .card h2 {
       font-size: 0.9375rem;
@@ -1198,7 +1269,7 @@
       cursor: help;
       transition: background 0.12s, color 0.12s;
     }
-    .info-dot:hover { background: var(--text-primary); color: white; }
+    .info-dot:hover { background: var(--text-primary); color: var(--bg-primary); }
     .escalation-toggle {
       display: flex;
       align-items: flex-start;
@@ -1248,15 +1319,15 @@
       user-select: none;
       transition: border-color 0.15s, background 0.15s;
     }
-    .llm-mode-card:hover { background: var(--bg-tertiary, var(--bg-secondary)); }
+    .llm-mode-card:hover { background: var(--surface-2); }
     .llm-mode-card input[type="radio"] {
       position: absolute;
       opacity: 0;
       pointer-events: none;
     }
     .llm-mode-card.selected {
-      border-color: var(--text-primary);
-      background: var(--bg-tertiary, var(--bg-secondary));
+      border-color: var(--accent);
+      background: var(--surface-2);
     }
     .llm-mode-icon  { font-size: 1.4rem; line-height: 1; }
     .llm-mode-title { font-size: 0.82rem; font-weight: 600; color: var(--text-primary); }
@@ -1294,7 +1365,7 @@
       gap: 0.85rem;
       padding: 0.5rem 0.85rem;
       font-size: 0.8rem;
-      border-bottom: 1px solid rgba(0,0,0,0.04);
+      border-bottom: 1px solid var(--overlay-1);
     }
     .perf-row:last-child { border-bottom: none; }
     .perf-row .perf-name {
@@ -1320,8 +1391,8 @@
     .perf-suggest {
       margin: 0 0 0.6rem;
       padding: 0.65rem 0.85rem;
-      background: rgba(196, 109, 79, 0.10);
-      border: 1px solid rgba(196, 109, 79, 0.35);
+      background: var(--accent-light);
+      border: 1px solid var(--accent-border);
       border-radius: 10px;
       font-size: 0.78rem;
       color: var(--text-primary);
@@ -1333,7 +1404,7 @@
     /* ── Buttons ─────────────────────────────────────────────────────────── */
     button {
       background: transparent;
-      border: 1.5px solid var(--text-primary);
+      border: 1.5px solid var(--border-strong);
       color: var(--text-primary);
       border-radius: 8px;
       padding: 0.5rem 1rem;
@@ -1348,20 +1419,20 @@
     button:disabled { opacity: 0.4; cursor: not-allowed; }
 
     .btn-primary {
-      background: var(--text-primary);
-      color: #ffffff;
-      border-color: var(--text-primary);
+      background: var(--accent-strong);
+      color: var(--on-accent);
+      border-color: var(--accent-strong);
     }
-    .btn-primary:hover { background: #333333; }
+    .btn-primary:hover { background: var(--accent); border-color: var(--accent); }
 
     .btn-danger { border-color: var(--error); color: var(--error); }
-    .btn-danger:hover { background: #fff0f0; }
+    .btn-danger:hover { background: var(--error-bg); }
 
     .btn-approve { border-color: var(--success); color: var(--success); }
-    .btn-approve:hover { background: #f0fdf4; }
+    .btn-approve:hover { background: var(--success-bg); }
 
     .btn-reject { border-color: var(--error); color: var(--error); }
-    .btn-reject:hover { background: #fff0f0; }
+    .btn-reject:hover { background: var(--error-bg); }
 
     .btn-ghost {
       border: 1.5px solid var(--border);
@@ -1383,10 +1454,10 @@
       border: 1px solid currentColor;
     }
     .status-pending   { color: var(--text-muted); border-color: var(--border); }
-    .status-running   { color: #2563eb; border-color: #93c5fd; background: #eff6ff; }
-    .status-completed { color: var(--success); border-color: #86efac; background: #f0fdf4; }
-    .status-failed    { color: var(--error);   border-color: #fca5a5; background: #fef2f2; }
-    .status-escalated { color: var(--purple);  border-color: #c4b5fd; background: var(--purple-light); }
+    .status-running   { color: var(--info); border-color: var(--info-border); background: var(--info-bg); }
+    .status-completed { color: var(--success); border-color: var(--success-border); background: var(--success-bg); }
+    .status-failed    { color: var(--error);   border-color: var(--error-border); background: var(--error-bg); }
+    .status-escalated { color: var(--purple);  border-color: var(--purple-border); background: var(--purple-light); }
 
     .ws-badge {
       display: inline-block;
@@ -1425,7 +1496,7 @@
       pointer-events: none;
       z-index: 900;
       color: var(--text-primary);
-      box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+      box-shadow: 0 4px 12px var(--shadow-weak);
     }
     #toast.show { opacity: 1; }
 
@@ -1436,7 +1507,7 @@
       border-radius: 12px;
       padding: 16px 18px;
       margin: 4px 0;
-      box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+      box-shadow: 0 1px 3px var(--shadow-weak);
       align-self: stretch;
     }
     .approval-card .approval-header {
@@ -1453,7 +1524,7 @@
       width: 32px; height: 32px;
       display: inline-flex; align-items: center; justify-content: center;
       border-radius: 10px;
-      background: #fbf0dc;
+      background: var(--warning-bg);
       font-size: 0.95rem;
     }
     .approval-card .approval-details > summary {
@@ -1473,7 +1544,7 @@
       color: var(--text-primary);
       border-radius: 8px;
       padding: 10px 14px;
-      font-family: 'Courier New', monospace;
+      font-family: var(--font-mono);
       font-size: 0.82rem;
       line-height: 1.5;
       margin: 8px 0;
@@ -1494,9 +1565,9 @@
        button. Sits between subtext and the action row. */
     .approval-card .approval-countdown {
       font-size: 0.78rem;
-      color: #b45309;             /* amber-700 */
-      background: #fef3c7;        /* amber-100 */
-      border: 1px solid #fde68a;  /* amber-200 */
+      color: var(--warning);
+      background: var(--warning-bg);
+      border: 1px solid var(--warning-border);
       border-radius: 6px;
       padding: 6px 10px;
       margin: 6px 0 4px;
@@ -1549,12 +1620,12 @@
     .approval-card .btn-allow-once kbd { color: var(--text-secondary); }
     /* Always allow — primary dark */
     .approval-card .btn-allow-always {
-      background: var(--text-primary);
-      color: #fff;
-      border: 1px solid var(--text-primary);
+      background: var(--accent-strong);
+      color: var(--on-accent);
+      border: 1px solid var(--accent-strong);
     }
-    .approval-card .btn-allow-always:hover { background: #333; }
-    .approval-card .btn-allow-always kbd { color: rgba(255,255,255,0.65); }
+    .approval-card .btn-allow-always:hover { background: var(--accent); }
+    .approval-card .btn-allow-always kbd { color: var(--overlay-text); }
 
     .approval-card.resolved {
       opacity: 0.55;
@@ -1607,7 +1678,7 @@
     .workspace-bar-path {
       flex: 1;
       min-width: 0;
-      font-family: 'Courier New', monospace;
+      font-family: var(--font-mono);
       color: var(--text-primary);
       white-space: nowrap;
       overflow: hidden;
@@ -1635,8 +1706,8 @@
       color: var(--text-primary);
     }
     .workspace-bar.is-override {
-      border-color: #d4a84b;
-      background: rgba(212, 168, 75, 0.08);
+      border-color: var(--warning-border);
+      background: var(--warning-bg);
     }
     .workspace-bar.is-override .workspace-bar-icon::before {
       content: '⭐';
@@ -1648,7 +1719,7 @@
       display: none;
       position: fixed;
       inset: 0;
-      background: rgba(0,0,0,0.35);
+      background: var(--backdrop);
       z-index: 1050;
       align-items: center;
       justify-content: center;
@@ -1663,7 +1734,7 @@
       max-height: 85vh;
       display: flex;
       flex-direction: column;
-      box-shadow: 0 8px 32px rgba(0,0,0,0.16);
+      box-shadow: 0 8px 32px var(--shadow-mid);
     }
     #fsPickerModal h3 {
       font-size: 1rem;
@@ -1672,7 +1743,7 @@
       margin-bottom: 0.75rem;
     }
     .fs-breadcrumb {
-      font-family: 'Courier New', monospace;
+      font-family: var(--font-mono);
       font-size: 0.78rem;
       color: var(--text-secondary);
       background: var(--bg-secondary);
@@ -1805,7 +1876,7 @@
       border: 1.5px solid var(--border);
       border-radius: 8px;
       padding: 0.4rem 0.6rem;
-      font-family: 'Courier New', monospace;
+      font-family: var(--font-mono);
       font-size: 0.82rem;
       background: var(--bg-primary);
       color: var(--text-primary);
@@ -1856,8 +1927,8 @@
       transition: border-color 0.12s, box-shadow 0.12s;
     }
     .tool-panel-card:hover {
-      border-color: rgba(0, 0, 0, 0.2);
-      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+      border-color: var(--overlay-4);
+      box-shadow: 0 1px 3px var(--shadow-weak);
     }
     .tool-panel-card .tool-name { font-weight: 600; font-size: 0.85rem; margin-bottom: 0.2rem; padding-right: 60px; }
     .tool-panel-card .tool-desc { font-size: 0.75rem; color: var(--text-muted); line-height: 1.45; }
@@ -1879,14 +1950,14 @@
       text-transform: uppercase;
     }
     .cap-badge.builtin {
-      background: rgba(37, 99, 235, 0.10);
-      color: #2563eb;
-      border: 1px solid rgba(37, 99, 235, 0.25);
+      background: var(--info-bg);
+      color: var(--info);
+      border: 1px solid var(--info-border);
     }
     .cap-badge.learned {
-      background: rgba(47, 156, 94, 0.10);
-      color: #2f9c5e;
-      border: 1px solid rgba(47, 156, 94, 0.25);
+      background: var(--success-bg);
+      color: var(--success);
+      border: 1px solid var(--success-border);
     }
     /* Skills extras: success/failure counters + status footer */
     .cap-skill-stats {
@@ -1906,10 +1977,10 @@
       letter-spacing: 0.02em;
       text-transform: uppercase;
     }
-    .cap-skill-status.testing { background: rgba(180, 130, 30, 0.12); color: #b4821e; }
-    .cap-skill-status.active  { background: rgba(47, 156, 94, 0.12); color: #2f9c5e; }
+    .cap-skill-status.testing { background: var(--warning-bg); color: var(--warning); }
+    .cap-skill-status.active  { background: var(--success-bg); color: var(--success); }
     .cap-skill-status.archived,
-    .cap-skill-status.deprecated { background: rgba(120,120,120,0.12); color: var(--text-muted); }
+    .cap-skill-status.deprecated { background: var(--neutral-bg); color: var(--text-muted); }
 
     /* Filter pill row at top of Tools tab — All / Built-in / Learned. */
     .cap-filter {
@@ -1932,9 +2003,9 @@
     }
     .cap-filter-btn:hover { color: var(--text-primary); }
     .cap-filter-btn.active {
-      background: var(--surface, #ffffff);
+      background: var(--surface);
       color: var(--text-primary);
-      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+      box-shadow: 0 1px 2px var(--shadow-weak);
     }
 
     .memory-list { list-style: none; }
@@ -1966,7 +2037,7 @@
       letter-spacing: 0.03em;
     }
     .type-task_result     { color: var(--success); }
-    .type-user_preference { color: #2563eb; }
+    .type-user_preference { color: var(--info); }
     .type-system_context  { color: var(--purple); }
     .type-conversation    { color: var(--warning); }
     .type-unknown         { color: var(--text-muted); }
@@ -2000,7 +2071,7 @@
       flex-shrink: 0;
       line-height: 1.3;
     }
-    .memory-del-btn:hover { color: var(--error); border-color: var(--error); background: #fff0f0; }
+    .memory-del-btn:hover { color: var(--error); border-color: var(--error); background: var(--error-bg); }
 
     .stats-grid {
       display: grid;
@@ -2046,8 +2117,8 @@
     /* Local-model savings callout. Deliberately flashy — the whole point
        is to make the "you saved $X" number feel satisfying. */
     .savings-card {
-      background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%);
-      border: 1px solid #86efac;
+      background: linear-gradient(135deg, var(--success-bg) 0%, var(--surface) 100%);
+      border: 1px solid var(--success-border);
       border-radius: 12px;
       padding: 1.25rem 1.4rem;
       display: grid;
@@ -2057,7 +2128,7 @@
     }
     .savings-label {
       font-size: 0.72rem;
-      color: #166534;
+      color: var(--success-soft);
       text-transform: uppercase;
       letter-spacing: 0.05em;
       font-weight: 600;
@@ -2066,13 +2137,13 @@
     .savings-amount {
       font-size: 2.4rem;
       font-weight: 800;
-      color: #15803d;
+      color: var(--success);
       letter-spacing: -0.02em;
       line-height: 1;
     }
     .savings-sub {
       font-size: 0.82rem;
-      color: #166534;
+      color: var(--success-soft);
       margin-top: 0.45rem;
     }
     .savings-breakdown {
@@ -2080,11 +2151,11 @@
       flex-direction: column;
       gap: 0.3rem;
       font-size: 0.78rem;
-      color: #166534;
+      color: var(--success-soft);
       text-align: right;
       white-space: nowrap;
     }
-    .savings-breakdown b { color: #14532d; font-weight: 700; }
+    .savings-breakdown b { color: var(--success-pale); font-weight: 700; }
     @media (max-width: 560px) {
       .savings-card { grid-template-columns: 1fr; }
       .savings-breakdown { text-align: left; }
@@ -2260,7 +2331,7 @@
       line-height: 1.2;
       flex-shrink: 0;
     }
-    .model-chip-del:hover { color: var(--error); border-color: var(--error); background: #fff0f0; }
+    .model-chip-del:hover { color: var(--error); border-color: var(--error); background: var(--error-bg); }
     .pull-row {
       display: flex;
       gap: 0.65rem;
@@ -2291,7 +2362,7 @@
       overflow: hidden;
     }
     .progress-bar-inner {
-      background: var(--text-primary);
+      background: var(--accent);
       height: 100%;
       border-radius: 999px;
       width: 0%;
@@ -2368,7 +2439,7 @@
       width: 5px;
       height: 5px;
       border-radius: 50%;
-      background: var(--accent, #2563eb);
+      background: var(--accent);
       animation: msgSpinnerBounce 1.2s ease-in-out infinite;
     }
     .msg-spinner > span:nth-child(2) { animation-delay: 0.15s; }
@@ -2382,8 +2453,9 @@
     }
 
     .msg-user {
-      background: var(--text-primary);
-      color: #ffffff;
+      background: var(--surface-2);
+      color: var(--text-strong);
+      border: 1px solid var(--border-strong);
       border-radius: 18px 18px 4px 18px;
       padding: 11px 16px;
       max-width: 80%;
@@ -2409,7 +2481,7 @@
       max-width: 100%;
       padding: 3px 10px;
       border-radius: 999px;
-      background: rgba(255,255,255,0.14);
+      background: var(--overlay-3);
       font-size: 0.76rem;
       overflow: hidden;
       text-overflow: ellipsis;
@@ -2474,7 +2546,7 @@
       border: 1px solid var(--border);
       border-radius: 16px;
       padding: 14px 14px 8px;
-      box-shadow: 0 1px 2px rgba(26,26,26,0.04), 0 6px 20px rgba(26,26,26,0.04);
+      box-shadow: 0 1px 2px var(--shadow-strong), 0 8px 24px var(--shadow-strong);
       animation: run-in 0.25s ease-out;
     }
     @keyframes run-in {
@@ -2502,7 +2574,7 @@
       100% { transform: scale(1.4); opacity: 0; }
     }
     .run-card.is-waiting .run-orb,
-    .run-card.is-waiting .run-orb::after { background: #d99a2b; border-color: #d99a2b; }
+    .run-card.is-waiting .run-orb::after { background: var(--warning-dim); border-color: var(--warning-dim); }
     .run-head-text { flex: 1; min-width: 0; }
     .run-title {
       font-size: 0.95rem;
@@ -2531,7 +2603,7 @@
       position: absolute; inset: 0 auto 0 0;
       width: 6%;
       border-radius: inherit;
-      background: linear-gradient(90deg, #e8a184, var(--accent));
+      background: linear-gradient(90deg, var(--accent-soft), var(--accent));
       transition: width 0.5s ease;
     }
     .run-bar.is-indeterminate > i {
@@ -2605,13 +2677,13 @@
       animation: spin 0.8s linear infinite;
     }
     .run-step.is-done .run-step-state::before    { content: '✓'; }
-    .run-step.is-done .run-step-state            { color: var(--success); background: #e7f3eb; }
+    .run-step.is-done .run-step-state            { color: var(--success); background: var(--success-bg); }
     .run-step.is-retry .run-step-state::before   { content: '↻'; }
-    .run-step.is-retry .run-step-state           { color: #b4741e; background: #fbf0dc; }
-    .run-step.is-retry .run-step-note            { color: #b4741e; }
+    .run-step.is-retry .run-step-state           { color: var(--warning); background: var(--warning-bg); }
+    .run-step.is-retry .run-step-note            { color: var(--warning); }
     .run-step.is-waiting .run-step-state::before { content: '•'; font-size: 1.1rem; }
-    .run-step.is-waiting .run-step-state         { color: #d99a2b; background: #fbf0dc; }
-    .run-step.is-waiting .run-step-note          { color: #b4741e; font-weight: 600; }
+    .run-step.is-waiting .run-step-state         { color: var(--warning-dim); background: var(--warning-bg); }
+    .run-step.is-waiting .run-step-note          { color: var(--warning); font-weight: 600; }
     .run-step.is-skipped .run-step-state::before,
     .run-step.is-stopped .run-step-state::before { content: '–'; }
     .run-step.is-denied .run-step-state::before  { content: '✕'; }
@@ -2628,7 +2700,7 @@
       border: 1px solid var(--border);
     }
     .run-step-tool {
-      font-family: "SF Mono", Menlo, Consolas, monospace;
+      font-family: var(--font-mono);
       font-size: 0.72rem;
       color: var(--purple);
     }
@@ -2642,7 +2714,7 @@
     }
     .run-step-detail pre {
       margin-top: 3px;
-      font-family: "SF Mono", Menlo, Consolas, monospace;
+      font-family: var(--font-mono);
       font-size: 0.72rem;
       line-height: 1.5;
       color: var(--text-secondary);
@@ -2663,7 +2735,7 @@
       gap: 6px 12px;
       margin-top: 12px;
       padding-top: 10px;
-      border-top: 1px solid rgba(26,26,26,0.07);
+      border-top: 1px solid var(--overlay-2);
       font-size: 0.76rem;
       color: var(--text-muted);
     }
@@ -2671,7 +2743,7 @@
     .result-meta .dot { opacity: 0.5; }
     .result-badge { font-weight: 600; }
     .result-badge.tone-ok    { color: var(--success); }
-    .result-badge.tone-warn  { color: #b4741e; }
+    .result-badge.tone-warn  { color: var(--warning); }
     .result-badge.tone-fail  { color: var(--error); }
     .result-badge.tone-muted { color: var(--text-secondary); }
     .result-badge.tone-ok::before    { content: '✓ '; }
@@ -2716,10 +2788,10 @@
       color: var(--text-muted);
       background: var(--bg-secondary);
     }
-    .process-plan li.is-completed .process-mark { color: var(--success); background: #e7f3eb; }
+    .process-plan li.is-completed .process-mark { color: var(--success); background: var(--success-bg); }
     .process-plan li.is-completed .process-mark::before { content: '✓'; }
     .process-plan li.is-failed .process-mark,
-    .process-plan li.is-escalated .process-mark { color: #b4741e; background: #fbf0dc; }
+    .process-plan li.is-escalated .process-mark { color: var(--warning); background: var(--warning-bg); }
     .process-plan li.is-failed .process-mark::before { content: '!'; }
     .process-plan li.is-escalated .process-mark::before { content: '↗'; }
     .result-process .run-steps { margin-left: -4px; }
@@ -2761,12 +2833,12 @@
     }
     .md-table tbody td {
       padding: 7px 12px;
-      border-bottom: 1px solid rgba(0,0,0,0.05);
+      border-bottom: 1px solid var(--overlay-1);
       vertical-align: top;
     }
     .md-table tbody tr:last-child td { border-bottom: none; }
-    .md-table tbody tr:nth-child(even) td { background: rgba(0,0,0,0.015); }
-    .md-table tbody tr:hover td { background: rgba(196,109,79,0.06); }
+    .md-table tbody tr:nth-child(even) td { background: var(--overlay-1); }
+    .md-table tbody tr:hover td { background: var(--accent-faint); }
     /* "合計 / Total" rows: bolder when the first cell is wrapped in <strong> */
     .md-table tbody tr td:first-child strong { color: var(--text-primary); }
     .md-table tbody tr:has(td:first-child strong) td {
@@ -2780,7 +2852,7 @@
     }
     @keyframes plan-pulse {
       0%, 100% { background: var(--bg-secondary); }
-      50%      { background: rgba(196,109,79,0.07); }
+      50%      { background: var(--accent-faint); }
     }
 
     .md-body h2, .md-body h3, .md-body h4 {
@@ -2802,7 +2874,7 @@
     }
     .md-body ul.md-list li { margin: 0.15rem 0; line-height: 1.5; }
     .md-body .md-inline-code {
-      font-family: 'Courier New', monospace;
+      font-family: var(--font-mono);
       font-size: 0.85em;
       background: var(--surface);
       border: 1px solid var(--border);
@@ -2812,7 +2884,7 @@
       word-break: break-all;
     }
     .md-body pre.md-pre {
-      font-family: 'Courier New', monospace;
+      font-family: var(--font-mono);
       font-size: 0.78rem;
       line-height: 1.5;
       background: var(--surface);
@@ -2853,9 +2925,9 @@
     }
     .file-card-badge.tone-web   { background: var(--accent-light); color: var(--accent-hover); }
     .file-card-badge.tone-image { background: var(--purple-light); color: var(--purple); }
-    .file-card-badge.tone-data  { background: #e7f3eb; color: var(--success); }
-    .file-card-badge.tone-doc   { background: #e8eef8; color: #3b5b8f; }
-    .file-card-badge.tone-code  { background: #eceae6; color: #4a4a4a; }
+    .file-card-badge.tone-data  { background: var(--success-bg); color: var(--success); }
+    .file-card-badge.tone-doc   { background: var(--info-bg); color: var(--info); }
+    .file-card-badge.tone-code  { background: var(--neutral-bg); color: var(--neutral-text); }
     .file-card-badge.tone-other { background: var(--bg-secondary); color: var(--text-secondary); }
     .file-card-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
     .file-card-name {
@@ -2881,8 +2953,8 @@
       transition: background 0.12s, border-color 0.12s;
     }
     .file-btn:hover { background: var(--bg-secondary); }
-    .file-btn.primary { background: var(--text-primary); border-color: var(--text-primary); color: #fff; }
-    .file-btn.primary:hover { background: #333; }
+    .file-btn.primary { background: var(--accent-strong); border-color: var(--accent-strong); color: var(--on-accent); }
+    .file-btn.primary:hover { background: var(--accent); border-color: var(--accent); }
 
     /* "Let Claude fix" button — shown inside a failed task's result
        card. Deliberately uses Claude's brand-ish purple so it visually
@@ -2897,8 +2969,8 @@
       flex-wrap: wrap;
     }
     .btn-claude-fix {
-      background: var(--purple);
-      color: #fff;
+      background: var(--violet-solid);
+      color: var(--on-accent);
       border: none;
       border-radius: 8px;
       padding: 8px 16px;
@@ -2911,12 +2983,12 @@
       align-items: center;
       gap: 6px;
     }
-    .btn-claude-fix:hover:not(:disabled) { background: #6b4ea3; }
+    .btn-claude-fix:hover:not(:disabled) { background: var(--violet-solid-hover); }
     .btn-claude-fix:active:not(:disabled) { transform: scale(0.98); }
     .btn-claude-fix:disabled {
       opacity: 0.55;
       cursor: wait;
-      background: var(--purple);
+      background: var(--violet-solid);
     }
     .claude-fix-hint {
       font-size: 0.76rem;
@@ -2967,11 +3039,11 @@
 
     /* Send button (default) + Stop button (while running) */
     .send-btn {
-      background: var(--text-primary);
+      background: var(--accent-strong);
       border: none;
       border-radius: 10px;
       padding: 6px 11px;
-      color: white;
+      color: var(--on-accent);
       font-size: 1rem;
       cursor: pointer;
       flex-shrink: 0;
@@ -2983,7 +3055,7 @@
       min-width: 34px;
       min-height: 32px;
     }
-    .send-btn:hover { background: #333; }
+    .send-btn:hover { background: var(--accent); }
     .send-btn:disabled { opacity: 0.4; cursor: not-allowed; }
     /* ✨ Optimise-prompt button — sits between textarea and send. */
     .optimize-btn {
@@ -2999,7 +3071,7 @@
       transition: background 0.12s, border-color 0.12s;
       margin-right: 4px;
     }
-    .optimize-btn:hover { background: rgba(196,109,79,0.08); border-color: var(--accent); }
+    .optimize-btn:hover { background: var(--accent-light); border-color: var(--accent); }
     .optimize-btn:disabled { opacity: 0.5; cursor: not-allowed; }
     .optimize-btn.is-running { animation: optimise-spin 1.4s linear infinite; }
     @keyframes optimise-spin {
@@ -3017,7 +3089,7 @@
       display: flex;
       align-items: center;
       justify-content: center;
-      background: rgba(255,255,255,0.85);
+      background: var(--scrim);
       -webkit-backdrop-filter: blur(2px);
               backdrop-filter: blur(2px);
       color: var(--accent);
@@ -3027,13 +3099,13 @@
       pointer-events: none;
     }
     .send-btn.is-stop {
-      background: var(--error);
+      background: var(--danger-solid);
       animation: stop-pulse 1.4s ease-in-out infinite;
     }
-    .send-btn.is-stop:hover { background: #a82525; }
+    .send-btn.is-stop:hover { background: var(--danger-solid-hover); }
     @keyframes stop-pulse {
-      0%, 100% { box-shadow: 0 0 0 0 rgba(204,51,51,0.5); }
-      50%       { box-shadow: 0 0 0 6px rgba(204,51,51,0); }
+      0%, 100% { box-shadow: 0 0 0 0 var(--error-ring); }
+      50%       { box-shadow: 0 0 0 6px transparent; }
     }
 
     /* Per-send Priority input was removed 2026-05-13. The default now
@@ -3087,10 +3159,10 @@
       bottom: calc(100% + 6px);
       left: 0;
       min-width: 240px;
-      background: var(--bg-primary, #1c1c1f);
-      border: 1px solid var(--border, rgba(255,255,255,0.12));
+      background: var(--bg-primary);
+      border: 1px solid var(--border);
       border-radius: 10px;
-      box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+      box-shadow: 0 8px 24px var(--shadow-strong);
       padding: 0.3rem;
       z-index: 50;
       animation: attach-menu-pop 0.12s ease-out;
@@ -3108,19 +3180,19 @@
       padding: 0.55rem 0.7rem;
       border: none;
       background: transparent;
-      color: var(--text-primary, #e5e5e7);
+      color: var(--text-primary);
       cursor: pointer;
       border-radius: 6px;
       text-align: left;
       font: inherit;
     }
     .attach-menu-item:hover {
-      background: var(--bg-secondary, rgba(255,255,255,0.06));
+      background: var(--bg-secondary);
     }
     .attach-menu-icon { font-size: 1.05rem; flex-shrink: 0; }
     .attach-menu-text { display: flex; flex-direction: column; gap: 0.15rem; }
     .attach-menu-label { font-size: 0.84rem; font-weight: 500; }
-    .attach-menu-hint  { font-size: 0.72rem; color: var(--text-muted, rgba(255,255,255,0.45)); }
+    .attach-menu-hint  { font-size: 0.72rem; color: var(--text-muted); }
 
     /* ── Connect-database modal (Analytic-mode + → Connect database) ──
        Standalone styles — earlier draft tried to borrow .signin-overlay
@@ -3133,7 +3205,7 @@
       display: none;
       position: fixed;
       inset: 0;
-      background: rgba(0,0,0,0.45);
+      background: var(--backdrop);
       z-index: 1200;        /* above fsPickerOverlay (1050) so a Connect
                                modal opened from inside the workspace
                                picker would stack on top */
@@ -3144,11 +3216,11 @@
     .db-connect-overlay:not([hidden]) { display: flex; }
     .db-connect-dialog {
       position: relative;
-      background: var(--surface, #1c1c1f);
-      color: var(--text-primary, #e5e5e7);
-      border: 1px solid var(--border, rgba(255,255,255,0.12));
+      background: var(--surface);
+      color: var(--text-primary);
+      border: 1px solid var(--border);
       border-radius: 14px;
-      box-shadow: 0 12px 48px rgba(0,0,0,0.32);
+      box-shadow: 0 12px 48px var(--shadow-strong);
       width: min(560px, 94vw);
       max-height: 88vh;
       overflow-y: auto;
@@ -3160,7 +3232,7 @@
       right: 0.7rem;
       background: transparent;
       border: none;
-      color: var(--text-muted, rgba(255,255,255,0.55));
+      color: var(--text-muted);
       font-size: 1rem;
       cursor: pointer;
       padding: 0.25rem 0.4rem;
@@ -3168,7 +3240,7 @@
       line-height: 1;
     }
     .db-connect-dialog-close:hover {
-      background: rgba(255,255,255,0.06);
+      background: var(--overlay-2);
       color: var(--text-primary);
     }
     .db-connect-dialog-icon {
@@ -3185,7 +3257,7 @@
     }
     .db-connect-dialog-body {
       font-size: 0.82rem;
-      color: var(--text-secondary, rgba(255,255,255,0.7));
+      color: var(--text-secondary);
       text-align: center;
       margin: 0 0 0.9rem;
       line-height: 1.5;
@@ -3202,20 +3274,20 @@
       align-items: center;
       gap: 0.45rem;
       padding: 0.3rem 0.75rem;
-      background: linear-gradient(135deg, rgba(102, 126, 234, 0.14), rgba(118, 75, 162, 0.14));
-      border: 1px solid rgba(102, 126, 234, 0.38);
+      background: linear-gradient(135deg, var(--indigo-bg), var(--indigo-bg));
+      border: 1px solid var(--indigo-border);
       border-radius: 999px;
       font-size: 0.78rem;
       font-weight: 500;
-      color: rgba(102, 126, 234, 1);
+      color: var(--indigo);
       cursor: pointer;
       transition: all 0.14s ease;
-      box-shadow: 0 1px 3px rgba(102, 126, 234, 0.12);
+      box-shadow: 0 1px 3px var(--indigo-bg-strong);
     }
     .db-chip:hover {
-      background: linear-gradient(135deg, rgba(102, 126, 234, 0.22), rgba(118, 75, 162, 0.22));
+      background: linear-gradient(135deg, var(--indigo-bg-strong), var(--indigo-bg-strong));
       transform: translateY(-1px);
-      box-shadow: 0 2px 8px rgba(102, 126, 234, 0.22);
+      box-shadow: 0 2px 8px var(--indigo-bg-strong);
     }
     .db-chip[hidden] { display: none; }
     /* Tiny "live connection" pulse — green dot with a CSS animation so
@@ -3225,14 +3297,14 @@
       width: 7px;
       height: 7px;
       border-radius: 50%;
-      background: #2f9c5e;
-      box-shadow: 0 0 0 0 rgba(47, 156, 94, 0.45);
+      background: var(--success);
+      box-shadow: 0 0 0 0 var(--success-ring);
       animation: db-chip-pulse 2.2s ease-in-out infinite;
       flex-shrink: 0;
     }
     @keyframes db-chip-pulse {
-      0%, 100% { box-shadow: 0 0 0 0   rgba(47, 156, 94, 0.55); }
-      50%      { box-shadow: 0 0 0 5px rgba(47, 156, 94, 0);    }
+      0%, 100% { box-shadow: 0 0 0 0   var(--success-ring); }
+      50%      { box-shadow: 0 0 0 5px transparent;    }
     }
     .db-chip-icon  { font-size: 1rem; line-height: 1; }
     .db-chip-label { font-weight: 600; letter-spacing: 0.01em; }
@@ -3251,8 +3323,8 @@
     }
     .db-chip-disconnect:hover {
       opacity: 1;
-      background: rgba(220, 53, 69, 0.16);
-      color: #c0392b;
+      background: var(--error-bg);
+      color: var(--error);
     }
 
     .attach-chips {
@@ -3308,7 +3380,7 @@
       border-radius: 10px;
       padding: 14px 14px 8px;
       margin: 0.7rem 0;
-      box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+      box-shadow: 0 1px 3px var(--shadow-weak);
       position: relative;
       min-height: 220px;
     }
@@ -3318,11 +3390,11 @@
     }
     .chart-error {
       color: var(--error);
-      font-family: 'Courier New', monospace;
+      font-family: var(--font-mono);
       font-size: 0.78rem;
       padding: 0.4rem 0.6rem;
-      background: #fff0f0;
-      border: 1px solid #fca5a5;
+      background: var(--error-bg);
+      border: 1px solid var(--error-border);
       border-radius: 6px;
     }
 
@@ -3346,7 +3418,7 @@
       display: none;
       position: fixed;
       inset: 0;
-      background: rgba(0,0,0,0.5);
+      background: var(--backdrop);
       z-index: 499;
     }
     #sidebarOverlay.open { display: block; }
@@ -3359,7 +3431,7 @@
         height: 100dvh;
         z-index: 500;
         transition: left 0.25s ease;
-        box-shadow: 4px 0 20px rgba(0,0,0,0.2);
+        box-shadow: 4px 0 20px var(--shadow-mid);
       }
       .sidebar.open { left: 0; }
       .hamburger { display: inline-flex; }
@@ -3375,7 +3447,7 @@
        retired when it folded into the nav.) */
     .lang-modal-backdrop {
       position: fixed; inset: 0; z-index: 2000;
-      background: rgba(0,0,0,0.45);
+      background: var(--backdrop);
       display: flex; align-items: center; justify-content: center;
     }
     .lang-modal-box {
@@ -3386,7 +3458,7 @@
       max-height: 80vh;
       display: flex; flex-direction: column;
       overflow: hidden;
-      box-shadow: 0 8px 32px rgba(0,0,0,0.18);
+      box-shadow: 0 8px 32px var(--shadow-mid);
     }
     .lang-modal-header {
       display: flex; align-items: center; justify-content: space-between;
@@ -3413,7 +3485,7 @@
       text-align: left;
     }
     .lang-item:hover { background: var(--bg-primary); border-color: var(--border); }
-    .lang-item.lang-active { border-color: var(--text-primary); background: var(--bg-primary); }
+    .lang-item.lang-active { border-color: var(--accent); background: var(--accent-faint); }
     .lang-flag { font-size: 1.1rem; flex-shrink: 0; }
     .lang-name { font-weight: 500; color: var(--text-primary); }
     .lang-sub { font-size: 0.72rem; color: var(--text-secondary); margin-left: auto; }
@@ -3421,7 +3493,7 @@
     /* ── Confirm Dialog ──────────────────────────────────────────────────── */
     .confirm-modal-backdrop {
       position: fixed; inset: 0; z-index: 2100;
-      background: rgba(0,0,0,0.45);
+      background: var(--backdrop);
       display: flex; align-items: center; justify-content: center;
       padding: 1rem;
     }
@@ -3433,7 +3505,7 @@
       max-height: 85vh;
       display: flex; flex-direction: column;
       overflow: hidden;
-      box-shadow: 0 8px 32px rgba(0,0,0,0.18);
+      box-shadow: 0 8px 32px var(--shadow-mid);
     }
     .confirm-modal-title {
       padding: 1rem 1.25rem 0.5rem;
@@ -3470,16 +3542,245 @@
     }
     .confirm-modal-cancel:hover { background: var(--bg-primary); }
     .confirm-modal-ok {
-      background: var(--text-primary);
-      color: white;
-      border-color: var(--text-primary);
+      background: var(--accent-strong);
+      color: var(--on-accent);
+      border-color: var(--accent-strong);
       font-weight: 500;
     }
     .confirm-modal-ok:hover { opacity: 0.88; }
     .confirm-modal-ok.danger {
-      background: var(--error);
-      border-color: var(--error);
+      background: var(--danger-solid);
+      border-color: var(--danger-solid);
     }
+
+    /* ── Obsidian layer: component shapes from the 2026-11 design ──────
+       Shapes, sizes and type only; every color is a theme token. */
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: var(--radius-pill); }
+    ::-webkit-scrollbar-thumb:hover { background: var(--border-hover); }
+    .ico { width: 15px; height: 15px; flex-shrink: 0; display: block; }
+
+    /* Sidebar */
+    .sidebar-logo {
+      width: 32px; height: 32px; padding: 2px;
+      border-radius: 10px;
+      background: var(--bg-secondary);
+      border: 1px solid var(--accent-border);
+      box-shadow: var(--glow-accent);
+    }
+    .sidebar-brand-name { color: var(--text-strong); font-size: 0.92rem; letter-spacing: -0.02em; }
+    .sidebar-collapse-btn .ico { width: 16px; height: 16px; }
+    .new-chat-btn {
+      background: var(--surface-2);
+      border-color: var(--border-strong);
+      border-radius: var(--radius-md);
+      padding: 0.55rem 0.8rem;
+      font-size: 0.8rem;
+    }
+    .new-chat-btn:hover { background: var(--surface-3); border-color: var(--border-hover); }
+    .new-chat-btn .plus-icon { border: none; width: 16px; height: 16px; color: var(--accent-hover); transition: transform 0.2s; }
+    .new-chat-btn:hover .plus-icon { transform: rotate(90deg); }
+    .sidebar-section-label { font-size: 0.64rem; letter-spacing: 0.08em; }
+    .session-list { gap: 2px; }
+    .session-item {
+      border-radius: var(--radius-sm);
+      padding: 0.42rem 0.6rem;
+      font-size: 0.8rem;
+      color: var(--text-secondary);
+      border: 1px solid transparent;
+    }
+    .session-item:hover { color: var(--text-primary); }
+    .session-item.active {
+      background: var(--sidebar-active);
+      color: var(--text-strong);
+      border-color: var(--border);
+      box-shadow: inset 2px 0 0 var(--accent);
+    }
+    .session-mode-badge {
+      font-family: var(--font-mono);
+      font-size: 0.6rem;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      padding: 2px 6px;
+      border: 1px solid var(--border-strong);
+    }
+    .sidebar-nav-btn { color: var(--text-secondary); font-size: 0.8rem; padding: 0.42rem 0.65rem; border-radius: var(--radius-sm); }
+    .sidebar-nav-btn:hover { color: var(--text-primary); }
+    .sidebar-nav-btn .nav-icon { display: inline-flex; justify-content: center; width: 16px; }
+    .savings-pill {
+      background: linear-gradient(135deg, var(--success-bg) 0%, var(--bg-secondary) 100%);
+      border: 1px solid var(--success-border);
+      border-radius: var(--radius-md);
+      padding: 0.55rem 0.65rem;
+    }
+    .savings-pill:hover {
+      background: linear-gradient(135deg, var(--success-bg-strong) 0%, var(--bg-secondary) 100%);
+      border-color: var(--success);
+    }
+    .savings-pill-icon {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 30px; height: 30px;
+      border-radius: var(--radius-sm);
+      background: var(--success-bg);
+      border: 1px solid var(--success-border);
+      color: var(--success);
+    }
+    .savings-pill-icon .ico { width: 16px; height: 16px; }
+    .savings-pill-amount { font-family: var(--font-mono); font-size: 0.82rem; color: var(--success); }
+    .savings-pill-sub { color: var(--text-secondary); }
+    .sidebar-status { color: var(--text-primary); font-weight: 500; }
+    .ws-badge { width: 7px; height: 7px; }
+    .ws-badge.connected { box-shadow: 0 0 8px var(--success-ring); animation: ot-breathe 2.2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
+    @keyframes ot-breathe { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.6; transform: scale(0.88); } }
+
+    /* Header */
+    .chat-header {
+      min-height: 56px;
+      background: var(--glass);
+      -webkit-backdrop-filter: blur(14px);
+              backdrop-filter: blur(14px);
+      border-bottom-color: var(--border);
+    }
+    .chat-header-title { color: var(--text-strong); font-weight: 600; font-size: 0.88rem; letter-spacing: -0.01em; }
+    .mode-switch {
+      background: var(--surface);
+      border-color: var(--border-strong);
+      border-radius: var(--radius-md);
+      padding: 2px;
+      box-shadow: inset 0 1px 2px var(--shadow-weak);
+    }
+    .mode-btn { border-radius: var(--radius-sm); padding: 5px 12px; font-size: 0.76rem; border: 1px solid transparent; }
+    .mode-btn:hover:not(:disabled) { background: transparent; color: var(--text-primary); }
+    .mode-btn.active,
+    .mode-btn.active[data-mode] {
+      background: var(--surface-3);
+      color: var(--text-strong);
+      border-color: var(--border-hover);
+      box-shadow: 0 1px 2px var(--shadow-weak);
+    }
+    .mode-btn .mode-emoji { display: inline-flex; }
+    .mode-btn .ico { width: 14px; height: 14px; }
+    .mode-btn.active .mode-emoji { color: var(--accent-hover); }
+    .mem-btn { background: var(--bg-secondary); border-color: var(--border); padding: 4px 11px; font-size: 0.74rem; gap: 6px; }
+    .mem-btn:hover { background: var(--surface-2); border-color: var(--border-strong); }
+    .mem-btn .ico, #privacyIcon .ico { width: 13px; height: 13px; }
+    #privacyIcon { display: inline-flex; }
+    #memoryCount { font-family: var(--font-mono); }
+    #exportSessionBtn {
+      background: var(--accent-strong);
+      border-color: var(--accent-strong);
+      color: var(--on-accent);
+      border-radius: var(--radius-md);
+      font-weight: 600;
+    }
+    #exportSessionBtn:hover { background: var(--accent); border-color: var(--accent); box-shadow: var(--glow-accent); }
+
+    /* Conversation */
+    .chat-messages { gap: 10px; padding-top: 1.75rem; }
+    .msg-user {
+      background: var(--surface-2);
+      color: var(--text-strong);
+      border: 1px solid var(--border-strong);
+      border-radius: var(--radius-xl) 4px var(--radius-xl) var(--radius-xl);
+      padding: 10px 16px;
+      font-size: 0.88rem;
+      box-shadow: 0 1px 2px var(--shadow-weak);
+    }
+    .msg-agent {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 12px 16px;
+      font-size: 0.88rem;
+    }
+    .msg-system { background: var(--bg-secondary); border-color: var(--border); }
+    .run-card { background: var(--surface); border-color: var(--border); border-radius: var(--radius-lg); box-shadow: var(--shadow-panel); }
+    .run-step-ico { background: var(--surface-2); border: 1px solid var(--border); }
+    .run-step > details > summary:hover { background: var(--overlay-1); }
+    .run-step-detail { background: var(--bg-primary); }
+    .run-step-state { width: 20px; height: 20px; }
+    .result-meta { font-family: var(--font-mono); font-size: 0.72rem; }
+    .result-badge {
+      padding: 2px 8px;
+      border-radius: 4px;
+      border: 1px solid var(--border-strong);
+      background: var(--surface-2);
+      font-size: 0.68rem;
+    }
+    .result-badge.tone-ok   { background: var(--success-bg); border-color: var(--success-border); }
+    .result-badge.tone-warn { background: var(--warning-bg); border-color: var(--warning-border); }
+    .result-badge.tone-fail { background: var(--error-bg);   border-color: var(--error-border); }
+    .md-body .md-inline-code { background: var(--surface-2); border-color: var(--border-strong); border-radius: 4px; }
+    .md-body pre.md-pre { background: var(--bg-primary); border-color: var(--border); color: var(--text-primary); border-radius: var(--radius-md); }
+    .file-card { border-radius: var(--radius-lg); }
+    .file-card-name { font-family: var(--font-mono); color: var(--accent-hover); font-weight: 600; }
+    .file-btn { border-radius: var(--radius-sm); background: var(--surface-2); border-color: var(--border-strong); }
+
+    /* Input dock: workspace row, chips and the input in one card */
+    .chat-input-area {
+      background: linear-gradient(to top, var(--bg-primary) 70%, transparent);
+      border-top: none;
+      padding-top: 0.4rem;
+    }
+    .input-dock {
+      max-width: 800px;
+      margin: 0 auto;
+      background: var(--surface);
+      border: 1px solid var(--border-strong);
+      border-radius: var(--radius-xl);
+      box-shadow: var(--shadow-panel);
+      transition: border-color 0.15s;
+    }
+    .input-dock:focus-within { border-color: var(--border-hover); }
+    .input-dock .session-context-row {
+      margin: 0;
+      padding: 6px 14px;
+      background: var(--bg-secondary);
+      border-bottom: 1px solid var(--border);
+      border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+    }
+    .input-dock .workspace-bar,
+    .input-dock .workspace-bar.is-override { background: transparent; border: none; padding: 0; font-size: 0.72rem; }
+    .input-dock .workspace-bar.is-override .workspace-bar-path { color: var(--warning); }
+    .workspace-bar-path { color: var(--text-primary); }
+    .workspace-bar-btn { background: transparent; border: none; padding: 0 2px; color: var(--text-primary); text-decoration: underline; }
+    .workspace-bar-btn:hover { background: transparent; color: var(--text-strong); text-decoration: none; }
+    .input-dock .attach-chips:not(:empty) { padding: 8px 12px 0; }
+    .input-dock .chat-input-row { max-width: none; padding: 10px; gap: 8px; }
+    .input-dock .chat-input-wrap { border: none; background: transparent; padding: 4px 0 4px 2px; }
+    .chat-input-wrap textarea { color: var(--text-strong); }
+    .chat-input-wrap textarea::placeholder { color: var(--text-muted); }
+    .upload-btn {
+      width: 32px; height: 32px;
+      border-radius: var(--radius-md);
+      border: 1px solid var(--border-strong);
+      background: var(--surface-2);
+      color: var(--text-primary);
+    }
+    .upload-btn:hover { background: var(--surface-3); border-color: var(--border-hover); }
+    .upload-btn .ico { width: 16px; height: 16px; }
+    .optimize-btn {
+      width: 32px; height: 32px; padding: 0;
+      display: inline-flex; align-items: center; justify-content: center;
+      border: none;
+      color: var(--text-secondary);
+    }
+    .optimize-btn:hover { background: transparent; color: var(--warning); }
+    .optimize-btn .ico { width: 17px; height: 17px; }
+    .send-btn {
+      width: 34px; height: 34px; min-width: 34px; padding: 0;
+      border-radius: var(--radius-lg);
+      background: var(--accent-strong);
+      color: var(--on-accent);
+      box-shadow: 0 2px 6px var(--shadow-mid);
+      transition: background 0.15s, box-shadow 0.15s;
+    }
+    .send-btn:hover { background: var(--accent); box-shadow: var(--glow-accent); }
+    .send-btn .ico { width: 16px; height: 16px; transition: transform 0.15s; }
+    .send-btn:hover .ico { transform: translateY(-1px); }
+    .send-btn.is-stop { background: var(--danger-solid); }
+    .chat-input-wrap.optimizing::after { border-radius: var(--radius-lg); }
   </style>
 </head>
 <body>
@@ -3495,11 +3796,11 @@
           <span class="sidebar-brand-name">OpenTeddy</span>
           <button class="sidebar-collapse-btn" onclick="toggleSidebarCollapse()"
                   title="Collapse sidebar" aria-label="Collapse sidebar">
-            <span class="collapse-icon">«</span>
+            <span class="collapse-icon"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18.75 19.5l-7.5-7.5 7.5-7.5m-6 15L5.25 12l7.5-7.5"/></svg></span>
           </button>
         </div>
         <button class="new-chat-btn" onclick="createNewSession()" title="New chat">
-          <span class="plus-icon">+</span>
+          <span class="plus-icon"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4.5v15m7.5-7.5h-15"/></svg></span>
           <span class="new-chat-label" data-i18n="new_chat">New chat</span>
         </button>
       </div>
@@ -3516,25 +3817,25 @@
           <!-- Skills tab merged into Tools — same content, fewer clicks.
                Kept the dedicated route alive in switchTab() so old
                deep-links / history entries still resolve cleanly. -->
-          <button class="sidebar-nav-btn" data-tab="tools"    onclick="switchTab('tools')"    data-i18n-title="nav_tools"    title="Tools"><span class="nav-icon">🔧</span><span class="nav-label" data-i18n="nav_tools">Tools</span></button>
-          <button class="sidebar-nav-btn" data-tab="memory"   onclick="switchTab('memory')"   data-i18n-title="nav_memory"   title="Memory"><span class="nav-icon">🧠</span><span class="nav-label" data-i18n="nav_memory">Memory</span></button>
+          <button class="sidebar-nav-btn" data-tab="tools"    onclick="switchTab('tools')"    data-i18n-title="nav_tools"    title="Tools"><span class="nav-icon"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21.75 6.75a4.5 4.5 0 01-4.884 4.484c-1.076-.091-2.264.071-2.95.904l-7.152 8.684a2.548 2.548 0 11-3.586-3.586l8.684-7.152c.833-.686.995-1.874.904-2.95a4.5 4.5 0 016.336-4.486l-3.276 3.276a3.004 3.004 0 002.25 2.25l3.276-3.276c.256.565.398 1.192.398 1.852z"/><path d="M4.867 19.125h.008v.008h-.008v-.008z"/></svg></span><span class="nav-label" data-i18n="nav_tools">Tools</span></button>
+          <button class="sidebar-nav-btn" data-tab="memory"   onclick="switchTab('memory')"   data-i18n-title="nav_memory"   title="Memory"><span class="nav-icon"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.25 6.375c0 2.278-3.694 4.125-8.25 4.125S3.75 8.653 3.75 6.375m16.5 0c0-2.278-3.694-4.125-8.25-4.125S3.75 4.097 3.75 6.375m16.5 0v11.25c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125V6.375m16.5 0v3.75m-16.5-3.75v3.75m16.5 0v3.75C20.25 16.153 16.556 18 12 18s-8.25-1.847-8.25-4.125v-3.75m16.5 0c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125"/></svg></span><span class="nav-label" data-i18n="nav_memory">Memory</span></button>
           <!-- User-defined Agents: reusable role templates (persona +
                bound DB / workspace / privacy) you can spawn sessions from. -->
-          <button class="sidebar-nav-btn" data-tab="agents"   onclick="switchTab('agents')"   data-i18n-title="nav_agents"   title="Agents"><span class="nav-icon">🤖</span><span class="nav-label" data-i18n="nav_agents">Agents</span></button>
+          <button class="sidebar-nav-btn" data-tab="agents"   onclick="switchTab('agents')"   data-i18n-title="nav_agents"   title="Agents"><span class="nav-icon"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 18.72a9.094 9.094 0 003.741-.479 3 3 0 00-4.682-2.72m.94 3.198l.001.031c0 .225-.012.447-.037.666A11.944 11.944 0 0112 21c-2.17 0-4.207-.576-5.963-1.584A6.062 6.062 0 016 18.719m12 0a5.971 5.971 0 00-.941-3.197m0 0A5.995 5.995 0 0012 12.75a5.995 5.995 0 00-5.058 2.772m0 0a3 3 0 00-4.681 2.72 8.986 8.986 0 003.74.477m.94-3.197a5.971 5.971 0 00-.94 3.197M15 6.75a3 3 0 11-6 0 3 3 0 016 0zm6 3a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0zm-13.5 0a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0z"/></svg></span><span class="nav-label" data-i18n="nav_agents">Agents</span></button>
           <!-- Usage nav button hidden — the savings pill at the bottom
                of the sidebar already shows the live "saved vs. GPT-4"
                number, and clicking the pill routes here. Two entry
                points doing the same thing was redundant. The tab
                panel + switchTab('usage') routing stay alive so the
                pill click + any old deep-links still work. -->
-          <button class="sidebar-nav-btn" data-tab="usage"    onclick="switchTab('usage')"    data-i18n-title="nav_usage"    title="Usage" hidden><span class="nav-icon">📊</span><span class="nav-label" data-i18n="nav_usage">Usage</span></button>
-          <button class="sidebar-nav-btn" data-tab="settings" onclick="switchTab('settings')" data-i18n-title="nav_settings" title="Settings"><span class="nav-icon">⚙️</span><span class="nav-label" data-i18n="nav_settings">Settings</span></button>
+          <button class="sidebar-nav-btn" data-tab="usage"    onclick="switchTab('usage')"    data-i18n-title="nav_usage"    title="Usage" hidden><span class="nav-icon"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 013 19.875v-6.75zM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V8.625zM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V4.125z"/></svg></span><span class="nav-label" data-i18n="nav_usage">Usage</span></button>
+          <button class="sidebar-nav-btn" data-tab="settings" onclick="switchTab('settings')" data-i18n-title="nav_settings" title="Settings"><span class="nav-icon"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg></span><span class="nav-label" data-i18n="nav_settings">Settings</span></button>
           <!-- Language switcher styled as a nav button so it lines up
                flush under Settings. Icon slot shows the active locale's
                flag (kept dynamic by updateLangBtn() in JS); the label
                cell holds the locale's short label after switching. -->
           <button class="sidebar-nav-btn" id="langBtn" onclick="__i18n.openLangSwitcher()" data-i18n-title="lang_switcher_title" title="Language">
-            <span class="nav-icon" id="langBtnFlag">🌐</span>
+            <span class="nav-icon" id="langBtnFlag"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3.6 9h16.8M3.6 15h16.8"/><path d="M12 3a14.2 14.2 0 000 18 14.2 14.2 0 000-18"/></svg></span>
             <span class="nav-label" id="langBtnLabel" data-i18n="lang_switcher_title">Language</span>
           </button>
           <!-- "Buy Me a Coffee" — universal support CTA. Works in both
@@ -3545,7 +3846,7 @@
                the old upgrade-pill ($99 Lifetime) which only appeared
                for signed-in Tauri users. -->
           <button class="sidebar-nav-btn" id="coffeeBtn" onclick="onCoffeeBtnClick()" data-i18n-title="nav_coffee_title" title="Buy Me a Coffee">
-            <span class="nav-icon">☕</span>
+            <span class="nav-icon"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 8h1a4 4 0 010 8h-1M2 8h16v9a4 4 0 01-4 4H6a4 4 0 01-4-4V8z"/><path d="M6 2v2M10 2v2M14 2v2"/></svg></span>
             <span class="nav-label" data-i18n="nav_coffee">Buy Me a Coffee</span>
           </button>
         </nav>
@@ -3587,7 +3888,7 @@
                 onclick="switchTab('usage')"
                 data-i18n-title="savings_pill_title"
                 title="Money saved vs. GPT-4 — click for breakdown">
-          <span class="savings-pill-icon">💰</span>
+          <span class="savings-pill-icon"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 6v12m-3-2.818l.879.659c1.171.879 3.07.879 4.242 0 1.172-.879 1.172-2.303 0-3.182C13.536 12.219 12.768 12 12 12c-.725 0-1.45-.22-1.879-.659-1.171-.879-1.171-2.303 0-3.182s3.071-.879 4.242 0L15 8.818M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg></span>
           <span class="savings-pill-body">
             <span class="savings-pill-amount" id="savingsPillAmount">$0.00</span>
             <span class="savings-pill-sub" id="savingsPillSub" data-i18n="savings_pill_zero_sub">Run a task to start tracking</span>
@@ -3709,13 +4010,13 @@
           </div>
           <div class="mode-switch" id="modeSwitch" role="tablist" aria-label="Session mode">
             <button type="button" class="mode-btn" data-mode="chat" onclick="changeMode('chat')" data-i18n-title="mode_chat_title" title="Pure text reasoning">
-              <span class="mode-emoji">💬</span><span data-i18n="mode_chat">Chat</span>
+              <span class="mode-emoji"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8.625 12a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H8.25m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H12m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0h-.375M21 12c0 4.556-4.03 8.25-9 8.25a9.764 9.764 0 01-2.555-.337A5.972 5.972 0 015.41 20.97a5.969 5.969 0 01-.474-.065 4.48 4.48 0 00.978-2.025c.09-.457-.133-.901-.467-1.226C3.93 16.178 3 14.189 3 12c0-4.556 4.03-8.25 9-8.25s9 3.694 9 8.25z"/></svg></span><span data-i18n="mode_chat">Chat</span>
             </button>
             <button type="button" class="mode-btn active" data-mode="code" onclick="changeMode('code')" data-i18n-title="mode_code_title" title="Autonomous code execution">
-              <span class="mode-emoji">💻</span><span data-i18n="mode_code">Code</span>
+              <span class="mode-emoji"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.25 6.75L22.5 12l-5.25 5.25m-10.5 0L1.5 12l5.25-5.25m7.5-3l-4.5 16.5"/></svg></span><span data-i18n="mode_code">Code</span>
             </button>
             <button type="button" class="mode-btn" data-mode="analytic" onclick="changeMode('analytic')" data-i18n-title="mode_analytic_title" title="Analyse csv/xlsx/json with Chart.js">
-              <span class="mode-emoji">📊</span><span data-i18n="mode_analytic">Analytic</span>
+              <span class="mode-emoji"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 013 19.875v-6.75zM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V8.625zM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V4.125z"/></svg></span><span data-i18n="mode_analytic">Analytic</span>
             </button>
           </div>
           <!-- Memory + privacy pills. On wider viewports they sit inline
@@ -3732,7 +4033,7 @@
             </button>
             <button type="button" id="privacyBtn" class="mem-btn" onclick="togglePrivacy()"
               data-i18n-title="privacy_title" title="Toggle local-only mode">
-              <span id="privacyIcon">🔓</span><span id="privacyLabel" data-i18n="privacy_cloud">Cloud</span>
+              <span id="privacyIcon"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13.5 10.5V6.75a4.5 4.5 0 119 0v3.75M3.75 21.75h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H3.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z"/></svg></span><span id="privacyLabel" data-i18n="privacy_cloud">Cloud</span>
             </button>
             <!-- Export the whole session as one JSON for bug reports or
                  offline analysis. Lives alongside memory/privacy so on
@@ -3741,7 +4042,7 @@
               onclick="exportSessionToFile()"
               data-i18n-title="export_session_title"
               title="Export this session's records as JSON for analysis or bug reports">
-              <span>📥</span><span data-i18n="export_session_label">Export</span>
+              <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5"/></svg><span data-i18n="export_session_label">Export</span>
             </button>
           </div>
           <button type="button" class="header-overflow-toggle"
@@ -3776,6 +4077,7 @@
             </div>
           </div>
           <div class="chat-input-area">
+            <div class="input-dock">
             <!-- Session-context row: workspace path + (optional) DB chip
                  share a single flex line so they read as one cohesive
                  "what this session is operating against" header. Both
@@ -3856,7 +4158,7 @@
                 <button class="upload-btn" id="uploadBtn" type="button"
                   onclick="toggleAttachMenu(event)"
                   data-i18n-title="upload_title"
-                  title="Attach files or a database (analytic mode)">+</button>
+                  title="Attach files or a database (analytic mode)"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4.5v15m7.5-7.5h-15"/></svg></button>
                 <div class="attach-menu" id="attachMenu" hidden role="menu">
                   <button class="attach-menu-item" type="button"
                           onclick="closeAttachMenu(); document.getElementById('fileInput').click()">
@@ -3884,9 +4186,10 @@
                   oninput="this.style.height='auto';this.style.height=Math.min(this.scrollHeight,150)+'px'"></textarea>
                 <button class="optimize-btn" id="optimizeBtn" type="button" onclick="optimizePrompt()"
                   data-i18n-title="optimize_prompt_title"
-                  title="Polish your prompt with Claude so the agent gets a sharper instruction.">✨</button>
-                <button class="send-btn" id="runBtn" onclick="onSendOrStop()" data-i18n-title="send_title" title="Send">↑</button>
+                  title="Polish your prompt with Claude so the agent gets a sharper instruction."><svg class="ico" viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true"><path d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 00-2.456 2.456zM16.894 20.567L16.5 21.75l-.394-1.183a2.25 2.25 0 00-1.423-1.423L13.5 18.75l1.183-.394a2.25 2.25 0 001.423-1.423l.394-1.183.394 1.183a2.25 2.25 0 001.423 1.423l1.183.394-1.183.394a2.25 2.25 0 00-1.423 1.423z"/></svg></button>
+                <button class="send-btn" id="runBtn" onclick="onSendOrStop()" data-i18n-title="send_title" title="Send"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.5 10.5L12 3m0 0l7.5 7.5M12 3v18"/></svg></button>
               </div>
+            </div>
             </div>
           </div>
         </div>
@@ -4298,7 +4601,7 @@
                        toast so users notice at the moment of the change,
                        not 5 minutes later when their first task fails. -->
                   <div id="orch_warning" hidden
-                       style="margin-top:0.4rem;padding:0.45rem 0.6rem;background:rgba(220, 53, 69, 0.08);border-left:2px solid #c0392b;color:#c0392b;font-size:0.74rem;line-height:1.45;border-radius:4px"
+                       style="margin-top:0.4rem;padding:0.45rem 0.6rem;background:var(--error-bg);border-left:2px solid var(--error);color:var(--error);font-size:0.74rem;line-height:1.45;border-radius:4px"
                        data-i18n="orchestrator_not_recommended">
                     ⚠ Orchestration relies on Gemma's planning style. Qwen / Llama / etc. as orchestrator misbehave often — pick a gemma3:* model unless you really know what you're doing.
                   </div>
@@ -4312,7 +4615,7 @@
                    Explains why the two dropdowns above look greyed out
                    so users don't think their Ollama setup is broken. -->
               <div id="cloudModeNotice" hidden
-                   style="margin-bottom:0.85rem;padding:0.55rem 0.75rem;background:rgba(56,189,248,0.08);border-left:2px solid #0284c7;color:#075985;font-size:0.74rem;line-height:1.5;border-radius:4px">
+                   style="margin-bottom:0.85rem;padding:0.55rem 0.75rem;background:var(--info-bg);border-left:2px solid var(--info);color:var(--info);font-size:0.74rem;line-height:1.5;border-radius:4px">
                 <span data-i18n="cloud_mode_notice">
                   ☁️ Cloud mode is active. Orchestrator + Executor models above are NOT used —
                   planning and every subtask go to your configured Cloud LLM Provider directly.
@@ -5167,14 +5470,14 @@
                  nudge). The actual confirmation goes through
                  showConfirm() with explicit wording about what gets
                  wiped. -->
-            <div class="settings-section collapsed" style="border-color: rgba(220, 53, 69, 0.18); margin-top: 1.4rem;">
-              <h3 onclick="toggleSettingsSection(this)" style="color: #c0392b" data-i18n="reset_heading">⚠ Danger Zone</h3>
+            <div class="settings-section collapsed" style="border-color: var(--error-border); margin-top: 1.4rem;">
+              <h3 onclick="toggleSettingsSection(this)" style="color: var(--error)" data-i18n="reset_heading">⚠ Danger Zone</h3>
               <div class="settings-section-body">
                 <div style="font-size:0.78rem;color:var(--text-secondary);margin-bottom:0.9rem;line-height:1.5" data-i18n="reset_desc">
                   Wipes every byte of local OpenTeddy state — task history, learned skills, long-term memory, agent workspace, and signed-in account. The app then drops back to the Get Started screen as if it were a fresh install. Cannot be undone.
                 </div>
                 <button class="btn-ghost" onclick="resetOpenTeddy()" id="resetOpenTeddyBtn"
-                        style="background: rgba(220, 53, 69, 0.08); color: #c0392b; border-color: rgba(220, 53, 69, 0.28);"
+                        style="background: var(--error-bg); color: var(--error); border-color: var(--error-border);"
                         data-i18n="btn_reset_openteddy">Reset OpenTeddy</button>
               </div>
             </div>
@@ -5535,7 +5838,7 @@
       const meta = __i18n.LOCALE_META.find(m => m.code === code);
       const flag = document.getElementById('langBtnFlag');
       const lbl  = document.getElementById('langBtnLabel');
-      if (flag && meta) flag.textContent = meta.flag;
+      // The globe icon stays; the label names the language.
       if (lbl  && meta) lbl.textContent  = meta.label;
     }
 
@@ -5791,14 +6094,14 @@
         const res  = await fetch(`${API}/settings/telegram/test`, { method: 'POST' });
         const data = await res.json();
         if (data.success) {
-          status.style.color = 'var(--success, #2f9c5e)';
+          status.style.color = 'var(--success)';
           status.textContent = `✓ Sent (message_id ${data.data?.message_id ?? '?'})`;
         } else {
-          status.style.color = 'var(--accent, #c46d4f)';
+          status.style.color = 'var(--accent)';
           status.textContent = `✗ ${data.error || 'unknown error'}`;
         }
       } catch (exc) {
-        status.style.color = 'var(--accent, #c46d4f)';
+        status.style.color = 'var(--accent)';
         status.textContent = `✗ network error: ${exc}`;
       } finally {
         btn.disabled = false;
@@ -6297,7 +6600,7 @@
       if (!btn) return;
       const lo = isLocalOnly();
       btn.classList.toggle('local-only', lo);
-      if (icon)  icon.textContent  = lo ? '🔒' : '🔓';
+      if (icon)  icon.innerHTML  = lo ? OT_ICONS.lock : OT_ICONS.unlock;
       if (label) label.textContent = lo ? t('privacy_local') : t('privacy_cloud');
       btn.title = t('privacy_title');
       // Hide all "Let Claude fix" buttons when local-only, so a stale
@@ -6786,6 +7089,11 @@
     if (typeof Chart !== 'undefined' && typeof ChartDataLabels !== 'undefined') {
       Chart.register(ChartDataLabels);
     }
+    if (typeof Chart !== 'undefined') {
+      Chart.defaults.color = themeColor('--text-secondary');
+      Chart.defaults.borderColor = themeColor('--overlay-2');
+      Chart.defaults.font.family = themeColor('--font-sans');
+    }
 
     // Pretty-print a numeric value: 1234567 → "1.23M", 12345 → "12.3K",
     // small numbers stay as locale-formatted (so 0.84 stays 0.84).
@@ -6806,9 +7114,9 @@
       const ring = type === 'pie' || type === 'doughnut' || type === 'polarArea';
       if (ring) {
         return {
-          color: '#fff',
+          color: themeColor('--on-accent'),
           font: { weight: '600', size: 12 },
-          textShadowColor: 'rgba(0,0,0,0.55)',
+          textShadowColor: themeColor('--shadow-strong'),
           textShadowBlur: 4,
           // Hide tiny slices so labels don't pile up on each other.
           display: ctx => {
@@ -6827,9 +7135,7 @@
       // bar/point. For mixed-sign data, anchor swaps so labels always
       // appear on the side AWAY from zero (positive: above bar tip,
       // negative: above zero baseline, never lost below the chart area).
-      const textPrimary =
-        getComputedStyle(document.documentElement)
-          .getPropertyValue('--text-primary').trim() || '#1a1a1a';
+      const textPrimary = themeColor('--text-primary');
       return {
         anchor: (ctx) => (Number(ctx.dataset.data[ctx.dataIndex] ?? 0) >= 0 ? 'end' : 'start'),
         align: 'top',
@@ -8247,9 +8553,9 @@
       const status = document.getElementById('dbConnectStatus');
       if (!status) return;
       const styles = {
-        testing: { bg: 'rgba(102, 126, 234, 0.1)',  bd: '#667eea', fg: '#667eea', icon: '⏳' },
-        ok:      { bg: 'rgba(47, 156, 94, 0.12)',   bd: '#2f9c5e', fg: '#2f9c5e', icon: '✅' },
-        err:     { bg: 'rgba(220, 53, 69, 0.1)',    bd: '#c0392b', fg: '#c0392b', icon: '❌' },
+        testing: { bg: 'var(--indigo-bg)',   bd: 'var(--indigo)',  fg: 'var(--indigo)',  icon: '⏳' },
+        ok:      { bg: 'var(--success-bg)',  bd: 'var(--success)', fg: 'var(--success)', icon: '✅' },
+        err:     { bg: 'var(--error-bg)',    bd: 'var(--error)',   fg: 'var(--error)',   icon: '❌' },
       };
       const s = styles[state] || styles.testing;
       status.style.cssText = `display:block;padding:0.55rem 0.7rem;border-radius:6px;font-size:0.82rem;line-height:1.45;background:${s.bg};border-left:3px solid ${s.bd};color:${s.fg};`;
@@ -8676,11 +8982,11 @@
       if (!btn) return;
       if (running) {
         btn.classList.add('is-stop');
-        btn.textContent = '■';
+        btn.innerHTML = OT_ICONS.stop;
         btn.title = 'Stop — 中斷此次推論';
       } else {
         btn.classList.remove('is-stop');
-        btn.textContent = '↑';
+        btn.innerHTML = OT_ICONS.send;
         btn.title = 'Send';
       }
     }
@@ -8727,7 +9033,7 @@
 
       if (btn) {
         btn.disabled = true;
-        btn.innerHTML = '<span class="loader" style="width:11px;height:11px;border-width:2px;margin-right:4px;border-top-color:#fff;border-color:rgba(255,255,255,0.3)"></span> ' + t('claude_working');
+        btn.innerHTML = '<span class="loader" style="width:11px;height:11px;border-width:2px;margin-right:4px;border-top-color:var(--on-accent);border-color:var(--overlay-4)"></span> ' + t('claude_working');
       }
       // Route the normal tool-call UI for this taskId while Claude runs.
       _currentTaskId = taskId;
@@ -8737,7 +9043,7 @@
       const msg = document.createElement('div');
       msg.className = 'msg-system';
       msg.style.background = 'var(--purple-light)';
-      msg.style.borderColor = '#c4b5fd';
+      msg.style.borderColor = 'var(--purple-border)';
       msg.style.color = 'var(--purple)';
       msg.textContent = hint
         ? `🛠️ Claude fix requested with hint: "${hint.slice(0, 120)}"`
@@ -9947,17 +10253,17 @@
       const PAD_L=55, PAD_R=16, PAD_T=16, PAD_B=32;
       const chartW = W-PAD_L-PAD_R, chartH = H-PAD_T-PAD_B;
       ctx.clearRect(0, 0, W, H);
-      ctx.strokeStyle = '#e5e0d8'; ctx.lineWidth = 1;
+      ctx.strokeStyle = themeColor('--border-strong'); ctx.lineWidth = 1;
       for (let i = 0; i <= 4; i++) {
         const y = PAD_T + (chartH/4)*i;
         ctx.beginPath(); ctx.moveTo(PAD_L, y); ctx.lineTo(PAD_L+chartW, y); ctx.stroke();
-        ctx.fillStyle='#9b9b9b'; ctx.font='10px system-ui'; ctx.textAlign='right';
+        ctx.fillStyle=themeColor('--text-muted'); ctx.font='10px ' + themeColor('--font-sans'); ctx.textAlign='right';
         ctx.fillText('$'+(maxVal*(1-i/4)).toFixed(4), PAD_L-6, y+4);
       }
       ctx.textAlign='center';
       for (let i = 0; i < days; i += 5) {
         const x = PAD_L + (i/(days-1))*chartW;
-        ctx.fillStyle='#9b9b9b'; ctx.fillText(allDays[i].slice(5), x, H-8);
+        ctx.fillStyle=themeColor('--text-muted'); ctx.fillText(allDays[i].slice(5), x, H-8);
       }
       const pts = values.map((v,i) => ({
         x: PAD_L + (i/(days-1))*chartW,
@@ -9966,10 +10272,10 @@
       ctx.beginPath(); ctx.moveTo(pts[0].x, PAD_T+chartH);
       pts.forEach(p => ctx.lineTo(p.x, p.y));
       ctx.lineTo(pts[pts.length-1].x, PAD_T+chartH); ctx.closePath();
-      ctx.fillStyle='rgba(124,92,191,0.1)'; ctx.fill();
+      ctx.fillStyle=themeColor('--purple-light'); ctx.fill();
       ctx.beginPath(); pts.forEach((p,i) => i===0 ? ctx.moveTo(p.x,p.y) : ctx.lineTo(p.x,p.y));
-      ctx.strokeStyle='#7c5cbf'; ctx.lineWidth=2; ctx.lineJoin='round'; ctx.stroke();
-      ctx.fillStyle='#7c5cbf';
+      ctx.strokeStyle=themeColor('--purple'); ctx.lineWidth=2; ctx.lineJoin='round'; ctx.stroke();
+      ctx.fillStyle=themeColor('--purple');
       pts.forEach((p,i) => { if (values[i]>0) { ctx.beginPath(); ctx.arc(p.x,p.y,3,0,Math.PI*2); ctx.fill(); } });
     }
 
