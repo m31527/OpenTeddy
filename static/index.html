@@ -5999,6 +5999,7 @@
           if (data.event === 'circuit_breaker')   handleCircuitBreaker(data);
           if (data.type  === 'subtask.progress')  handleSubtaskProgress(data);
           if (data.event === 'cyber_skills.progress') handleCyberSkillsProgress(data);
+          if (data.type  === 'session.renamed')   handleSessionRenamed(data);
         } catch (e) { /* ignore */ }
       };
     }
@@ -6206,6 +6207,18 @@
       } catch (e) {
         console.debug('loadSessions error:', e);
       }
+    }
+
+    // The server named a session in its quiet time (session_titler.py).
+    // Update it in place; a title being edited by hand is left alone.
+    function handleSessionRenamed(data) {
+      const id = data.session_id;
+      if (!id || !data.title || !(id in _sessionTitles)) return;
+      _sessionTitles[id] = data.title;
+      const item = document.querySelector(`.session-item[data-id="${CSS.escape(id)}"]`);
+      const el = item && !item.classList.contains('is-editing') && item.querySelector('.session-item-title');
+      if (el) { el.textContent = data.title; el.title = data.title; }
+      if (id === _currentSessionId) updateChatHeaderTitle();
     }
 
     function updateChatHeaderTitle() {

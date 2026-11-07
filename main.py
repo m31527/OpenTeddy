@@ -576,6 +576,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:  # type: ignore[type-arg]
         await _start_watchers(tracker)
     except Exception as exc:  # noqa: BLE001
         logger.warning("Watchers startup failed (non-fatal): %s", exc)
+    # Unnamed sessions get a title from the model while nothing is running.
+    try:
+        from session_titler import start as _start_titler
+        await _start_titler(tracker, orchestrator, ws_manager.broadcast)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Session titler startup failed (non-fatal): %s", exc)
 
     # Pre-warm Ollama models in the background. First LLM call after a
     # cold start (or after Ollama's KEEP_ALIVE timeout expired) has to
@@ -667,6 +673,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:  # type: ignore[type-arg]
         await _stop_watchers()
     except Exception as exc:  # noqa: BLE001
         logger.warning("Watchers shutdown saw: %s", exc)
+    try:
+        from session_titler import stop as _stop_titler
+        await _stop_titler()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Session titler shutdown saw: %s", exc)
 
     await executor.close()
     await orchestrator.close()
@@ -2041,6 +2052,8 @@ async def _start_task(
             await tracker.create_session_from_agent(
                 session_id, agent_row, title=goal[:60] or "New session",
             )
+            # The cut-off goal is a stand-in; session_titler names it.
+            await tracker.rename_session(session_id, goal[:60] or "New session", by="pending")
 
     # ── Mode: explicit > session's > CODE (back-compat) ──────────────────
     resolved_mode = mode or SessionMode.CODE

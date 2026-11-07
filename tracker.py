@@ -203,6 +203,10 @@ class Tracker:
             # a reused KV-cache prefix saves.
             "ALTER TABLE usage_records ADD COLUMN load_ms INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE usage_records ADD COLUMN prefill_ms INTEGER NOT NULL DEFAULT 0",
+            # Who named the session: '' = nobody yet (placeholder or legacy),
+            # 'pending' = a stand-in to replace, 'auto' = session_titler,
+            # 'user' = the person. Only '' and 'pending' get named.
+            "ALTER TABLE sessions ADD COLUMN title_state TEXT NOT NULL DEFAULT ''",
         ]
         for sql in migrations:
             try:
@@ -586,12 +590,53 @@ class Tracker:
             row = await cur.fetchone()
             return dict(row) if row else None
 
-    async def rename_session(self, session_id: str, title: str) -> None:
+    async def rename_session(self, session_id: str, title: str, by: str = "user") -> None:
+        """by='user': the person named it, so it is never auto-named again.
+        by='pending': a stand-in title (a cut-off first message) that
+        session_titler may replace."""
         await self.db.execute(
-            "UPDATE sessions SET title=?, updated_at=? WHERE id=?",
-            (title, datetime.utcnow().isoformat(), session_id),
+            "UPDATE sessions SET title=?, title_state=?, updated_at=? WHERE id=?",
+            (title, by, datetime.utcnow().isoformat(), session_id),
         )
         await self.db.commit()
+
+    # Titles the UI and API give a session before anyone names it.
+    PLACEHOLDER_TITLES = ("", "New session", "Default session", "Session", "Untitled")
+
+    async def sessions_to_title(self, limit: int = 20) -> List[dict]:
+        """Sessions still on a placeholder title that have a finished task,
+        most recently used first, with how many tasks have finished."""
+        ph = ",".join("?" * len(self.PLACEHOLDER_TITLES))
+        async with self.db.execute(
+            "SELECT s.id, s.title, s.local_only, COUNT(t.id) AS n_done, "
+            "       MAX(t.created_at) AS last_at "
+            "FROM sessions s JOIN tasks t ON t.session_id = s.id "
+            "  AND t.status IN ('completed', 'failed', 'escalated') "
+            f"WHERE s.title_state = 'pending' OR (s.title_state = '' AND s.title IN ({ph})) "
+            "GROUP BY s.id ORDER BY last_at DESC LIMIT ?",
+            (*self.PLACEHOLDER_TITLES, limit),
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+    async def first_finished_tasks(self, session_id: str, limit: int = 3) -> List[dict]:
+        async with self.db.execute(
+            "SELECT goal, summary, status FROM tasks WHERE session_id=? "
+            "AND status IN ('completed', 'failed', 'escalated') ORDER BY created_at ASC LIMIT ?",
+            (session_id, limit),
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+    async def set_auto_title(self, session_id: str, title: str) -> bool:
+        """Name a session that nobody has named yet. False when the person
+        renamed it meanwhile. updated_at stays, so the list doesn't reorder."""
+        ph = ",".join("?" * len(self.PLACEHOLDER_TITLES))
+        cur = await self.db.execute(
+            "UPDATE sessions SET title=?, title_state='auto' WHERE id=? AND "
+            f"(title_state = 'pending' OR (title_state = '' AND title IN ({ph})))",
+            (title, session_id, *self.PLACEHOLDER_TITLES),
+        )
+        await self.db.commit()
+        return (cur.rowcount or 0) > 0
 
     async def update_session_mode(self, session_id: str, mode: str) -> None:
         """Change the mode on an existing session (Chat / Code / Analytic)."""

@@ -844,6 +844,15 @@ class Orchestrator:
 
     async def run(self, req: TaskRequest) -> TaskResult:
         """Full lifecycle: plan → execute → escalate → summarise."""
+        import idle
+        idle.begin()   # background chores wait until no task is running
+        try:
+            # Through the class: tests run this on stand-in objects.
+            return await Orchestrator._run_task(self, req)
+        finally:
+            idle.end()
+
+    async def _run_task(self, req: TaskRequest) -> TaskResult:
         logger.info("Orchestrator starting task %s: %s", req.id, req.goal)
 
         # Apply per-session workspace override + privacy flag. Both are
