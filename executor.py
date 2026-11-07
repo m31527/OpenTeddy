@@ -806,7 +806,7 @@ class Executor:
         self._exit_reason.pop(subtask_id, None)
         _internal_ctx_keys = (
             "agent_persona", "db_context", "db_schema", "prior_results",
-            "previous_attempt_failed",
+            "previous_attempt_failed", "skill_guides", "skills",
         )
         prior_block = ""
         # A retry says what went wrong last time. Without it every retry
@@ -1075,6 +1075,12 @@ class Executor:
                         "\n[可用 API 端點 — 只能用下列端點，不要臆造:]\n"
                         + _api["docs"]
                     )
+
+            # Skills picked for this task (agent_skills/, orchestrator
+            # _pick_skills) — after the static prefix, like everything here.
+            _guides = (context or {}).get("skill_guides") or ""
+            if _guides:
+                effective_system += "\n\n" + _guides
 
             # Connected database — mirror of the planner-side injection:
             # data questions go to the db_* tools first, never to web

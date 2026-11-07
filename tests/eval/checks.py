@@ -145,6 +145,43 @@ def html_file(ctx: Dict[str, Any], path: str = "*.html", all: List[str] = (), an
     return True, os.path.basename(p)
 
 
+@check
+def screen_shows(ctx: Dict[str, Any], path: str, rect_js: str, actions: List[str] = (),
+                 run_ms: int = 600, min_px: int = 60) -> Result:
+    """Seen as the person sees it: open the page, click `actions` (CSS
+    selectors), let `run_ms` of page time pass, and in a screenshot of the
+    spot `rect_js` names ({x, y, w, h} in page pixels — where the thing
+    should be) at least `min_px` pixels must stand out from the
+    background. Covered or nearly transparent drawing both fail."""
+    p = find(ctx["ws"], path)
+    if not p:
+        return False, f"{path} not found"
+    import io
+    from PIL import Image
+    from playwright.sync_api import sync_playwright
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch(headless=True)
+        try:
+            page = browser.new_page(viewport={"width": 1280, "height": 800})
+            page.clock.install()                      # page time moves only when told
+            page.goto("file://" + os.path.abspath(p), wait_until="load")
+            for sel in actions:
+                page.click(sel, timeout=3000, force=True)
+            page.clock.run_for(run_ms)
+            r = page.evaluate(f"() => {{ try {{ return {rect_js}; }} catch (e) {{ return String(e); }} }}")
+            if not isinstance(r, dict):
+                return False, f"can't find the spot: {r}"
+            png = page.screenshot(clip={"x": max(0, r["x"]), "y": max(0, r["y"]),
+                                        "width": max(1, r["w"]), "height": max(1, r["h"])})
+        finally:
+            browser.close()
+    img = Image.open(io.BytesIO(png)).convert("RGB")
+    px = list(img.getdata())
+    bg = max(set(px), key=px.count)
+    stand_out = sum(1 for c in px if sum(abs(a - b) for a, b in zip(c, bg)) > 90)
+    return stand_out >= min_px, f"{stand_out} of {len(px)} px stand out from the background (need {min_px})"
+
+
 # A tiny test runner (no pytest needed): import the test file in a fresh
 # process, call every test_* function, exit 1 on the first failure.
 _RUNNER = r"""

@@ -35,6 +35,19 @@
     - {check: run_script, script: count_words.py, args: ["{hidden}/words.txt"], expect: ["apple\\D+4", "banana\\D+3", "cherry\\D+2"]}
   seconds: 120
 
+# A display bug only seen by looking (2026-11-08): the snow canvas paints an
+# opaque background over the game, and the emoji are drawn at 3% opacity.
+# Twice OpenTeddy simulated the logic in Python, changed nothing, and said
+# it was fixed. Passes only when the player can be seen on screen.
+- id: code_fix_web_game
+  category: code
+  files: [xmas_game.html]
+  goal: xmas_game.html 是一個網頁聖誕吞食者遊戲，按「開始遊戲」後畫面一直飄雪，看不到吞食者主角。請排查原因並修好 xmas_game.html。
+  checks:
+    - {check: screen_shows, path: xmas_game.html, actions: ["#start-btn"],
+       rect_js: "(() => { const c = document.getElementById('game'), r = c.getBoundingClientRect(), s = r.width / (typeof COLS !== 'undefined' ? COLS : 24), h = snake[0]; return {x: r.left + h.x * s, y: r.top + h.y * s, w: s, h: s}; })()"}
+  seconds: 300
+
 # ── Data ────────────────────────────────────────────────────────────────────
 - id: data_month_revenue
   category: data

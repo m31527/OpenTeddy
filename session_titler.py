@@ -19,13 +19,11 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-import time
-from typing import Any, Awaitable, Callable, Dict, Optional
+from typing import Any, Awaitable, Callable, Optional
 
 from print_intent import _MANIFEST_RE
 
 import idle
-from config import config
 
 logger = logging.getLogger(__name__)
 
@@ -69,42 +67,9 @@ def from_request(goal: str) -> str:
 
 
 async def _ask_model(prompt: str, local_only: bool) -> str:
-    from config import orchestrator_on_cloud, set_session_local_only
-    set_session_local_only(local_only)   # this loop's own context only
-    if orchestrator_on_cloud():
-        r = await _orch.escalation.provider.complete_text(prompt, system=SYSTEM, max_tokens=60)
-        return r.text or ""
-
-    import local_engine
-    payload: Dict[str, Any] = {
-        "model": config.gemma_model,
-        "messages": [{"role": "system", "content": SYSTEM}, {"role": "user", "content": prompt}],
-        "stream": False,
-        "options": {"temperature": 0.2, "num_predict": 60,
-                    "num_ctx": int(getattr(config, "gemma_num_ctx", 16384))},
-        "keep_alive": getattr(config, "ollama_keep_alive", "24h"),
-    }
-    th = local_engine.think_setting(config.gemma_model)
-    if th is not None:
-        payload["think"] = th
-    t0 = time.monotonic()
-    resp = await _orch._http.post(f"{config.gemma_base_url}/api/chat", json=payload)
-    resp.raise_for_status()
-    data = resp.json()
-    try:
-        t = local_engine.timings(data)
-        out = data.get("eval_count", 0) or 0
-        dur = data.get("eval_duration", 0) or 0
-        await _tracker.record_usage(
-            task_id="", model=config.gemma_model, model_provider="ollama",
-            tokens_in=data.get("prompt_eval_count", 0) or 0, tokens_out=out,
-            task_description="[session title]",
-            duration_ms=int((data.get("total_duration") or 0) / 1e6) or int((time.monotonic() - t0) * 1000),
-            tokens_per_sec=(out * 1e9 / dur) if out and dur else 0.0,
-            load_ms=t["load_ms"], prefill_ms=t["prefill_ms"])
-    except Exception:  # noqa: BLE001
-        pass
-    return (data.get("message") or {}).get("content") or ""
+    import fast_model
+    return await fast_model.ask(_orch, SYSTEM, prompt, max_tokens=60,
+                                label="[session title]", local_only=local_only)
 
 
 async def title_one() -> bool:

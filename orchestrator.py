@@ -1327,6 +1327,10 @@ class Orchestrator:
                     # fall through to the planner below
 
         try:
+            # Skills (agent_skills/): the how-to guides this request needs,
+            # picked by the fast model; planner and executor both follow them.
+            await Orchestrator._pick_skills(self, req)   # class: tests use stand-ins
+
             # ── ReAct lane (Hermes-shape single loop) ────────────────────
             # When enabled, skip the separate planner AND summary: run the
             # whole goal through ONE executor tool-loop and return its final
@@ -1990,6 +1994,26 @@ class Orchestrator:
             text = "…" + text[-max_chars:]
         return "【最近的對話（同一個對話串，舊→新；回答時可引用）】\n" + text
 
+    async def _pick_skills(self, req: TaskRequest) -> None:
+        """Put the picked skills' guides in req.context ('skill_guides'),
+        where _plan and every executor step read them. A failed pick
+        only means planning without skills."""
+        if req.context is None:
+            req.context = {}
+        if "skill_guides" in req.context:
+            return
+        try:
+            import agent_skills
+            names = await agent_skills.pick(self, req.goal, task_id=req.id)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Skill pick failed for task %s (no skills): %s", req.id, exc)
+            return
+        req.context["skill_guides"] = agent_skills.guide_text(names) if names else ""
+        if names:
+            req.context["skills"] = names
+            logger.info("Skills for task %s: %s", req.id, ", ".join(names))
+            await self._emit_task_event("task.skills", req, skills=names)
+
     async def _emit_task_event(self, kind: str, req: TaskRequest, **extra: Any) -> None:
         """Broadcast a task-level event (task.started / task.done) on the
         same channel as tool events. Best-effort: a UI hiccup must never
@@ -2057,6 +2081,15 @@ class Orchestrator:
             base_prompt += (
                 "\n\n--- Agent persona (standing instructions for this "
                 "session's role — plan accordingly) ---\n" + _persona
+            )
+
+        # Skills picked for this request (_pick_skills): plan by them,
+        # including the checks they ask for.
+        _guides = (req.context or {}).get("skill_guides") or ""
+        if _guides:
+            base_prompt += (
+                "\n\n--- 這個請求要照下面的做法手冊（skill）規劃，"
+                "手冊要求的驗證步驟也要排進子任務 ---\n" + _guides
             )
 
         # Outbound API access for action-taking agents. Names + hosts

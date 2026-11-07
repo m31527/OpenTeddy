@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>🎄 聖誕吃豆遊戲 🎅</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: linear-gradient(135deg, #0f2027, #203a43, #2c5364);
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    min-height: 100vh; font-family: 'Segoe UI', Arial, sans-serif; color: #fff;
+    overflow: hidden;
+  }
+  h1 {
+    font-size: 2rem; margin-bottom: 8px; text-shadow: 0 0 20px rgba(255,200,50,0.6);
+    letter-spacing: 2px;
+  }
+  #hud {
+    display: flex; gap: 30px; margin-bottom: 10px; font-size: 1.1rem;
+  }
+  #hud span { background: rgba(255,255,255,0.1); padding: 6px 18px; border-radius: 20px; }
+  canvas {
+    border: 3px solid rgba(255,255,255,0.2); border-radius: 12px;
+    background: #1a1a2e; box-shadow: 0 0 40px rgba(100,200,255,0.15);
+  }
+  #overlay {
+    position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    background: rgba(0,0,0,0.7); z-index: 10; transition: opacity 0.3s;
+  }
+  #overlay.hidden { opacity: 0; pointer-events: none; }
+  #overlay h2 { font-size: 2.5rem; margin-bottom: 16px; text-shadow: 0 0 30px rgba(255,100,100,0.8); }
+  #overlay p { font-size: 1.2rem; margin-bottom: 24px; color: #ddd; }
+  button {
+    padding: 14px 40px; font-size: 1.2rem; border: none; border-radius: 30px; cursor: pointer;
+    background: linear-gradient(90deg, #e74c3c, #f39c12); color: #fff; font-weight: bold;
+    box-shadow: 0 4px 20px rgba(231,76,60,0.4); transition: transform 0.2s;
+  }
+  button:hover { transform: scale(1.08); }
+  #snowflakes { position: fixed; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 0; }
+  .snow { position: absolute; color: #fff; opacity: 0.8; animation: fall linear infinite; }
+  @keyframes fall {
+    0% { transform: translateY(-10vh) rotate(0deg); }
+    100% { transform: translateY(105vh) rotate(360deg); }
+  }
+  #controls { margin-top: 12px; font-size: 0.9rem; color: #aaa; }
+</style>
+</head>
+<body>
+
+<canvas id="snowflakes"></canvas>
+
+<h1>🎄 聖誕吃豆遊戲 🎅</h1>
+<div id="hud">
+  <span>🍬 分數: <b id="score">0</b></span>
+  <span>❤️ 生命: <b id="lives">3</b></span>
+  <span>⏱️ 時間: <b id="timer">60</b>s</span>
+</div>
+
+<canvas id="game" width="480" height="480"></canvas>
+
+<div id="controls">方向鍵 / WASD 移動 ｜ P 暫停 ｜ R 重新開始</div>
+
+<div id="overlay">
+  <h2 id="overlay-title">🎅 聖誕吃豆大冒險 🎄</h2>
+  <p id="overlay-msg">收集糖果，躲避雪人！</p>
+  <button id="start-btn" onclick="startGame()">開始遊戲</button>
+</div>
+
+<script>
+// ── Snowflakes background ──
+(function initSnow() {
+  const c = document.getElementById('snowflakes');
+  const ctx = c.getContext('2d');
+  let W, H;
+  function resize() { W = c.width = innerWidth; H = c.height = innerHeight; }
+  resize(); window.addEventListener('resize', resize);
+  const flakes = Array.from({length: 60}, () => ({
+    x: Math.random() * W, y: Math.random() * H,
+    r: Math.random() * 3 + 1, s: Math.random() * 1.5 + 0.5,
+    o: Math.random() * 0.5 + 0.3
+  }));
+  function drawSnow() {
+    ctx.clearRect(0, 0, W, H);
+    flakes.forEach(f => {
+      ctx.beginPath();
+      ctx.arc(f.x, f.y, f.r, 0, Math.PI * 2);
+      ctx.fillStyle = `rgba(255,255,255,${f.o})`;
+      ctx.fill();
+      f.y += f.s;
+      if (f.y > H + 10) { f.y = -10; f.x = Math.random() * W; }
+    });
+    requestAnimationFrame(drawSnow);
+  }
+  drawSnow();
+})();
+
+// ── Game constants ──
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+const COLS = 24, ROWS = 24;
+const CELL = canvas.width / COLS;
+const EMOJIS = { player: '🎅', candy: '🍬', snowman: '☃️', gift: '🎁', star: '⭐', wall: '', ghost: '👻' };
+
+// ── Game state ──
+let snake, dir, nextDir, foods, obstacles, score, lives, timeLeft, gameLoop, timerLoop, paused, running;
+
+function init() {
+  snake = [{x:12,y:12},{x:11,y:12},{x:10,y:12}];
+  dir = {x:1,y:0}; nextDir = {x:1,y:0};
+  score = 0; lives = 3; timeLeft = 60; paused = false; running = true;
+  foods = []; obstacles = [];
+  spawnFood(); spawnFood(); spawnObstacle(); spawnObstacle(); spawnObstacle();
+  updateHUD();
+}
+
+function spawnFood() {
+  let pos;
+  do { pos = {x: Math.floor(Math.random()*COLS), y: Math.floor(Math.random()*ROWS)}; }
+  while (isOccupied(pos));
+  const types = ['🍬','🍬','🍬','🎁','⭐'];
+  foods.push({...pos, emoji: types[Math.floor(Math.random()*types.length)]});
+}
+
+function spawnObstacle() {
+  let pos;
+  do { pos = {x: Math.floor(Math.random()*COLS), y: Math.floor(Math.random()*ROWS)}; }
+  while (isOccupied(pos) || dist(pos, snake[0]) > 5);
+  obstacles.push({...pos, dx: Math.random() < 0.5 ? 1 : -1, dy: 0});
+}
+
+function isOccupied(p) {
+  if (snake.some(s => s.x === p.x && s.y === p.y)) return true;
+  if (foods.some(f => f.x === p.x && f.y === p.y)) return true;
+  if (obstacles.some(o => o.x === p.x && o.y === p.y)) return true;
+  return false;
+}
+
+function dist(a, b) { return Math.abs(a.x - b.x) + Math.abs(a.y - b.y); }
+
+function updateHUD() {
+  document.getElementById('score').textContent = score;
+  document.getElementById('lives').textContent = '❤️'.repeat(lives);
+  document.getElementById('timer').textContent = timeLeft;
+}
+
+// ── Drawing ──
+function draw() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  // Grid dots (subtle)
+  ctx.fillStyle = 'rgba(255,255,255,0.03)';
+  for (let x = 0; x < COLS; x++) for (let y = 0; y < ROWS; y++) {
+    ctx.beginPath(); ctx.arc(x*CELL+CELL/2, y*CELL+CELL/2, 1.5, 0, Math.PI*2); ctx.fill();
+  }
+
+  // Foods
+  foods.forEach(f => {
+    ctx.font = `${CELL * 0.8}px serif`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(f.emoji, f.x * CELL + CELL/2, f.y * CELL + CELL/2);
+  });
+
+  // Obstacles
+  obstacles.forEach(o => {
+    ctx.font = `${CELL * 0.8}px serif`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText('☃️', o.x * CELL + CELL/2, o.y * CELL + CELL/2);
+  });
+
+  // Snake (Santa)
+  snake.forEach((s, i) => {
+    const alpha = 1 - i * 0.06;
+    if (i === 0) {
+      ctx.font = `${CELL * 0.9}px serif`;
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText('🎅', s.x * CELL + CELL/2, s.y * CELL + CELL/2);
+    } else {
+      ctx.fillStyle = `rgba(231,76,60,${alpha})`;
+      const r = CELL * 0.35;
+      ctx.beginPath();
+      ctx.arc(s.x*CELL+CELL/2, s.y*CELL+CELL/2, r, 0, Math.PI*2);
+      ctx.fill();
+    }
+  });
+
+  // Pause overlay
+  if (paused) {
+    ctx.fillStyle = 'rgba(0,0,0,0.5)';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.font = 'bold 36px sans-serif';
+    ctx.fillStyle = '#fff';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText('⏸️ 暫停', canvas.width/2, canvas.height/2);
+  }
+}
+
+// ── Game loop ──
+function tick() {
+  if (paused || !running) return;
+
+  dir = {...nextDir};
+  const head = {x: snake[0].x + dir.x, y: snake[0].y + dir.y};
+
+  // Wrap around
+  if (head.x < 0) head.x = COLS - 1;
+  if (head.x >= COLS) head.x = 0;
+  if (head.y < 0) head.y = ROWS - 1;
+  if (head.y >= ROWS) head.y = 0;
+
+  // Self collision
+  if (snake.some(s => s.x === head.x && s.y === head.y)) {
+    loseLife(); return;
+  }
+
+  snake.unshift(head);
+
+  // Food collision
+  const fi = foods.findIndex(f => f.x === head.x && f.y === head.y);
+  if (fi !== -1) {
+    const bonus = foods[fi].emoji === '⭐' ? 5 : foods[fi].emoji === '🎁' ? 3 : 1;
+    score += bonus;
+    foods.splice(fi, 1);
+    spawnFood();
+    if (score % 10 === 0) spawnObstacle();
+    updateHUD();
+  } else {
+    snake.pop();
+  }
+
+  // Obstacle collision
+  const hit = obstacles.find(o => o.x === head.x && o.y === head.y);
+  if (hit) { loseLife(); return; }
+
+  // Move obstacles
+  obstacles.forEach(o => {
+    let nx = o.x + o.dx, ny = o.y + o.dy;
+    if (nx < 0 || nx >= COLS) o.dx *= -1;
+    if (ny < 0 || ny >= ROWS) o.dy *= -1;
+    nx = Math.max(0, Math.min(COLS-1, o.x + o.dx));
+    ny = Math.max(0, Math.min(ROWS-1, o.y + o.dy));
+    // Only move if not colliding with snake body
+    const willHit = snake.some(s => s.x === nx && s.y === ny);
+    if (!willHit) { o.x = nx; o.y = ny; }
+  });
+
+  draw();
+}
+
+function loseLife() {
+  lives--;
+  updateHUD();
+  // Flash red
+  ctx.fillStyle = 'rgba(255,0,0,0.4)';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  if (lives <= 0) { endGame(false); return; }
+  setTimeout(() => { snake = [{x:12,y:12},{x:11,y:12},{x:10,y:12}]; dir={x:1,y:0}; nextDir={x:1,y:0}; }, 500);
+}
+
+function endGame(won) {
+  running = false;
+  clearInterval(gameLoop); clearInterval(timerLoop);
+  const ov = document.getElementById('overlay');
+  ov.classList.remove('hidden');
+  document.getElementById('overlay-title').textContent = won ? '🎉 恭喜通關！🎉' : '💀 遊戲結束 💀';
+  document.getElementById('overlay-msg').textContent = `最終分數: ${score}`;
+  document.getElementById('start-btn').textContent = '再玩一次';
+}
+
+function startGame() {
+  document.getElementById('overlay').classList.add('hidden');
+  init();
+  draw();
+  gameLoop = setInterval(tick, 120);
+  timerLoop = setInterval(() => {
+    if (!paused && running) {
+      timeLeft--;
+      updateHUD();
+      if (timeLeft <= 0) endGame(score >= 30);
+    }
+  }, 1000);
+}
+
+// ── Input ──
+document.addEventListener('keydown', e => {
+  const key = e.key.toLowerCase();
+  if (key === 'p') { paused = !paused; draw(); return; }
+  if (key === 'r') { startGame(); return; }
+  const map = {arrowup:{x:0,y:-1},arrowdown:{x:0,y:1},arrowleft:{x:-1,y:0},arrowright:{x:1,y:0},
+               w:{x:0,y:-1},s:{x:0,y:1},a:{x:-1,y:0},d:{x:1,y:0}};
+  const nd = map[key];
+  if (nd && !(nd.x === -dir.x && nd.y === -dir.y)) nextDir = nd;
+  e.preventDefault();
+});
+
+// ── Touch controls ──
+let touchStartX, touchStartY;
+canvas.addEventListener('touchstart', e => {
+  touchStartX = e.touches[0].clientX; touchStartY = e.touches[0].clientY;
+});
+canvas.addEventListener('touchend', e => {
+  const dx = e.changedTouches[0].clientX - touchStartX;
+  const dy = e.changedTouches[0].clientY - touchStartY;
+  if (Math.abs(dx) > Math.abs(dy)) {
+    nextDir = dx > 0 ? {x:1,y:0} : {x:-1,y:0};
+  } else {
+    nextDir = dy > 0 ? {x:0,y:1} : {x:0,y:-1};
+  }
+});
+
+// Initial draw
+init(); draw();
+</script>
+</body>
+</html>

@@ -68,6 +68,21 @@ BAD = {   # plausible wrong deliveries the checks must catch
 }
 
 
+def _game(cover: bool = True, alpha: bool = True) -> str:
+    """The broken eval game with its cover bug and/or faint-emoji bug fixed."""
+    g = open(os.path.join(HERE, "fixtures", "xmas_game.html"), encoding="utf-8").read()
+    if cover:
+        g = g.replace("  canvas {\n    border: 3px", "  #game {\n    position: relative; z-index: 1;\n    border: 3px", 1)
+        g = g.replace("pointer-events: none; z-index: 0; }", "pointer-events: none; z-index: -1; }", 1)
+    if alpha:
+        g = g.replace("  // Foods\n", "  ctx.fillStyle = '#fff';\n  // Foods\n", 1)
+    return g
+
+
+GOOD["code_fix_web_game"] = {"xmas_game.html": _game()}
+BAD["code_fix_web_game"] = {"xmas_game.html": _game(alpha=False)}   # uncovered, Santa still at 3%
+
+
 def ctx_for(task_id: str, files=None, answer: str = "", tools=()):
     ws = tempfile.mkdtemp(prefix=f"ot-evalck-{task_id}-")
     for name in TASKS[task_id].get("files", []):
@@ -131,7 +146,7 @@ def test_web_tasks() -> None:
 
 def test_tasks() -> None:
     TASKS_ = {k: v for k, v in TASKS.items() if not v.get("browser")}
-    assert len(TASKS_) == 20, len(TASKS_)
+    assert len(TASKS_) == 21, len(TASKS_)
     for tid, task in TASKS_.items():
         files = GOOD.get(tid) if isinstance(GOOD.get(tid), dict) else None
         tools = ["read_file"] if tid not in ("remark_thanks",) else []
