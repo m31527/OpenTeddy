@@ -21,6 +21,7 @@ def test_clean():
     assert T.clean("**Docker 部署**") == "Docker 部署"
     assert T.clean("-") is None and T.clean("") is None and T.clean("  \n") is None
     assert len(T.clean("長" * 80)) == 40
+    assert T.from_request("[Attachments in workspace — use these paths directly\n- a.csv\n]\n分析這份檔案\n第二行") == "分析這份檔案"
 
 
 def test_idle():
@@ -61,7 +62,7 @@ async def _flow():
         assert ids == {"new", "hi"}, ids
 
         seen = []
-        replies = {"做一個聖誕節": "聖誕節吃東西小遊戲", "Pixel": "Pixel 11 最低價", "hi": "-"}
+        replies = {"做一個聖誕節": "聖誕節吃東西小遊戲", "hi": "-"}   # "-": nothing usable
 
         async def fake_model(prompt, local_only):
             seen.append(prompt)
@@ -72,23 +73,21 @@ async def _flow():
         async def bcast(d):
             sent.append(d)
 
-        T._tracker, T._broadcast, T._no_topic_at = t, bcast, {}
+        T._tracker, T._broadcast = t, bcast
         T._ask_model = fake_model
 
-        assert await T.title_one()                                # "new" or "hi", newest first
-        assert await T.title_one()
-        assert not await T.title_one()                            # "hi" waits for another task
+        assert await T.title_one() and await T.title_one()
+        assert not await T.title_one()
         s = await t.get_session("new")
         assert s["title"] == "聖誕節吃東西小遊戲" and s["title_state"] == "auto"
-        assert (await t.get_session("hi"))["title"] == "Default session"
-        assert sent == [{"type": "session.renamed", "session_id": "new", "title": "聖誕節吃東西小遊戲"}]
-        assert "First request: 做一個聖誕節吃東西的小遊戲" in seen[0] or "First request: 做一個聖誕節吃東西的小遊戲" in seen[1]
+        assert (await t.get_session("hi"))["title"] == "hi"      # its first words, once
+        assert {"type": "session.renamed", "session_id": "new", "title": "聖誕節吃東西小遊戲"} in sent
+        assert any(p.startswith("Person: 做一個聖誕節吃東西的小遊戲\nOpenTeddy: 已產出") for p in seen)
 
-        # A second exchange gives "hi" a topic; it is asked again.
-        await task("hi", "幫我查 Pixel 11 最便宜多少", "NT$26,111")
-        assert await T.title_one()
-        assert (await t.get_session("hi"))["title"] == "Pixel 11 最低價"
-        assert "First request: hi" in seen[-1] and "Later request: 幫我查 Pixel 11" in seen[-1]
+        # Named once: later turns change nothing.
+        await task("new", "幫我改成新年主題", "好了")
+        assert not await T.title_one()
+        assert (await t.get_session("new"))["title"] == "聖誕節吃東西小遊戲"
 
         # Named ones are left alone for good; a rename mid-way wins.
         assert await t.sessions_to_title() == []

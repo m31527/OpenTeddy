@@ -605,11 +605,10 @@ class Tracker:
 
     async def sessions_to_title(self, limit: int = 20) -> List[dict]:
         """Sessions still on a placeholder title that have a finished task,
-        most recently used first, with how many tasks have finished."""
+        most recently used first."""
         ph = ",".join("?" * len(self.PLACEHOLDER_TITLES))
         async with self.db.execute(
-            "SELECT s.id, s.title, s.local_only, COUNT(t.id) AS n_done, "
-            "       MAX(t.created_at) AS last_at "
+            "SELECT s.id, s.title, s.local_only, MAX(t.created_at) AS last_at "
             "FROM sessions s JOIN tasks t ON t.session_id = s.id "
             "  AND t.status IN ('completed', 'failed', 'escalated') "
             f"WHERE s.title_state = 'pending' OR (s.title_state = '' AND s.title IN ({ph})) "

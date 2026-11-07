@@ -1,17 +1,17 @@
 """
 Name sessions in OpenTeddy's quiet time.
 
-A session starts as "New session". Once it has a finished task and
-nothing has run for a while (idle.py), the fast chat model reads the
-first few exchanges and gives it a short title. The person asked for it
-to happen in the gaps, not on the hot path (2026-11-07), so a title
-never delays an answer.
+A session starts as "New session". Once its first task has finished and
+nothing has run for a while (idle.py), the fast chat model reads that
+first exchange and gives it a short title. The person asked for it to
+happen in the gaps, not on the hot path (2026-11-07), so a title never
+delays an answer.
 
-Only sessions nobody has named are touched: a title the person typed
-(title_state 'user') is never replaced, and a rename that lands while
-the model is thinking wins (tracker.set_auto_title checks again).
-If the model sees only a greeting so far it answers "-"; the session is
-tried again once it has another finished task.
+It is named once, from how it began, and never again: later turns don't
+change it, and whoever wants another name renames it (the person's
+words, 2026-11-07). A title the person typed (title_state 'user') is
+never replaced, and a rename that lands while the model is thinking
+wins (tracker.set_auto_title checks again).
 """
 
 from __future__ import annotations
@@ -22,6 +22,8 @@ import re
 import time
 from typing import Any, Awaitable, Callable, Dict, Optional
 
+from print_intent import _MANIFEST_RE
+
 import idle
 from config import config
 
@@ -31,21 +33,16 @@ QUIET_S = 30.0       # nothing has run for this long → the system is free
 TICK_S = 15.0
 BACKOFF_S = 300.0    # after a failed model call
 
-SYSTEM = """You name chat sessions for a sidebar. Reply with only a title for what the person asked for in their FIRST request. Later requests are shown only for when the first is just a greeting; otherwise ignore them, even if they change the subject. Write it in the person's language (Traditional Chinese for Chinese), at most 16 Chinese characters or 6 words. No quotes, no ending punctuation, no "Title:".
-If there is no request with a topic yet — only greetings or small talk such as 早安, hi, 你好, 謝謝 — reply with only: -
-Never title a session as a greeting."""
+SYSTEM = """You name chat sessions for a sidebar. Reply with only a short title for what the person asked for, in the person's language (Traditional Chinese for Chinese), at most 16 Chinese characters or 6 words. No quotes, no ending punctuation, no "Title:"."""
 
 _tracker: Any = None
 _orch: Any = None
 _broadcast: Optional[Callable[[dict], Awaitable[None]]] = None
 _loop_task: Optional[asyncio.Task] = None
-# session id → finished-task count when it last had no topic, so it is
-# asked again only after another task finishes.
-_no_topic_at: Dict[str, int] = {}
 
 
 def clean(text: str) -> Optional[str]:
-    """The model's reply as a title; None for "-" or nothing usable."""
+    """The model's reply as a title; None when nothing is usable."""
     line = next((l for l in (text or "").splitlines() if l.strip()), "").strip()
     line = re.sub(r"^(標題|title)\s*[:：]\s*", "", line, flags=re.I)
     for _ in range(2):   # 「…」。 — quotes and the full stop, either order
@@ -55,15 +52,20 @@ def clean(text: str) -> Optional[str]:
     return line[:40].rstrip()
 
 
-def conversation(tasks: list) -> str:
-    parts = []
-    for i, t in enumerate(tasks):
-        label = "First request" if i == 0 else "Later request"
-        parts.append(f"{label}: {(t.get('goal') or '').strip()[:400]}")
-        s = (t.get("summary") or "").strip()
-        if s:
-            parts.append(f"OpenTeddy replied: {s[:300]}")
+def conversation(task: dict) -> str:
+    parts = [f"Person: {(task.get('goal') or '').strip()[:400]}"]
+    s = (task.get("summary") or "").strip()
+    if s:
+        parts.append(f"OpenTeddy: {s[:300]}")
     return "\n".join(parts)
+
+
+def from_request(goal: str) -> str:
+    """The first line of what the person typed — when the model gives
+    nothing usable."""
+    text = _MANIFEST_RE.sub("", goal or "").strip()
+    line = next((l for l in text.splitlines() if l.strip()), "").strip()
+    return line[:30].rstrip() or "Session"
 
 
 async def _ask_model(prompt: str, local_only: bool) -> str:
@@ -106,22 +108,20 @@ async def _ask_model(prompt: str, local_only: bool) -> str:
 
 
 async def title_one() -> bool:
-    """Name the most recently used session that needs it. True if a
-    session was looked at (named or found to have no topic yet)."""
-    for s in await _tracker.sessions_to_title():
-        if s["n_done"] <= _no_topic_at.get(s["id"], 0):
-            continue
-        tasks = await _tracker.first_finished_tasks(s["id"])
-        title = clean(await _ask_model(conversation(tasks), bool(s.get("local_only"))))
-        if not title:
-            _no_topic_at[s["id"]] = s["n_done"]
-            return True
-        if await _tracker.set_auto_title(s["id"], title):
-            logger.info("Session %s named %r", s["id"][:8], title)
-            if _broadcast:
-                await _broadcast({"type": "session.renamed", "session_id": s["id"], "title": title})
-        return True
-    return False
+    """Name the most recently used session that needs it, from its first
+    finished exchange. True if one was named."""
+    rows = await _tracker.sessions_to_title(limit=1)
+    if not rows:
+        return False
+    s = rows[0]
+    first = (await _tracker.first_finished_tasks(s["id"], limit=1))[0]
+    title = (clean(await _ask_model(conversation(first), bool(s.get("local_only"))))
+             or from_request(first.get("goal") or ""))
+    if await _tracker.set_auto_title(s["id"], title):
+        logger.info("Session %s named %r", s["id"][:8], title)
+        if _broadcast:
+            await _broadcast({"type": "session.renamed", "session_id": s["id"], "title": title})
+    return True
 
 
 async def _run() -> None:
