@@ -79,6 +79,46 @@ async def write_file(path: str, content: str) -> Dict[str, Any]:
         return make_result(False, error=str(exc), duration_ms=_ms(start))
 
 
+async def edit_file(path: str, old_text: str, new_text: str, replace_all: bool = False) -> Dict[str, Any]:
+    """Replace exact text in a file. HIGH risk, like write_file.
+
+    A small fix shouldn't mean writing the whole file back: asked to fix
+    a 315-line game, qwen3.6 knew the two lines to change but spent 2,200
+    tokens twice trying to emit the whole file as its answer, and never
+    saved it (2026-11-08 eval). Here it sends only what changes.
+    """
+    start = time.monotonic()
+    try:
+        p = _resolve_path(path)
+        if not p.is_file():
+            return make_result(False, error=f"File not found: {p}", duration_ms=_ms(start))
+        if not old_text:
+            return make_result(False, error="old_text is empty — copy the exact text to replace from read_file",
+                               duration_ms=_ms(start))
+        text = p.read_text(encoding="utf-8")
+        n = text.count(old_text)
+        if n == 0:
+            return make_result(False, error=(
+                "old_text not found in the file. Copy it exactly from read_file — same spaces, "
+                "indentation and quotes — or use a shorter piece that is unique."), duration_ms=_ms(start))
+        if n > 1 and not replace_all:
+            return make_result(False, error=(
+                f"old_text appears {n} times. Include more of the surrounding lines so it is unique, "
+                "or set replace_all to change every one."), duration_ms=_ms(start))
+        out = text.replace(old_text, new_text) if replace_all else text.replace(old_text, new_text, 1)
+        p.write_text(out, encoding="utf-8")
+        at = out.find(new_text) if new_text else text.find(old_text)
+        line = out.count("\n", 0, max(at, 0)) + 1
+        lines = out.splitlines()
+        lo = max(0, line - 3)
+        around = "\n".join(f"{i + 1}: {lines[i]}" for i in range(lo, min(len(lines), line + 2 + new_text.count("\n"))))
+        return make_result(True, result={"path": str(p), "replaced": n if replace_all else 1,
+                                          "bytes_written": len(out.encode()), "now_reads": around},
+                           duration_ms=_ms(start))
+    except Exception as exc:  # noqa: BLE001
+        return make_result(False, error=str(exc), duration_ms=_ms(start))
+
+
 async def list_directory(path: str) -> Dict[str, Any]:
     """List files and directories at a given path. LOW risk."""
     start = time.monotonic()
@@ -332,6 +372,30 @@ _SCHEMA_WRITE: Dict[str, Any] = {
     },
 }
 
+_SCHEMA_EDIT: Dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "edit_file",
+        "description": (
+            "Change part of an existing file: replace old_text (copied exactly from read_file) with "
+            "new_text. Use this to fix or adjust a file — only the changed lines are sent, not the "
+            "whole file. Returns the lines around the change so you can check it."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "File to change."},
+                "old_text": {"type": "string",
+                             "description": "Exact text now in the file (a few lines, unique in the file)."},
+                "new_text": {"type": "string", "description": "What it should become."},
+                "replace_all": {"type": "boolean",
+                                "description": "Replace every occurrence. Default false."},
+            },
+            "required": ["path", "old_text", "new_text"],
+        },
+    },
+}
+
 _SCHEMA_LIST: Dict[str, Any] = {
     "type": "function",
     "function": {
@@ -411,6 +475,7 @@ _SCHEMA_DELETE: Dict[str, Any] = {
 FILE_TOOLS: List[Tuple[Any, Dict[str, Any], RiskLevel]] = [
     (read_file,        _SCHEMA_READ,        "low"),
     (write_file,       _SCHEMA_WRITE,       "high"),
+    (edit_file,        _SCHEMA_EDIT,        "high"),
     (list_directory,   _SCHEMA_LIST,        "low"),
     (delete_file,      _SCHEMA_DELETE,      "high"),
     # Read-only — same risk class as read_file. Lets the agent answer

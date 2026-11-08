@@ -7,7 +7,7 @@ description: A web page, HTML report or browser game shows the wrong thing — s
 ## 規劃：看 → 改 → 再看，放在同一個子任務
 一個子任務做完整個循環，例如：
 「用 page_look 打開 game.html（actions 照使用者的操作：click 開始遊戲、wait 1000；question：看得到主角嗎？），
-讀 html 依回報找原因、直接改檔，再用 page_look 確認，看不到就繼續找下一個原因」
+讀 html 依回報找原因、用 edit_file 改檔，再用 page_look 確認，看不到就繼續找下一個原因」
 不要拆成「看」「分析」「改」「驗證」好幾個子任務 —— 驗證沒過時才能回頭再改。
 
 ## page_look 怎麼用
@@ -30,7 +30,8 @@ description: A web page, HTML report or browser game shows the wrong thing — s
 - **在使用者那邊才壞**：檔案或圖片路徑錯、外部資源載入失敗（`errors` 會列出）。
 
 ## 什麼時候才算修好
-- 直接改 html 檔本身，再用**同樣的 actions** 跑 page_look。
+- 用 `edit_file` 改 html 檔本身（old_text 從 read_file 原樣複製幾行，new_text 是改好的樣子）—— 不要把整份檔案貼在回答裡，那不會存檔。改完用**同樣的 actions** 跑 page_look。
+- 不管你在哪一步（就算這步叫「驗證」），看到 NO 就直接用 edit_file 修，再看一次。
 - `answer` 是 YES、`seen` 看得到使用者要的東西、`covered` 和 `canvas_drawing` 沒有它、`errors` 沒有新錯誤 —— 才算修好。
 - `answer` 是 NO 或 seen 說看不到 → **還沒修好**，繼續找原因。不可以用「動畫可能還沒啟動」「主角可能比較小」這類猜測帶過。
 - 一個畫面問題常常不只一個原因：修好一個後還是看不到，就照新的回報找下一個。

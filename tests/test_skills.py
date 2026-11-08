@@ -146,6 +146,30 @@ async def _pick_into_context():
         A.pick = real
 
 
+async def _edit_file():
+    from config import set_session_workspace
+    from tools.file_tool import edit_file
+    ws = tempfile.mkdtemp()
+    set_session_workspace(ws)
+    path = os.path.join(ws, "a.html")
+    open(path, "w").write("<style>\n  canvas { z-index: 0; }\n  #x { z-index: 0; }\n</style>\n")
+    r = await edit_file("a.html", "  canvas { z-index: 0; }", "  #game { z-index: 1; }")
+    assert r["success"] and r["result"]["replaced"] == 1 and "2:   #game { z-index: 1; }" in r["result"]["now_reads"], r
+    assert open(path).read() == "<style>\n  #game { z-index: 1; }\n  #x { z-index: 0; }\n</style>\n"
+    r = await edit_file("a.html", "z-index: ", "z-index:")              # two matches
+    assert not r["success"] and "2 times" in r["error"]
+    r = await edit_file("a.html", "z-index: ", "z-index:", replace_all=True)
+    assert r["success"] and r["result"]["replaced"] == 2 and "z-index: " not in open(path).read()
+    r = await edit_file("a.html", "not there", "x")
+    assert not r["success"] and "not found" in r["error"]
+    r = await edit_file("nope.html", "a", "b")
+    assert not r["success"]
+
+
+def test_edit_file():
+    asyncio.run(_edit_file())
+
+
 def test_pick_into_context():
     asyncio.run(_pick_into_context())
 
@@ -157,4 +181,5 @@ if __name__ == "__main__":
     test_page_look_targets()
     test_page_look_sees_cover()
     test_pick_into_context()
+    test_edit_file()
     print("ALL SKILL TESTS PASS")
