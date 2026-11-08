@@ -125,6 +125,18 @@ _REFUSAL_SIGNAL_RE = re.compile(
 )
 
 
+def _clip_for_model(text: str, max_tokens: int = 4500) -> str:
+    """Up to ~max_tokens of `text` (CJK ≈ 1 token a character, other
+    text ≈ 0.3), and when cut, how much is left and how to read it."""
+    used = 0.0
+    for i, ch in enumerate(text):
+        used += 1.0 if ord(ch) > 0x2E80 else 0.3
+        if used > max_tokens:
+            return (text[:i] + f"\n… [cut here: {i} of {len(text)} characters shown. Read the rest "
+                    "with shell_exec_readonly, e.g. sed -n '200,320p' FILE, or grep -n for what you need]")
+    return text
+
+
 def _format_tool_result_for_model(
     tool_name: str, tool_result: Dict[str, Any],
 ) -> str:
@@ -175,10 +187,21 @@ def _format_tool_result_for_model(
         # see structured data without us hiding it entirely.
         extra = {k: v for k, v in inner.items()
                  if k not in ("stdout", "stderr", "exit_code")}
-        if extra:
+        # Long text fields (a file's content, a page as markdown, what the
+        # vision model saw) get their own plain-text section. In the JSON
+        # line they were escaped and cut at 2,000 characters: read_file on
+        # a 10 KB game showed the model its first fifth, so it never saw
+        # the line it had to fix and made one up (2026-11-08).
+        texts = {k: v for k, v in extra.items()
+                 if isinstance(v, str) and (len(v) > 300 or "\n" in v)}
+        for k, v in texts.items():
+            lines.append(f"--- {k} ---")
+            lines.append(_clip_for_model(v))
+        rest = {k: v for k, v in extra.items() if k not in texts}
+        if rest:
             try:
                 lines.append("--- result fields ---")
-                lines.append(json.dumps(extra, ensure_ascii=False, default=str)[:2000])
+                lines.append(json.dumps(rest, ensure_ascii=False, default=str)[:3000])
             except Exception:  # noqa: BLE001
                 pass
         if not stdout and not stderr and not extra:

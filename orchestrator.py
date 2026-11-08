@@ -1330,6 +1330,8 @@ class Orchestrator:
             # Skills (agent_skills/): the how-to guides this request needs,
             # picked by the fast model; planner and executor both follow them.
             await Orchestrator._pick_skills(self, req)   # class: tests use stand-ins
+            import workspace_changes
+            _ws_task_before = workspace_changes.snapshot()
 
             # ── ReAct lane (Hermes-shape single loop) ────────────────────
             # When enabled, skip the separate planner AND summary: run the
@@ -1446,12 +1448,19 @@ class Orchestrator:
                 )
                 if st.error:
                     tool_log_lines.append(f"  {_L(_g, 'error')}: {st.error}")
+            # What actually changed on disk — so the summary can't report
+            # a fix nobody made (it did: "已調整…主角已可見", 2026-11-08).
+            _changes_line = workspace_changes.describe(workspace_changes.changed_since(_ws_task_before))
+            tool_log_lines.append("")
+            tool_log_lines.append(_changes_line)
             tool_log_text = "\n".join(tool_log_lines)
 
             had_escalation = any(
                 getattr(st, 'status', None) == TaskStatus.ESCALATED for st in subtasks
             )
             results_texts = [st.result or "" for st in subtasks if st.result]
+            if results_texts and session_mode != "chat":
+                results_texts.append(f"[系統紀錄] {_changes_line}")
 
             # 5. Generate summary: Claude if escalated, Gemma otherwise.
             #
@@ -1994,6 +2003,26 @@ class Orchestrator:
             text = "…" + text[-max_chars:]
         return "【最近的對話（同一個對話串，舊→新；回答時可引用）】\n" + text
 
+    _MUST_CHANGE_SYSTEM = (
+        "You check one step of an AI agent's plan. Reply with JSON only: "
+        '{"must_change_files": true} if the step, to be done, has to create, edit or save a file '
+        "(fix a file, write code, save a report or page); "
+        '{"must_change_files": false} if looking, reading, checking, analysing, searching, '
+        "running something or answering is enough."
+    )
+
+    async def _step_must_change_files(self, st: SubTask) -> bool:
+        """The fast model's judgment; False when it can't say."""
+        try:
+            import fast_model
+            reply = await fast_model.ask(self, self._MUST_CHANGE_SYSTEM, (st.description or "")[:1500],
+                                         max_tokens=30, label="[step-check]", json_mode=True,
+                                         task_id=st.parent_task_id)
+            return bool(json.loads(reply).get("must_change_files"))
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("step-check skipped: %s", exc)
+            return False
+
     async def _pick_skills(self, req: TaskRequest) -> None:
         """Put the picked skills' guides in req.context ('skill_guides'),
         where _plan and every executor step read them. A failed pick
@@ -2414,6 +2443,8 @@ class Orchestrator:
             )
 
         prev_judged_hash: Optional[str] = None
+        import workspace_changes
+        _ws_before = workspace_changes.snapshot()
         for attempt in range(max_local_retries):
             try:
                 # Deadline that CREDITS BACK time the subtask spent
@@ -2526,8 +2557,26 @@ class Orchestrator:
                 # Conservative — answer-type subtasks ("explain X",
                 # "describe Y") are explicitly skipped so they don't
                 # get false-failed.
+                # Files changed in the workspace by any means (edit_file,
+                # sed, a script) count as producing, not just artifacts.
+                _changed = workspace_changes.changed_since(_ws_before)
+                if (mode in ("code", "analytic") and not artifacts and _changed == []
+                        and not _looks_like_file_producing_task(st.description, mode)
+                        and await self._step_must_change_files(st)):
+                    # The keyword check below misses "修好 X" — the model
+                    # judges whether this step had to change a file.
+                    logger.info("Subtask %s had to change a file but changed none — retrying.", st.id)
+                    st.status = TaskStatus.FAILED
+                    st.error = (
+                        "這一步要改檔或產出檔案，但工作目錄裡沒有任何檔案被改動或新增 —— "
+                        "找到原因、說明要怎麼改都不算完成。用 edit_file（改既有檔，old_text 從 "
+                        "read_file 原樣複製）或 write_file（新檔）實際寫入，再確認結果。"
+                    )
+                    st.confidence = 0.3
+                    await self.tracker.update_subtask(st)
+                    continue
                 if (mode in ("code", "analytic")
-                        and not artifacts
+                        and not artifacts and not _changed
                         and _looks_like_file_producing_task(st.description, mode)):
                     logger.info(
                         "Subtask %s should have produced a file but "
@@ -3045,6 +3094,10 @@ class Orchestrator:
 - 動作任務才用繁體中文簡報；成品任務跟隨使用者原本的語言。
 - 若 render_chart_report / write_file 有產出檔案，動作摘要末尾
   加一行「📎 產出：<relative/path.html>」。
+- 記錄最後一行「實際改動或新增的檔案」是系統量到的事實：
+  只有列在那裡的檔案，才能說「已修好／已調整／已改／已建立／已存」。
+  使用者要改東西、但那一行寫「沒有」→ 直接說**還沒改好**，
+  再說查到了什麼原因、卡在哪裡。不可以寫成已完成。
 """
         # The clock rides in the message (not the system prompt) so the
         # synthesizer has today's date without breaking the prompt cache.

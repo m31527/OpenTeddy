@@ -170,6 +170,37 @@ def test_edit_file():
     asyncio.run(_edit_file())
 
 
+def test_tool_text_reaches_the_model():
+    import executor as E
+    game = open(os.path.join(ROOT, "tests", "eval", "fixtures", "xmas_game.html"), encoding="utf-8").read()
+    out = E._format_tool_result_for_model("read_file", {"success": True, "duration_ms": 1,
+                                                         "result": {"path": "/w/xmas_game.html", "content": game}})
+    assert "--- content ---" in out and "ctx.fillStyle = 'rgba(255,255,255,0.03)';" in out   # line 153, as is
+    assert "\\n" not in out.split("--- content ---")[1][:200]                               # not JSON-escaped
+    assert '"path": "/w/xmas_game.html"' in out
+    big = "x = 1\n" * 10000
+    clipped = E._clip_for_model(big)
+    assert len(clipped) < len(big) and "cut here" in clipped and "sed -n" in clipped
+    assert E._clip_for_model("短" * 4000) == "短" * 4000 and "cut here" in E._clip_for_model("短" * 5000)
+
+
+def test_workspace_changes():
+    import time
+    import workspace_changes as W
+    ws = tempfile.mkdtemp()
+    open(os.path.join(ws, "a.html"), "w").write("a")
+    os.makedirs(os.path.join(ws, "node_modules"))
+    before = W.snapshot(ws)
+    assert W.changed_since(before, ws) == []
+    time.sleep(0.01)
+    open(os.path.join(ws, "a.html"), "w").write("ab")
+    open(os.path.join(ws, "node_modules", "x.js"), "w").write("x")      # skipped
+    open(os.path.join(ws, "new.py"), "w").write("y")
+    assert W.changed_since(before, ws) == ["a.html", "new.py"]
+    assert "沒有" in W.describe([]) and "a.html, new.py" in W.describe(["a.html", "new.py"])
+    assert W.changed_since(None, ws) is None and "無法得知" in W.describe(None)
+
+
 def test_pick_into_context():
     asyncio.run(_pick_into_context())
 
@@ -182,4 +213,6 @@ if __name__ == "__main__":
     test_page_look_sees_cover()
     test_pick_into_context()
     test_edit_file()
+    test_tool_text_reaches_the_model()
+    test_workspace_changes()
     print("ALL SKILL TESTS PASS")

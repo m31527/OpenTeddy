@@ -118,6 +118,16 @@ def _resolve_default_workspace() -> str:
     return os.path.join(_PROJECT_ROOT, "agent-workspace")
 
 
+def _default_qwen_ctx() -> int:
+    """Executor context window when QWEN_NUM_CTX isn't set: 32K on a
+    machine with 64 GB+ of RAM, 16K below (see Config.qwen_num_ctx)."""
+    try:
+        ram = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
+    except (ValueError, OSError, AttributeError):
+        return 16384
+    return 32768 if ram >= 64 * 1024 ** 3 else 16384
+
+
 def _json_env(name: str, default):
     """Parse a JSON object from an env var; malformed → default."""
     raw = os.getenv(name, "")
@@ -422,8 +432,12 @@ class Config:
     # enough that Ollama doesn't fall back to CPU layers on a 16 GB Mac.
     # When prompt_eval_count approaches this, the executor compresses
     # older turns (#4 Context watchdog).
+    # 16K is for small machines. On a big one (gx10: 119 GB) the executor's
+    # fixed prompt — system + ~70 tool schemas — is ~13K tokens, so 16K left
+    # ~3K for the actual work, and rounds hit 16.3K: Ollama drops the start
+    # of the input past num_ctx (2026-11-08). 32K there; still 16K below 64 GB.
     qwen_num_ctx: int = field(
-        default_factory=lambda: int(os.getenv("QWEN_NUM_CTX", "16384"))
+        default_factory=lambda: int(os.getenv("QWEN_NUM_CTX", "") or _default_qwen_ctx())
     )
     gemma_num_ctx: int = field(
         default_factory=lambda: int(os.getenv("GEMMA_NUM_CTX", "16384"))

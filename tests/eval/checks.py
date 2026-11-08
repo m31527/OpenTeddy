@@ -164,6 +164,10 @@ def screen_shows(ctx: Dict[str, Any], path: str, rect_js: str, actions: List[str
         try:
             page = browser.new_page(viewport={"width": 1280, "height": 800})
             page.clock.install()                      # page time moves only when told
+            # Same "random" every time: a game that places things at random
+            # otherwise passes or fails by luck (a snowman next to the start).
+            page.add_init_script("(() => { let s = 42; Math.random = () => "
+                                 "((s = (s * 16807) % 2147483647) - 1) / 2147483646; })()")
             page.goto("file://" + os.path.abspath(p), wait_until="load")
             for sel in actions:
                 page.click(sel, timeout=3000, force=True)
