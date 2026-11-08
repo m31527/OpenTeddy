@@ -4,25 +4,33 @@ description: A web page, HTML report or browser game shows the wrong thing — s
 ---
 # 網頁 / 遊戲畫面除錯
 
-## 先看到問題
-```
-page_look(target="game.html", actions=["click 開始遊戲", "wait 1000"], question="看得到主角嗎？")
-```
-- `target`：工作目錄裡的 html 檔，或 localhost / 區網的網址
-- `actions`：照使用者的操作 —— `click <按鈕文字或 CSS 選擇器>`、`press ArrowRight`、`type 文字`、`wait 毫秒`
-- 讀回報：
-  - `covered`：哪個元素被誰蓋住（最常見的「看不到」原因）
-  - `errors`：JS 錯誤、載入失敗的檔案
-  - `seen`：看圖模型描述畫面上真的有什麼
+## 規劃：看 → 改 → 再看，放在同一個子任務
+一個子任務做完整個循環，例如：
+「用 page_look 打開 game.html（actions 照使用者的操作：click 開始遊戲、wait 1000；question：看得到主角嗎？），
+讀 html 依回報找原因、直接改檔，再用 page_look 確認，看不到就繼續找下一個原因」
+不要拆成「看」「分析」「改」「驗證」好幾個子任務 —— 驗證沒過時才能回頭再改。
+
+## page_look 怎麼用
+- target：工作目錄裡的 html 檔，或 localhost / 區網網址
+- actions：照使用者的操作 —— `click 按鈕文字或 CSS 選擇器`、`press ArrowRight`、`type 文字`、`wait 1000`
+- question：使用者在意的那件事，例如「看得到主角嗎？」「圖表有畫出來嗎？」
+- 回報：
+  - `answer`：看圖模型對 question 的 YES / NO —— **NO 就是還沒好**
+  - `covered`：哪個元素被誰蓋住
+  - `canvas_drawing`：canvas 上畫得幾乎透明、或畫到畫布外的文字 / 圖（看不見的主角、物品常在這裡）
+  - `errors`：JS 錯誤、載入失敗
+  - `seen`：畫面上實際有什麼
 
 ## 常見原因（依現象找）
-- **整個畫面只剩背景或特效，內容都不見** → 有全畫面元素蓋在上面：`position: fixed/absolute` 的背景特效 canvas、遮罩、overlay，有不透明背景或 z-index 比內容高。
-  修法：特效層 `z-index: -1` 且背景透明；或內容 `position: relative; z-index: 1`。
-- **樣式選擇器太廣**：`canvas {…}`、`div {…}` 這種標籤選擇器會套到所有同類元素 —— 例如給遊戲畫布的底色，也塗到了背景特效 canvas 上，把遊戲蓋住。改成 `#id` 或 class。
-- **canvas 上的東西太淡或看不見**：`ctx.fillStyle` / `ctx.globalAlpha` 沿用了前面的半透明值（例如畫格線用 `rgba(255,255,255,0.03)`，之後畫 emoji、文字沒重設；emoji 也會吃這個透明度）。畫之前重設 `fillStyle` 和 `globalAlpha = 1`。
-- **東西畫在畫面外或大小是 0**：座標算錯；canvas 的 width/height 屬性跟 CSS 尺寸不一致；元素 `display: none`。
-- **按了沒反應**：先看 `errors` 有沒有 JS 錯誤；事件綁錯元素；遊戲迴圈（setInterval / requestAnimationFrame）沒啟動或被停掉。
-- **在使用者那邊才壞**：檔案或圖片路徑錯、外部資源載入失敗（`errors` 會列出失敗的請求）。
+- **內容不見，只剩背景或某一層** → 有元素蓋在上面（`covered` 會寫是誰）：`position: fixed/absolute` 的全畫面層（特效、遮罩、對話框底）有不透明背景，或 z-index 比內容高。讓那一層退到後面或變透明，或把內容的 z-index 提高。
+- **樣式選擇器太廣**：`canvas {…}`、`div {…}` 這種標籤選擇器會套到所有同類元素，包括本來不該有那個樣式的。改成 `#id` 或 class。
+- **canvas 上的東西看不見或很淡**（`canvas_drawing` 會寫 drawn at opacity …）：畫它的時候 `ctx.fillStyle` 或 `ctx.globalAlpha` 還是先前設的半透明值 —— canvas 的繪圖狀態會一直沿用到被改掉為止；文字和 emoji 也吃 fillStyle 的透明度。畫之前把要的顏色和 `globalAlpha = 1` 設好。
+- **畫到畫布外或大小是 0**：座標算錯；canvas 的 width/height 屬性跟 CSS 尺寸不一致；元素 `display: none`。
+- **按了沒反應**：看 `errors` 的 JS 錯誤；事件綁錯元素；遊戲迴圈（setInterval / requestAnimationFrame）沒啟動。
+- **在使用者那邊才壞**：檔案或圖片路徑錯、外部資源載入失敗（`errors` 會列出）。
 
-## 修完一定要再看
-直接改 html 檔本身，再用**同樣的 actions** 跑一次 `page_look`：原本看不到的東西出現了、`covered` 沒有它、`errors` 沒有新錯誤，才算修好。
+## 什麼時候才算修好
+- 直接改 html 檔本身，再用**同樣的 actions** 跑 page_look。
+- `answer` 是 YES、`seen` 看得到使用者要的東西、`covered` 和 `canvas_drawing` 沒有它、`errors` 沒有新錯誤 —— 才算修好。
+- `answer` 是 NO 或 seen 說看不到 → **還沒修好**，繼續找原因。不可以用「動畫可能還沒啟動」「主角可能比較小」這類猜測帶過。
+- 一個畫面問題常常不只一個原因：修好一個後還是看不到，就照新的回報找下一個。

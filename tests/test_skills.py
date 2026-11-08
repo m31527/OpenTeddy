@@ -28,7 +28,7 @@ def test_parse_and_load():
     idx = A.index_text()
     assert idx.count("\n") == len(skills) - 1 and "- web-page-debugging: " in idx
     g = A.guide_text(["web-page-debugging", "nope"])
-    assert g.startswith("[Skill: web-page-debugging") and "page_look" in g and "nope" not in g
+    assert g.startswith("[Guide: web-page-debugging") and "skill" not in g.split("\n")[0].lower() and "page_look" in g and "nope" not in g
 
 
 def test_parse_pick():
@@ -39,20 +39,20 @@ def test_parse_pick():
     assert A.parse_pick("not json") == [] and A.parse_pick('{"skills": "x"}') == []
 
 
-async def _use_skill():
-    from tools.use_skill_tool import USE_SKILL_TOOLS, use_skill
-    desc = USE_SKILL_TOOLS[0][1]["function"]["description"]
+async def _read_guide():
+    from tools.read_guide_tool import READ_GUIDE_TOOLS, read_guide
+    desc = READ_GUIDE_TOOLS[0][1]["function"]["description"]
     assert "- think-before-building:" in desc and "- web-page-debugging:" in desc
-    r = await use_skill("web-page-debugging")
-    assert r["success"] and "page_look" in r["result"]["guide"]
-    r = await use_skill("nope")
+    r = await read_guide("web-page-debugging")
+    assert r["success"] and "page_look" in r["result"]["text"]
+    r = await read_guide("nope")
     assert not r["success"] and "think-before-building" in r["error"]
-    r = await use_skill("web-page-debugging", file="../think-before-building/SKILL.md")
+    r = await read_guide("web-page-debugging", file="../think-before-building/SKILL.md")
     assert not r["success"]                                      # stays inside the skill
 
 
-def test_use_skill():
-    asyncio.run(_use_skill())
+def test_read_guide():
+    asyncio.run(_read_guide())
 
 
 def test_page_look_targets():
@@ -80,7 +80,10 @@ async def _page_look_sees_cover():
     assert out["actions_done"] == ["click 開始遊戲", "wait 300", "press ArrowUp"]
     assert any("'jump' failed" in e for e in out["errors"]), out["errors"]
     assert os.path.isfile(out["screenshot"]) and out["screenshot"].startswith(ws)
-    assert out["seen"].startswith("(no vision model")
+    assert out["seen"].startswith("(no vision model") and "answer" not in out
+    # The emoji are drawn with the grid's 3% fill: seen as they're drawn.
+    assert any(d.startswith('canvas#game: fillText("🎅") drawn at opacity 0.03 — nearly invisible')
+               for d in out["canvas_drawing"]), out["canvas_drawing"]
 
     # Fixed the cover → nothing covered any more; the hidden start overlay
     # (opacity 0) doesn't count as covering anything.
@@ -92,6 +95,12 @@ async def _page_look_sees_cover():
     r = await P.page_look("xmas_game.html", ["click #start-btn"])
     assert r["result"]["covered"] == "nothing is covered", r["result"]["covered"]
     assert r["result"]["errors"] == "none"
+    assert any("fillText" in d for d in r["result"]["canvas_drawing"])     # still faint
+
+    s = s.replace("  // Foods\n", "  ctx.fillStyle = '#fff';\n  // Foods\n", 1)
+    open(path, "w", encoding="utf-8").write(s)
+    r = await P.page_look("xmas_game.html", ["click #start-btn"])
+    assert r["result"]["canvas_drawing"] == "nothing drawn invisibly", r["result"]["canvas_drawing"]
 
     r = await P.page_look("https://example.com/")
     assert not r["success"] and "browser_fetch" in r["error"]
@@ -144,7 +153,7 @@ def test_pick_into_context():
 if __name__ == "__main__":
     test_parse_and_load()
     test_parse_pick()
-    test_use_skill()
+    test_read_guide()
     test_page_look_targets()
     test_page_look_sees_cover()
     test_pick_into_context()

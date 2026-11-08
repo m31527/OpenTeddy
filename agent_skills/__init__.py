@@ -4,7 +4,7 @@ Skills: how-to guides the model reads when a task calls for them.
 Each skill is a folder here with a SKILL.md — the same format as Claude's
 skills (agentskills.io): YAML front matter with `name` and `description`,
 then the guide. Other files in the folder (references, examples) are
-read on demand with the use_skill tool. A new skill is a new folder; no
+read on demand with the read_guide tool. A new skill is a new folder; no
 code changes.
 
 How a skill reaches the model (2026-11-08):
@@ -13,8 +13,9 @@ How a skill reaches the model (2026-11-08):
     model's judgment, not keyword rules.
   * The picked guides go into the planner's prompt and onto the end of
     every subtask's system prompt (after the cached prefix).
-  * Mid-task the executor can read any other skill with use_skill; its
-    tool description lists them all.
+  * Mid-task the executor can read any other with read_guide; its
+    tool description lists them all. To the model they are "guides":
+    "skill" already means a generated Python function there.
 
 Python "skills" (skill_factory.py, skills/) are a different thing:
 generated functions that run. These are know-how the model follows.
@@ -108,7 +109,11 @@ def guide_text(names: List[str]) -> str:
     for n in names:
         s = skills.get(n)
         if s:
-            parts.append(f"[Skill: {s.name} — follow this guide]\n{s.body}")
+            # "Guide", not "skill": to the executor a skill is a Python
+            # function it can ask skill_factory to write (skill_needed) —
+            # it did exactly that with the first eval's guide (2026-11-08).
+            parts.append(f"[Guide: {s.name} — follow it. The tools it names already exist; "
+                         f"just call them]\n{s.body}")
     return "\n\n".join(parts)
 
 

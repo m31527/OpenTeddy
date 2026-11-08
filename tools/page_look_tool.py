@@ -10,11 +10,18 @@ nothing, and reported it fixed. It had no way to see the page.
 This opens the page in a headless Chromium on this machine (no need for
 the person's own Chrome, works from Telegram), does the actions given
 (click 開始遊戲, press ArrowRight, …) and reports:
-  * covered — elements something else is painted over, and what
-  * errors  — JS errors, failed loads
-  * seen    — the vision model's account of the screenshot
-              (config.vision_model, the one the browser extension uses)
+  * answer         — the vision model's YES / NO to the question, first
+  * covered        — elements something else is painted over, and what
+  * canvas_drawing — text / images drawn too faintly or off the canvas
+  * errors         — JS errors, failed loads
+  * seen           — the vision model's account of the screenshot
+                     (config.vision_model, the one the browser extension uses)
   * the screenshot's path
+
+The first eval run (2026-11-08) is why the answer comes first and the
+canvas is watched: the agent fixed the cover, the vision model said
+"only two red dots, not the player", and the agent wrote that the
+animation "may not have started yet" and reported success.
 
 Only pages OpenTeddy made or serves nearby: a workspace file, or a
 localhost / LAN address. Websites go through browser_fetch / browser_*.
@@ -152,13 +159,52 @@ _COVER_JS = r"""
 """
 
 
+# Text and images drawn on a canvas so faintly or so far off it that no
+# one sees them. Recorded as they're drawn (an init script wraps the 2D
+# context): the screenshot shows only absence, this says what went
+# missing and why. Paths (fill/stroke) are left out — faint grid lines
+# and glows are usually meant.
+_CANVAS_SPY_JS = r"""
+(() => {
+  const P = CanvasRenderingContext2D.prototype, seen = new Map();
+  window.__pageLookCanvas = seen;
+  const alphaOf = s => { if (typeof s !== 'string') return 1;
+    const m = s.match(/rgba?\(([^)]+)\)/); if (m) { const p = m[1].split(',');
+      return p.length > 3 ? parseFloat(p[3]) : 1; }
+    const h = s.match(/^#([0-9a-f]{8})$/i); return h ? parseInt(h[1].slice(6), 16) / 255 : 1; };
+  const name = c => 'canvas' + (c.id ? '#' + c.id : '');
+  const note = (ctx, what, x, y, w, h, useFill) => {
+    try {
+      const c = ctx.canvas, a = ctx.globalAlpha * (useFill ? alphaOf(ctx.fillStyle) : 1);
+      let why = '';
+      if (a < 0.2) why = `drawn at opacity ${+a.toFixed(3)} — nearly invisible` +
+                        (useFill ? ` (fillStyle ${ctx.fillStyle}, globalAlpha ${ctx.globalAlpha})` : '');
+      else if (x + w < 0 || y + h < 0 || x > c.width || y > c.height)
+        why = `drawn outside the ${c.width}×${c.height} canvas, at (${Math.round(x)}, ${Math.round(y)})`;
+      if (!why) return;
+      const k = `${name(c)}: ${what} ${why}`;
+      seen.set(k, (seen.get(k) || 0) + 1);
+    } catch (e) {}
+  };
+  const wrap = (fn, describe) => { const orig = P[fn]; P[fn] = function (...a) {
+    describe(this, a); return orig.apply(this, a); }; };
+  wrap('fillText', (ctx, a) => note(ctx, `fillText(${JSON.stringify(String(a[0]).slice(0, 12))})`,
+                                  a[1], a[2] - 20, 20, 20, true));
+  wrap('drawImage', (ctx, a) => note(ctx, 'drawImage', a.length >= 9 ? a[5] : a[1], a.length >= 9 ? a[6] : a[2],
+                                   a.length >= 9 ? a[7] : (a[3] || 20), a.length >= 9 ? a[8] : (a[4] || 20), false));
+})();
+"""
+
+
 def _vision_prompt(actions: List[str], question: str) -> str:
     after = f", taken after: {'; '.join(actions)}" if actions else ""
-    return ("This is a screenshot of a web page" + after + ". Describe concretely what is visible: "
-            "the main content, text, images, game pieces or characters, and anything that looks "
-            "empty, covered, cut off, too faint or broken. Then answer: "
-            + (question or "Does the page look complete and working?")
-            + " Describe only what you can see; don't guess what should be there.")
+    q = question or "Does the page look complete and working?"
+    return ("This is a screenshot of a web page" + after + ".\n"
+            f"Question: {q}\n"
+            "First line: answer the question with YES, NO or UNSURE, then a few words why.\n"
+            "Then describe concretely what is visible: the main content, text, images, game pieces "
+            "or characters, and anything that looks empty, covered, cut off, too faint or broken. "
+            "Describe only what you can see; don't guess what should be there.")
 
 
 async def page_look(target: str, actions: Optional[List[str]] = None, question: str = "") -> Dict[str, Any]:
@@ -186,6 +232,7 @@ async def page_look(target: str, actions: Optional[List[str]] = None, question: 
             browser = await p.chromium.launch(headless=True)
             try:
                 page = await browser.new_page(viewport=_VIEWPORT, locale="zh-TW")
+                await page.add_init_script(_CANVAS_SPY_JS)
                 page.on("pageerror", lambda e: errors.append(f"JS error: {e}"))
                 page.on("console", lambda m: errors.append(f"console.error: {m.text}")
                         if m.type == "error" else None)
@@ -205,6 +252,9 @@ async def page_look(target: str, actions: Optional[List[str]] = None, question: 
                         errors.append(f"action {a!r} failed: {str(exc).splitlines()[0][:300]}")
                 await page.wait_for_timeout(400)
                 covered = await page.evaluate(_COVER_JS)
+                faint = await page.evaluate(
+                    "() => [...(window.__pageLookCanvas || new Map())].slice(0, 12)"
+                    ".map(([k, n]) => `${k} (×${n})`)")
                 title = await page.title()
                 text = (await page.evaluate("() => document.body ? document.body.innerText : ''"))[:600]
                 png = await page.screenshot()
@@ -218,18 +268,24 @@ async def page_look(target: str, actions: Optional[List[str]] = None, question: 
     with open(shot, "wb") as fh:
         fh.write(png)
 
-    seen = ""
+    answer, seen = "", ""
     try:
         from tools.browser_ext_tool import _vision
-        seen = await _vision(_vision_prompt(done, question), base64.b64encode(png).decode(), num_predict=350)
+        reply = await _vision(_vision_prompt(done, question), base64.b64encode(png).decode(), num_predict=400)
+        answer, _, seen = reply.strip().partition("\n")
+        seen = seen.strip()
     except Exception as exc:  # noqa: BLE001 — the other findings still stand
         seen = f"(no vision model: {exc})"
 
+    # The answer first, on its own: a "NO" that is easy to explain away
+    # in a paragraph ("the animation may not have started") isn't here.
     return make_result(True, {
-        "url": url, "title": title, "actions_done": done,
+        **({"answer": answer} if answer else {}),
         "covered": covered or "nothing is covered",
+        "canvas_drawing": faint or "nothing drawn invisibly",
         "errors": errors[:20] or "none",
-        "seen": seen, "text": text, "screenshot": shot,
+        "seen": seen, "actions_done": done, "title": title, "text": text,
+        "url": url, "screenshot": shot,
     }, duration_ms=ms())
 
 
@@ -240,8 +296,10 @@ _SCHEMA: Dict[str, Any] = {
         "description": (
             "Open a web page, HTML report or browser game you made — a workspace file or a "
             "localhost / LAN URL — in a headless browser, do what the person would (click, press "
-            "keys, wait), and look at it: which elements are covered by something else, JS errors "
-            "and failed loads, a vision model's description of the screen, and a screenshot. Use it "
+            "keys, wait), and look at it: a vision model's YES/NO answer to your question and its "
+            "description of the screen, which elements are covered by something else, text or "
+            "images drawn on a canvas too faintly or off the canvas to see, JS errors and failed "
+            "loads, and a screenshot. Use it "
             "to check a page works before saying it is done, and to see a reported display problem "
             "(blank, missing, covered, faint, not moving) before fixing it — and again after."
         ),

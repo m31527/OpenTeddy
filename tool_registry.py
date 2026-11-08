@@ -542,7 +542,7 @@ class ToolRegistry:
         # Seeing pages OpenTeddy made (headless), and reading skills
         # (agent_skills/) mid-task.
         from tools.page_look_tool import PAGE_LOOK_TOOLS
-        from tools.use_skill_tool import USE_SKILL_TOOLS
+        from tools.read_guide_tool import READ_GUIDE_TOOLS
 
         for fn, schema, risk in (
             SHELL_TOOLS + FILE_TOOLS + HTTP_TOOLS
@@ -552,7 +552,7 @@ class ToolRegistry:
             + CYBER_SKILLS_TOOLS + GITHUB_TRENDING_TOOLS
             + CHROME_ATTACHED_TOOLS + THREADS_TOOLS + DIGEST_TOOLS
             + PRINT_TOOLS + HOME_TOOLS + WEATHER_TOOLS + CLAUDE_CODE_TOOLS
-            + PAGE_LOOK_TOOLS + USE_SKILL_TOOLS
+            + PAGE_LOOK_TOOLS + READ_GUIDE_TOOLS
             # Hidden for people without Google / a paired browser — last, so
             # leaving them out keeps the cached prompt prefix.
             + PERSONAL_TOOLS + BROWSER_EXT_TOOLS
