@@ -113,9 +113,13 @@ class EscalationAgent:
             f"Error: {error_text}"
         ) if is_timeout else ""
 
+        # Guides (agent_skills) tell an agent with tools to look, edit and
+        # check; this model has none, and wrote essays in the guide's shape
+        # with invented code instead of the answer (2026-11-08 eval).
+        _ctx = {k: v for k, v in (context or {}).items() if k not in ("skill_guides", "skills")}
         user_message = (
             f"Task description: {subtask.description}\n\n"
-            f"Context: {str(context)[:3000]}\n\n"
+            f"Context: {str(_ctx)[:3000]}\n\n"
             f"Previous attempt result: {prior_attempt}"
             f"{timeout_note}\n\n"
             "Please provide the correct, complete answer."
