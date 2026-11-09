@@ -5077,17 +5077,17 @@
                 </div>
                 <div class="param-field">
                   <!-- How long an unanswered approval sits before flipping
-                       to REJECTED. Was 5 min historically, now 30 min
-                       default. Doesn't apply when Auto-approve after is
-                       set (that one wins). -->
-                  <label><span data-i18n="approval_wait_timeout_label">Approval wait timeout (seconds)</span>
-                    <span class="param-value" id="val_approval_wait_timeout">1800</span>
+                       to REJECTED. Stored in seconds, shown in hours:
+                       default 24 h, up to 7 days. Doesn't apply when
+                       Auto-approve after is set (that one wins). -->
+                  <label><span data-i18n="approval_wait_timeout_label">Approval wait timeout (hours)</span>
+                    <span class="param-value" id="val_approval_wait_timeout">24 h</span>
                   </label>
-                  <input type="range" id="rng_approval_wait_timeout" min="60" max="7200" step="60" value="1800"
-                    oninput="document.getElementById('val_approval_wait_timeout').textContent=this.value" />
+                  <input type="range" id="rng_approval_wait_timeout" min="3600" max="604800" step="3600" value="86400"
+                    oninput="document.getElementById('val_approval_wait_timeout').textContent=_approvalWaitLabel(this.value)" />
                   <div class="escalation-toggle-hint" data-i18n="approval_wait_timeout_hint"
                        style="margin-top: 0.4rem;">
-                    How long an unanswered approval waits before auto-rejecting. Default 1800 s (30 min). Doesn't apply when Auto-approve after &gt; 0 (that wins).
+                    How long an unanswered approval waits before auto-rejecting. Default 24 h — a waiting task holds no model, so it can wait for you. Doesn't apply when Auto-approve after &gt; 0 (that wins).
                   </div>
                 </div>
               </div>
@@ -5990,7 +5990,9 @@
           if (data.event === 'artifact')          handleArtifact(data);
           if (data.event === 'claude_fix_done')   handleClaudeFixDone(data);
           if (data.type  === 'pull_progress')     handlePullProgress(data);
-          if (data.type  === 'approval_required') handleApprovalRequired(data);
+          // tool_registry sends `event: approval_request`; only the 3 s
+          // poll used to pick it up, and not at all in a sleeping tab.
+          if (data.type  === 'approval_required' || data.event === 'approval_request') handleApprovalRequired(data);
           if (data.type  === 'chat.stream.delta') handleStreamDelta(data);
           if (data.type  === 'chat.stream.end')   handleStreamEnd(data);
           if (data.type  === 'plan.stream.delta') handlePlanStreamDelta(data);
@@ -9466,6 +9468,18 @@
           addAgentMessage(
             `<div class="md-body">${escHtml(t('run_stopped_note'))}</div>` +
             _resultFootHTML({ status: 'cancelled', elapsedMs, steps }), false);
+        } else if (await followTaskAfterDrop(taskId, thinkingEl, _runAbort)) {
+          // The connection dropped but the task was still running on the
+          // server; we followed it to the end and showed its result.
+        } else if (_runAbort?.signal.aborted) {
+          aborted = true;
+          const elapsedMs = stopTaskTimer(thinkingEl);
+          detachStreamingTarget();
+          const steps = finishRun();
+          if (thinkingEl && thinkingEl.parentNode) thinkingEl.remove();
+          addAgentMessage(
+            `<div class="md-body">${escHtml(t('run_stopped_note'))}</div>` +
+            _resultFootHTML({ status: 'cancelled', elapsedMs, steps }), false);
         } else {
           stopTaskTimer(thinkingEl);
           detachStreamingTarget();
@@ -9486,6 +9500,30 @@
           // New clones/files inside the workspace — bump the count display.
           refreshWorkspaceIndicator();
         }
+      }
+    }
+
+    // /run stays open for the whole task. When that connection breaks (a
+    // phone locks, Wi-Fi blips) the task keeps running on the server, so
+    // keep following it — through GET /tasks/{id} — instead of declaring
+    // it dead. Returns true once its result is shown; false when the task
+    // never reached the server (404) or Stop was pressed.
+    async function followTaskAfterDrop(taskId, thinkingEl, abortCtl) {
+      const done = new Set(['completed', 'failed', 'escalated']);
+      for (;;) {
+        if (abortCtl?.signal.aborted) return false;
+        let res = null;
+        try { res = await fetch(`${API}/tasks/${taskId}`); } catch { /* still offline */ }
+        if (res && res.status === 404) return false;
+        if (res && res.ok) {
+          let d = null;
+          try { d = await res.json(); } catch { /* keep trying */ }
+          if (d && done.has(d.status)) {
+            await loadTaskStatus(taskId, thinkingEl);
+            return true;
+          }
+        }
+        await new Promise(r => setTimeout(r, 3000));
       }
     }
 
@@ -9773,8 +9811,26 @@
     // clicking a card's Approve button is the one and only action path.
     async function pollApprovals() {
       try {
+        const asked = Date.now();
         const res  = await fetch(`${API}/approvals`);
         const data = await res.json();
+        // Cards no longer pending on the server were answered elsewhere —
+        // another device, an earlier "Always allow", or the wait ran out.
+        // Settle them so nobody clicks a card that can't do anything.
+        // (Only cards shown before this poll asked: a newer one may simply
+        // not be in this answer yet.)
+        const live = new Set((data.approvals || []).map(a => a.id));
+        document.querySelectorAll('.approval-card:not(.resolved)').forEach(card => {
+          if (live.has(card.dataset.approvalId)) return;
+          if (Number(card.dataset.shownAt || 0) >= asked) return;
+          card.classList.add('resolved');
+          const actions = card.querySelector('.approval-card-actions');
+          if (actions) actions.innerHTML =
+            `<span style="color:var(--text-muted);font-size:0.82rem">${escHtml(t('approval_settled'))}</span>`;
+          card.querySelector('.approval-countdown')?.remove();
+          _markStepWaiting(card.dataset.taskId, card.dataset.toolName, false);
+          if (_activeApprovalCard === card) _activeApprovalCard = null;
+        });
         for (const a of (data.approvals || [])) {
           if (document.getElementById(`chat-approval-${a.id}`)) continue;
           handleApprovalRequired({
@@ -9793,11 +9849,10 @@
     // to being no-ops until the next prompt.
     let _activeApprovalCard = null;
 
-    // Session-scoped set of tool names the user has chosen to "Always allow".
-    // Not persisted — the user starts fresh every server run, which is the
-    // safer default for a dev tool. (If we persisted it the user could
-    // forget they'd whitelisted a dangerous tool weeks ago.)
-    const _alwaysAllowedTools = new Set();
+    // "Always allow" lives on the server (approval_store, per session):
+    // a tool allowed that way never raises another card in that session,
+    // even while this page is closed or asleep. It used to be a Set in
+    // this page — lost on reload, and only acted when the page polled.
 
     function handleApprovalRequired(data) {
       const approvalId = data.approval_id || data.id || '';
@@ -9806,14 +9861,8 @@
       const taskId     = data.task_id     || '';
       const argsStr    = JSON.stringify(args, null, 2);
 
-      // Auto-approve if the user previously picked "Always allow" for
-      // this tool in the current session. Fire-and-forget the HTTP call.
-      if (_alwaysAllowedTools.has(toolName)) {
-        fetch(`${API}/approvals/${approvalId}/approve`, { method: 'POST' })
-          .catch(() => {});
-        toast(`Auto-approved: ${toolName} (always allow this session)`);
-        return;
-      }
+      // The live event and the poll can both deliver the same approval.
+      if (!approvalId || document.getElementById(`chat-approval-${approvalId}`)) return;
 
       _markStepWaiting(taskId, toolName, true);
       const card = document.createElement('div');
@@ -9822,6 +9871,7 @@
       card.dataset.approvalId = approvalId;
       card.dataset.toolName   = toolName;
       card.dataset.taskId     = taskId;
+      card.dataset.shownAt    = String(Date.now());
       // Live countdown UI when Settings → "Auto-approve after" is on.
       // The server is the source of truth (it'll flip the approval to
       // 'approved' at the same N-second mark), but we surface the timer
@@ -9899,19 +9949,16 @@
       const endpoint = approved ? 'approve' : 'reject';
       const card   = document.getElementById(`chat-approval-${approvalId}`);
 
-      // "Always allow" first records the choice (so any queued approvals
-      // for the same tool get auto-resolved), then falls through to the
-      // normal approve path for THIS one.
-      if (action === 'always' && card?.dataset.toolName) {
-        _alwaysAllowedTools.add(card.dataset.toolName);
-      }
+      // "Always allow" is recorded by the server for this session, which
+      // also approves any other waiting calls of the same tool there.
+      const query = action === 'always' ? '?always=true' : '';
 
       // Disable all buttons in this card to prevent double-click.
       card?.querySelectorAll('button').forEach(b => (b.disabled = true));
       // Approved: the step runs again. Denied: its result says so.
       if (approved && card) _markStepWaiting(card.dataset.taskId, card.dataset.toolName, false);
       try {
-        const res = await fetch(`${API}/approvals/${approvalId}/${endpoint}`, { method: 'POST' });
+        const res = await fetch(`${API}/approvals/${approvalId}/${endpoint}${query}`, { method: 'POST' });
         if (!res.ok) {
           const err = await res.json();
           toast(err.detail || 'Failed', true);
@@ -10757,7 +10804,9 @@
         _setSlider('escalation_failure_limit',  s.escalation_failure_limit?.value  ?? 3);
         _setSlider('default_priority',          s.default_priority?.value          ?? 1);
         _setSlider('approval_auto_approve_after', s.approval_auto_approve_after?.value ?? 0);
-        _setSlider('approval_wait_timeout',       s.approval_wait_timeout?.value       ?? 1800);
+        _setSlider('approval_wait_timeout',       s.approval_wait_timeout?.value       ?? 86400);
+        { const l = document.getElementById('val_approval_wait_timeout');
+          if (l) l.textContent = _approvalWaitLabel(s.approval_wait_timeout?.value ?? 86400); }
         // Cache for runTask() — avoid a /settings round-trip per send.
         // Range 1–10 mirrors the Pydantic constraint on Task.priority.
         const dp = parseInt(s.default_priority?.value ?? '1', 10);
@@ -10894,6 +10943,12 @@
       if (notice)   notice.hidden = !isCloud;
       renderOrchestratorCloudOptions();
     }
+    // Approval wait is stored in seconds; people think of it in hours.
+    function _approvalWaitLabel(sec) {
+      const h = Math.max(0, Number(sec) || 0) / 3600;
+      return (h >= 1 ? String(Math.round(h)) : h.toFixed(2)) + ' h';
+    }
+
     function _setSlider(key, val) {
       const rng = document.getElementById('rng_' + key);
       const lbl = document.getElementById('val_' + key);

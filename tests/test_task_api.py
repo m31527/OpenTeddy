@@ -99,6 +99,24 @@ async def test_registry() -> None:
         reset_triggered_by(tok)
     print("  ✓ api_trusted + scope auto-approves")
 
+    # "Always allow" is held by the store, per session — no card at all in
+    # that session, still asked in any other one.
+    store = ApprovalStore()
+    reg2 = ToolRegistry()
+    reg2._store = store
+    reg2.register(high_tool, _schema("high_tool"), "high")
+    store.allow_always("s-1", "high_tool")
+    r = await reg2.execute("high_tool", {"cmd": "a"}, session_id="s-1")
+    assert r["success"] is True and not await store.get_all(), r
+
+    async def _no2(*a, **k):
+        return False
+    store.wait_for_resolution = _no2
+    r = await reg2.execute("high_tool", {"cmd": "a"}, session_id="s-2")
+    assert r["success"] is False and (await store.get_all())[-1].session_id == "s-2", r
+    assert not store.is_always_allowed("", "high_tool")
+    print("  ✓ always-allow: skips the card in its own session only")
+
 
 # ── B. HTTP ──────────────────────────────────────────────────────────────────
 
@@ -200,6 +218,76 @@ async def test_http() -> None:
             r = await c.post("/run", json={"goal": "legacy"})
             assert r.status_code == 202 and r.json()["status"] == "completed", r.text
             print("  ✓ POST /run still works (thin wrapper)")
+
+            # The browser re-sends a dropped /run with the same task_id. It
+            # must join the running task, not start it again (that was a
+            # tasks.id UNIQUE error → 500 → "the task died").
+            import uuid as _uuid
+            gate = asyncio.Event()
+            runs: list = []
+
+            async def slow_run(req):  # noqa: ANN001
+                runs.append(req.id)
+                await M.tracker.create_task(req)
+                await M.tracker.update_task_status(req.id, TaskStatus.RUNNING)
+                await gate.wait()
+                await M.tracker.update_task_status(req.id, TaskStatus.COMPLETED, "done:" + req.goal)
+                return TaskResult(task_id=req.id, status=TaskStatus.COMPLETED,
+                                  summary="done:" + req.goal)
+            M.orchestrator.run = slow_run
+            tid = str(_uuid.uuid4())
+            first = asyncio.create_task(c.post("/run", json={"goal": "slow", "task_id": tid}))
+            await asyncio.sleep(0.1)
+            second = asyncio.create_task(c.post("/run", json={"goal": "slow", "task_id": tid}))
+            await asyncio.sleep(0.1)
+            gate.set()
+            r1, r2 = await first, await second
+            assert r1.status_code == r2.status_code == 202, (r1.text, r2.text)
+            assert r2.json()["status"] == "completed" and r2.json()["message"] == "done:slow", r2.text
+            r3 = await c.post("/run", json={"goal": "slow", "task_id": tid})
+            assert r3.status_code == 202 and r3.json()["message"] == "done:slow", r3.text
+            assert runs == [tid], runs
+            M.orchestrator.run = fake_run
+            print("  ✓ /run re-sent with the same task_id joins it (running) or returns its result (done)")
+
+            # A waiter that goes away (dropped HTTP request) never takes the
+            # task down with it; only Stop does.
+            from types import SimpleNamespace
+            gate2 = asyncio.Event()
+
+            async def _body():
+                await gate2.wait()
+                return SimpleNamespace(status=TaskStatus.COMPLETED, summary="x")
+            inner = asyncio.create_task(_body())
+            waiter = asyncio.create_task(M._await_task("t-shield", inner))
+            await asyncio.sleep(0.01)
+            waiter.cancel()
+            try:
+                await waiter
+            except asyncio.CancelledError:
+                pass
+            assert not inner.done(), "the task died with its waiter"
+            gate2.set()
+            await inner
+            print("  ✓ a dropped waiter leaves the task running")
+
+            # "Always allow" on a card: recorded per session on the server,
+            # and other waiting calls of that tool in that session go too.
+            st = M.approval_store
+            a1 = await st.create_approval("t1", "write_file", {}, session_id="sA")
+            a2 = await st.create_approval("t1", "write_file", {}, session_id="sA")
+            a3 = await st.create_approval("t2", "write_file", {}, session_id="sB")
+            a4 = await st.create_approval("t1", "shell_exec_write", {}, session_id="sA")
+            r = await c.post(f"/approvals/{a1}/approve?always=true")
+            assert r.status_code == 200 and r.json()["also_approved"] == 1, r.text
+            left = {a.id for a in await st.get_pending()}
+            assert a2 not in left and a3 in left and a4 in left, left
+            assert st.is_always_allowed("sA", "write_file")
+            assert not st.is_always_allowed("sB", "write_file")
+            assert not st.is_always_allowed("sA", "shell_exec_write")
+            for a in (a3, a4):
+                await st.resolve(a, approved=False)
+            print("  ✓ approve?always=true: per session, sweeps same-tool waiters there only")
 
             r = await c.get(f"/tasks/{d['task_id']}")
             assert r.status_code == 200 and r.json().get("session_id") == d["session_id"], r.text

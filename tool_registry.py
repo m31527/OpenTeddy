@@ -52,6 +52,15 @@ RiskLevel = Literal["low", "high"]
 # keep the interactive approval gate.
 _AUTO_APPROVE_ORIGINS: frozenset = frozenset({"telegram", "fleet_watcher"})
 
+
+def _bound_session_id() -> str:
+    """The session the running task belongs to (bound by orchestrator.run)."""
+    try:
+        from tools._context import get_session_id
+        return get_session_id() or ""
+    except Exception:  # noqa: BLE001
+        return ""
+
 # Tool-name matchers (exact-equal OR substring match against the
 # tool's registered name). Apply to the *name*, not args.
 _DENY_TOOL_NAMES: frozenset = frozenset({
@@ -375,9 +384,21 @@ class ToolRegistry:
         # ── High-risk: gate on human approval ────────────────────────────────
         # Skipped above for Telegram-driven tasks that cleared the
         # denylist; runs as before for web-UI / scheduled / unknown
-        # origins.
+        # origins. Also skipped when the person already picked "Always
+        # allow" for this tool in this session — held server-side, so it
+        # works while their page is closed or asleep.
+        elif risk == "high" and self._store.is_always_allowed(
+            session_id or _bound_session_id(), tool_name,
+        ):
+            logger.info(
+                "task=%s tool=%s runs without asking: 'always allow' was picked "
+                "for it in this session", task_id, tool_name,
+            )
         elif risk == "high":
-            approval_id = await self._store.create_approval(task_id, tool_name, args)
+            approval_id = await self._store.create_approval(
+                task_id, tool_name, args,
+                session_id=session_id or _bound_session_id(),
+            )
             logger.info(
                 "High-risk tool '%s' queued for approval (id=%s, task=%s)",
                 tool_name, approval_id, task_id,
@@ -391,6 +412,7 @@ class ToolRegistry:
                     await _notify({
                         "event": "approval_request",
                         "task_id": task_id,
+                        "session_id": session_id or _bound_session_id(),
                         "approval_id": approval_id,
                         "tool": tool_name,
                         "args": args,
@@ -405,10 +427,10 @@ class ToolRegistry:
             try:
                 from config import config as _cfg
                 auto_after = float(getattr(_cfg, "approval_auto_approve_after", 0) or 0)
-                wait_to = float(getattr(_cfg, "approval_wait_timeout", 1800) or 1800)
+                wait_to = float(getattr(_cfg, "approval_wait_timeout", 86400) or 86400)
             except Exception:  # noqa: BLE001
                 auto_after = 0.0
-                wait_to = 1800.0
+                wait_to = 86400.0
             # Time spent here is HUMAN time, not agent time — bank it so
             # the orchestrator can extend the subtask deadline by the
             # same amount (see tools/_context.add_approval_pause).

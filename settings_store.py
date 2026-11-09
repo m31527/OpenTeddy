@@ -359,14 +359,14 @@ SETTINGS_META: dict[str, dict[str, Any]] = {
     "approval_wait_timeout": {
         "label":       "Approval wait timeout (seconds)",
         "description": "How long an unanswered HIGH-risk approval sits "
-                       "before flipping to REJECTED. Was 300 s (5 min) "
-                       "originally — bumped to 1800 s (30 min) default so "
-                       "you can grab lunch without losing tasks. Range 60 "
-                       "to 7200 s. Doesn't apply when Auto-approve after "
+                       "before flipping to REJECTED. Default 86400 s "
+                       "(24 h) — a waiting task holds no model, so it can "
+                       "wait for you to come back. Range 60 s to 604800 s "
+                       "(7 days). Doesn't apply when Auto-approve after "
                        "is set (that timeout wins).",
         "type":        "int",
         "min":         60,
-        "max":         7200,
+        "max":         604800,
     },
     "default_priority": {
         "label":       "Default Task Priority",
@@ -606,7 +606,7 @@ def _defaults_from_config() -> dict[str, str]:
         "skill_auto_detect_similarity":  str(getattr(config, "skill_auto_detect_similarity", 0.85)),
         "default_priority":          str(getattr(config, "default_priority", 1)),
         "approval_auto_approve_after": str(getattr(config, "approval_auto_approve_after", 0)),
-        "approval_wait_timeout":       str(getattr(config, "approval_wait_timeout", 1800)),
+        "approval_wait_timeout":       str(getattr(config, "approval_wait_timeout", 86400)),
         "subtask_timeout":           str(config.subtask_timeout),
         "shell_silence_timeout":     str(config.shell_silence_timeout),
         "agent_workspace_dir":       str(config.agent_workspace_dir),
@@ -756,6 +756,8 @@ class SettingsStore:
         stale_matches: list[tuple[str, tuple[str, ...]]] = [
             # subtask_timeout: shipped 120 → 180 → 900
             ("subtask_timeout", ("120", "180")),
+            # approval_wait_timeout: shipped 300 → 1800 → 86400
+            ("approval_wait_timeout", ("300", "1800")),
             # shell_silence_timeout: added later at 90 — if someone has
             # an exactly-default stored but we lower the default, we'd
             # want to not touch it. Currently 90 is the default, no
@@ -993,7 +995,7 @@ class SettingsStore:
 
         vwt = _int("approval_wait_timeout")
         if vwt is not None:
-            config.approval_wait_timeout = max(60, min(7200, vwt))
+            config.approval_wait_timeout = max(60, min(604800, vwt))
 
         v7 = _int("subtask_timeout")
         if v7 is not None:

@@ -24,12 +24,14 @@ class PendingApproval:
     created_at: datetime
     status: str = "pending"          # pending | approved | rejected
     result: Optional[Any] = None
+    session_id: str = ""
     _event: asyncio.Event = field(default_factory=asyncio.Event, repr=False, compare=False)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
             "id": self.id,
             "task_id": self.task_id,
+            "session_id": self.session_id,
             "tool_name": self.tool_name,
             "args": self.args,
             "created_at": self.created_at.isoformat(),
@@ -51,11 +53,26 @@ class ApprovalStore:
     def __init__(self) -> None:
         self._pending: Dict[str, PendingApproval] = {}
         self._lock = asyncio.Lock()
+        # "Always allow" picks, per session: session_id → tool names. Kept
+        # here (not in the page) so it holds while the page is closed,
+        # asleep in a phone's background tab, or reloaded. In memory on
+        # purpose: a restart starts every session asking again.
+        self._always: Dict[str, set] = {}
+
+    # ── "Always allow" for one session ────────────────────────────────────────
+
+    def allow_always(self, session_id: str, tool_name: str) -> None:
+        if session_id and tool_name:
+            self._always.setdefault(session_id, set()).add(tool_name)
+
+    def is_always_allowed(self, session_id: str, tool_name: str) -> bool:
+        return bool(session_id) and tool_name in self._always.get(session_id, ())
 
     # ── Write API ─────────────────────────────────────────────────────────────
 
     async def create_approval(
-        self, task_id: str, tool_name: str, args: Dict[str, Any]
+        self, task_id: str, tool_name: str, args: Dict[str, Any],
+        session_id: str = "",
     ) -> str:
         """Create a new pending approval entry and return its ID."""
         approval_id = str(uuid.uuid4())
@@ -65,6 +82,7 @@ class ApprovalStore:
             tool_name=tool_name,
             args=args,
             created_at=datetime.utcnow(),
+            session_id=session_id or "",
         )
         async with self._lock:
             self._pending[approval_id] = approval
@@ -89,7 +107,7 @@ class ApprovalStore:
     async def wait_for_resolution(
         self,
         approval_id: str,
-        timeout: float = 1800.0,
+        timeout: float = 86400.0,
         auto_approve_after: float = 0.0,
     ) -> bool:
         """
@@ -101,13 +119,11 @@ class ApprovalStore:
                      default; refusing a tool call is recoverable, running
                      a destructive one isn't).
 
-                     Default 1800 s (30 min) — bumped 2026-05-15 from the
-                     original 300 s. 5 minutes was genuinely too short
-                     for the "grabbed coffee / answered the door / on a
-                     phone call" scenarios users were hitting. 30 min
-                     covers a normal lunch break while still freeing
-                     resources eventually if the user walks away for the
-                     day. Tunable via Settings → "Approval wait timeout".
+                     Default 24 h. It was 300 s, then 1800 s (2026-05-15).
+                     A waiting task holds no model and no slot, only a
+                     coroutine, so there's no reason to give up on someone
+                     who answers after a meeting or the next morning.
+                     Tunable via Settings → "Approval wait timeout".
 
             auto_approve_after: When > 0, overrides timeout. Silence past
                      this point flips status to APPROVED instead. The user

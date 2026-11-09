@@ -2009,7 +2009,18 @@ async def _start_task(
     Returns (task_id, session_id, asyncio_task, shortcut_message). When
     the natural-language scheduling shortcut fires, no task runs and
     shortcut_message carries the confirmation text instead.
+
+    A task_id that already exists is joined, never started twice: the web
+    UI holds /run open for the whole task, and when that connection drops
+    (a phone asleep, a Wi-Fi blip) the browser re-sends the same POST.
+    Starting it again hit the tasks.id UNIQUE constraint, the page showed
+    a 500, and the person thought a task had died that was in fact still
+    running — usually sitting at an approval card nobody would click.
     """
+    if task_id:
+        joined = await _join_existing_task(task_id)
+        if joined is not None:
+            return joined
     block_msg = _orchestrator_safety_check()
     if block_msg:
         raise HTTPException(status_code=400, detail=block_msg)
@@ -2197,11 +2208,42 @@ async def _start_task(
     return task_id, session_id, run_task_obj, None
 
 
-async def _await_task(task_id: str, run_task_obj: "asyncio.Task") -> tuple[TaskStatus, str]:
-    """Wait for a launched task; a user cancel is reported, not raised."""
+async def _join_existing_task(task_id: str):
+    """(task_id, session_id, task, None) for a task_id already known, else None.
+
+    Still running → its live asyncio task, so the caller waits on the same
+    run. Already in the tracker (finished, or left over from before a
+    restart) → a finished stand-in carrying the recorded status/summary.
+    """
+    running = _running_tasks.get(task_id)
+    row = await tracker.get_task(task_id)
+    if running is not None:
+        logger.info("Task %s requested again while running — joining it", task_id)
+        return task_id, (row or {}).get("session_id"), running, None
+    if not row:
+        return None
+    logger.info("Task %s requested again after it ended — returning its result", task_id)
+    from types import SimpleNamespace
     try:
-        result = await run_task_obj
+        status = TaskStatus(row.get("status"))
+    except ValueError:
+        status = TaskStatus.FAILED
+
+    async def _recorded():
+        return SimpleNamespace(status=status, summary=row.get("summary") or "")
+    return task_id, row.get("session_id"), asyncio.create_task(_recorded()), None
+
+
+async def _await_task(task_id: str, run_task_obj: "asyncio.Task") -> tuple[TaskStatus, str]:
+    """Wait for a launched task; a user cancel is reported, not raised.
+
+    Shielded: if this waiter goes away (the HTTP request is dropped), the
+    task itself keeps running — only the Stop button cancels it."""
+    try:
+        result = await asyncio.shield(run_task_obj)
     except asyncio.CancelledError:
+        if not run_task_obj.cancelled():
+            raise  # only this waiter went away; the task runs on
         logger.info("Task %s was cancelled by user (Stop button)", task_id)
         cancelled_msg = "⏹️ 任務已被使用者中斷"
         try:
@@ -3432,15 +3474,28 @@ async def list_approvals() -> dict:
 
 
 @app.post("/approvals/{approval_id}/approve")
-async def approve_tool(approval_id: str) -> dict:
-    """Approve a pending high-risk tool call. The waiting task will resume."""
+async def approve_tool(approval_id: str, always: bool = False) -> dict:
+    """Approve a pending high-risk tool call. The waiting task will resume.
+
+    always=true is the card's "Always allow": this tool stops asking for
+    the rest of the session, decided here on the server so it holds while
+    the page is closed or asleep. Other calls of that tool already waiting
+    in the same session are approved with it."""
+    a = await approval_store.get(approval_id)
     resolved = await approval_store.resolve(approval_id, approved=True)
     if not resolved:
         raise HTTPException(
             status_code=404,
             detail="Approval not found or already resolved.",
         )
-    return {"status": "approved", "approval_id": approval_id}
+    also = 0
+    if always and a is not None and a.session_id:
+        approval_store.allow_always(a.session_id, a.tool_name)
+        for other in await approval_store.get_pending():
+            if other.session_id == a.session_id and other.tool_name == a.tool_name:
+                if await approval_store.resolve(other.id, approved=True):
+                    also += 1
+    return {"status": "approved", "approval_id": approval_id, "also_approved": also}
 
 
 @app.post("/approvals/{approval_id}/reject")

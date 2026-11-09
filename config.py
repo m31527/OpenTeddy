@@ -656,17 +656,17 @@ class Config:
     )
 
     # How long (seconds) to wait for the user to click before flipping
-    # an unanswered HIGH-risk approval to REJECTED. Was 300 (5 min)
-    # historically — bumped to 1800 (30 min) so users get a real lunch-
-    # break window. Range 60 s – 7200 s (2h) — clamped in
-    # reload_from_store() to keep abusive values from creating zombie
-    # approvals that pin asyncio tasks forever.
+    # an unanswered HIGH-risk approval to REJECTED. Was 300 (5 min), then
+    # 1800 (30 min); now 86400 (24 h) — a waiting task holds no model or
+    # slot, only a coroutine, so there's no reason to fail a task because
+    # its person answered after a meeting or the next morning. Range 60 s
+    # – 604800 s (7 days), clamped in reload_from_store().
     #
     # Independent of approval_auto_approve_after: when auto-approve is
     # > 0, that wins (fires earlier, marks as APPROVED). When it's 0,
     # this is the deadline that marks REJECTED.
     approval_wait_timeout: int = field(
-        default_factory=lambda: int(os.getenv("APPROVAL_WAIT_TIMEOUT", "1800"))
+        default_factory=lambda: int(os.getenv("APPROVAL_WAIT_TIMEOUT", "86400"))
     )
 
     # ── Task scheduling (currently a no-op — kept for forward-compat) ───────
@@ -998,10 +998,10 @@ class Config:
 
         vwt = _i("approval_wait_timeout")
         if vwt is not None:
-            # Clamp 60–7200 — under 60s the gate becomes useless (you
-            # can't realistically click in time); over 2h means a
-            # forgotten approval pins resources indefinitely.
-            self.approval_wait_timeout = max(60, min(7200, vwt))
+            # Clamp 60 s – 7 days. Under 60 s the gate is useless (you
+            # can't realistically click in time); a waiting approval
+            # costs only a coroutine, so the upper bound is generous.
+            self.approval_wait_timeout = max(60, min(604800, vwt))
 
         v7 = _i("subtask_timeout")
         if v7 is not None:
