@@ -6,6 +6,7 @@ risk classification, and execution routing.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -431,22 +432,25 @@ class ToolRegistry:
             except Exception:  # noqa: BLE001
                 auto_after = 0.0
                 wait_to = 86400.0
-            # Time spent here is HUMAN time, not agent time — bank it so
-            # the orchestrator can extend the subtask deadline by the
-            # same amount (see tools/_context.add_approval_pause).
-            _wait_started = time.monotonic()
+            # Time spent here is HUMAN time, not agent time — the subtask
+            # clock stands still while the card waits (tools/_context
+            # begin_human_wait / end_human_wait).
+            from tools._context import begin_human_wait, end_human_wait
+            begin_human_wait()
             try:
                 approved = await self._store.wait_for_resolution(
                     approval_id,
                     timeout=wait_to,
                     auto_approve_after=auto_after,
                 )
+            except asyncio.CancelledError:
+                # Stop pressed or the attempt was dropped: nobody waits on
+                # this card any more, so retire it instead of leaving a
+                # button that does nothing.
+                self._store.abandon(approval_id)
+                raise
             finally:
-                try:
-                    from tools._context import add_approval_pause
-                    add_approval_pause(time.monotonic() - _wait_started)
-                except Exception:  # noqa: BLE001
-                    pass
+                end_human_wait()
             if not approved:
                 return make_result(
                     False,

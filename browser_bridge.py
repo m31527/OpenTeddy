@@ -599,7 +599,12 @@ async def confirm(question: str, tab: Optional[int] = None, person: Optional[str
     fut = asyncio.get_running_loop().create_future()
     _confirms[person] = {"id": cid, "future": fut}
     conn = _live(person)
-    started = time.monotonic()
+    # The subtask clock stands still while the person decides.
+    try:
+        from tools._context import begin_human_wait
+        begin_human_wait()
+    except Exception:  # noqa: BLE001
+        pass
     try:
         if conn:
             try:
@@ -620,8 +625,8 @@ async def confirm(question: str, tab: Optional[int] = None, person: Optional[str
         if _confirms.get(person, {}).get("id") == cid:
             _confirms.pop(person, None)
         try:
-            from tools._context import add_approval_pause
-            add_approval_pause(time.monotonic() - started)
+            from tools._context import end_human_wait
+            end_human_wait()
         except Exception:  # noqa: BLE001
             pass
         if conn:

@@ -104,6 +104,14 @@ class ApprovalStore:
         approval._event.set()
         return True
 
+    def abandon(self, approval_id: str) -> None:
+        """Retire a still-pending approval whose waiter is gone (the task
+        was stopped). Sync on purpose: called from a cancellation handler."""
+        approval = self._pending.get(approval_id)
+        if approval and approval.status == "pending":
+            approval.status = "rejected"
+            approval._event.set()
+
     async def wait_for_resolution(
         self,
         approval_id: str,

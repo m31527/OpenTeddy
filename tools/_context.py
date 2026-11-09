@@ -141,6 +141,47 @@ def add_approval_pause(seconds: float) -> None:
     add_deadline_credit(max(0.0, seconds))
 
 
+# Crediting the wait only AFTER it ends wasn't enough: the watchdog kept
+# counting while the card sat unanswered, so a wait longer than the
+# subtask budget (900 s) killed the attempt mid-question. The retry then
+# asked again, and the first card was left with nobody waiting on it
+# (home, 11/9: write_file asked at 07:05:56, attempt killed at 07:16:33).
+# So the clock is STOPPED for as long as anyone is being asked.
+
+def begin_human_wait() -> None:
+    """Stop the subtask clock: a person is being asked something."""
+    budget = _deadline_credit.get()
+    if budget is None:
+        return
+    if budget.get("waiting", 0) <= 0:
+        import time
+        budget["waiting_since"] = time.monotonic()
+        budget["waiting"] = 0
+    budget["waiting"] += 1
+
+
+def end_human_wait() -> None:
+    """Restart the subtask clock, crediting the whole time it stood still."""
+    budget = _deadline_credit.get()
+    if budget is None or budget.get("waiting", 0) <= 0:
+        return
+    budget["waiting"] -= 1
+    if budget["waiting"] == 0:
+        import time
+        since = budget.pop("waiting_since", None)
+        if since is not None:
+            add_deadline_credit(time.monotonic() - since)
+
+
+def human_wait_so_far(budget: Optional[dict]) -> float:
+    """Seconds of a person-wait still in progress (0 when nobody is asked)."""
+    if not budget or budget.get("waiting", 0) <= 0:
+        return 0.0
+    import time
+    since = budget.get("waiting_since")
+    return max(0.0, time.monotonic() - since) if since is not None else 0.0
+
+
 def set_triggered_by(origin: str) -> object:
     """Bind the task origin (e.g. ``"telegram"``) for the current async
     task. Returns the reset token. Caller is responsible for resetting

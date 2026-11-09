@@ -118,6 +118,73 @@ async def test_registry() -> None:
     print("  ✓ always-allow: skips the card in its own session only")
 
 
+async def test_human_wait() -> None:
+    """The subtask clock stands still while a card waits; a dropped wait
+    retires its card. Home 11/9: write_file waited past the 900 s subtask
+    budget, the attempt was killed mid-question, the retry asked again and
+    the first card was left with nobody behind it."""
+    import types
+    from orchestrator import Orchestrator
+    from models import AgentRole, SubTask, TaskStatus
+
+    store = ApprovalStore()
+    reg = ToolRegistry()
+    reg._store = store
+    reg.register(high_tool, _schema("high_tool"), "high")
+    state = {"calls": 0, "finished": False, "result": None}
+
+    class _Exec:
+        async def execute(self, st, ctx, mode="code"):  # noqa: ANN001
+            state["calls"] += 1
+            state["result"] = await reg.execute("high_tool", {"cmd": "w"}, task_id="t")
+            state["finished"] = True
+            st.status, st.confidence, st.result, st.error = TaskStatus.COMPLETED, 0.3, "x", None
+            return st
+
+        def pop_exit_reason(self, sid):  # noqa: ANN001
+            return None
+
+    class _Esc:
+        async def resolve(self, st, ctx):  # noqa: ANN001
+            return st
+
+    class _T:
+        async def update_subtask(self, st):  # noqa: ANN001
+            pass
+
+    async def approve_later():
+        await asyncio.sleep(2.5)            # longer than the 1 s budget below
+        for a in await store.get_pending():
+            await store.resolve(a.id, approved=True)
+
+    saved = (config.subtask_timeout, config.escalation_failure_limit, config.llm_mode)
+    config.subtask_timeout, config.escalation_failure_limit, config.llm_mode = 1, 1, "mixed"
+    try:
+        o = types.SimpleNamespace(executor=_Exec(), escalation=_Esc(), tracker=_T(), _ollama_busy=False)
+        st = SubTask(parent_task_id="t", description="write the game", agent=AgentRole.EXECUTOR, order=0)
+        approver = asyncio.create_task(approve_later())
+        await Orchestrator._run_subtask(o, st, {}, mode="code")
+        await approver
+    finally:
+        config.subtask_timeout, config.escalation_failure_limit, config.llm_mode = saved
+    assert state["finished"] and state["result"]["success"] is True, state
+    assert state["calls"] == 1 and "超時" not in (st.error or ""), (state, st.error)
+    print("  ✓ a 2.5 s approval wait outlives a 1 s subtask budget — the clock stood still")
+
+    # Stop while the card waits → the card is retired, not left pending.
+    store.wait_for_resolution = ApprovalStore.wait_for_resolution.__get__(store)
+    t = asyncio.create_task(reg.execute("high_tool", {"cmd": "z"}, task_id="t2"))
+    await asyncio.sleep(0.05)
+    assert len(await store.get_pending()) == 1
+    t.cancel()
+    try:
+        await t
+    except asyncio.CancelledError:
+        pass
+    assert not await store.get_pending(), "a stopped task left its card pending"
+    print("  ✓ a stopped wait retires its card")
+
+
 # ── B. HTTP ──────────────────────────────────────────────────────────────────
 
 async def test_http() -> None:
@@ -308,6 +375,7 @@ async def test_http() -> None:
 async def main() -> None:
     print("A. registry")
     await test_registry()
+    await test_human_wait()
     print("B. http")
     await test_http()
     print("\nALL TASK API TESTS PASS")

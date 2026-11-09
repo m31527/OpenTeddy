@@ -2457,7 +2457,7 @@ class Orchestrator:
                 # We poll a shielded task and push the deadline out by
                 # whatever the approval gate banked.
                 import time as _t
-                from tools._context import new_approval_budget
+                from tools._context import human_wait_so_far, new_approval_budget
                 _budget = new_approval_budget()
                 # A retry carries what went wrong, so it isn't the same prompt again.
                 _attempt_ctx = context
@@ -2471,8 +2471,12 @@ class Orchestrator:
                 )
                 _deadline = _t.monotonic() + float(effective_sub_timeout)
                 while True:
+                    # The clock stands still while a person is being asked
+                    # (an approval card, a browser confirm) — however long
+                    # they take.
                     _remaining = (
                         _deadline + float(_budget.get("paused", 0.0))
+                        + human_wait_so_far(_budget)
                         - _t.monotonic()
                     )
                     if _remaining <= 0:
