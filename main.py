@@ -766,61 +766,58 @@ async def browser_eval_code(request: Request) -> dict:
     return {"code": browser_bridge.begin(browser_bridge.EVAL_PERSON)}
 
 
-def _owner_check(request: Request) -> str:
-    """'' when this request is the computer's owner (privacy.LOCAL_PERSON):
-    the server listens on this computer only, the call comes from it, and
-    from OpenTeddy's own page — not a proxy, and not another site the
-    person has open (CORS is open, so a page could otherwise ask for a
-    code; it still couldn't pair, only the extension can). Else why not."""
+_OTHER_SITE = "這個要求來自別的網站，不是 OpenTeddy 自己的網頁。請直接打開 OpenTeddy 的網頁再按「產生配對碼」。"
+
+
+def _page_address(request: Request) -> Optional[str]:
+    """The address this request reached OpenTeddy at — what the person typed
+    to open Settings (127.0.0.1, the LAN or a VPN address), so it's what the
+    extension should use too. None when the call comes from another site
+    (CORS is open, so a page elsewhere could ask; it still couldn't pair —
+    only the extension can trade a code for a token)."""
     import urllib.parse
-    import privacy
-    if not privacy.local_only():
-        return "shared"
-    loop = ("127.0.0.1", "localhost", "::1")
-    client = (request.client.host if request.client else "") or ""
-    if client not in loop or request.headers.get("x-forwarded-for") or request.headers.get("forwarded"):
-        return "not_local"
-    host = urllib.parse.urlsplit("//" + request.headers.get("host", "")).hostname or ""
+    host = request.headers.get("host", "")
     origin = request.headers.get("origin", "")
-    if host not in loop or (origin and (urllib.parse.urlsplit(origin).hostname or "") not in loop):
-        return "not_local"
-    return ""
+    if origin and urllib.parse.urlsplit(origin).netloc.lower() != host.lower():
+        return None
+    scheme = request.headers.get("x-forwarded-proto") or request.url.scheme
+    return f"{scheme}://{host}" if host else None
 
 
-@app.get("/browser/local")
-async def browser_local_status(request: Request) -> dict:
-    """Settings → Chrome extension: can this page pair the owner's Chrome
-    (no Telegram needed), and is it paired / online."""
+@app.get("/browser/web")
+async def browser_web_status(request: Request) -> dict:
+    """Settings → Chrome extension: the web UI's Chrome (privacy.WEB_PERSON) —
+    paired? online? — and the address to pair it with."""
     import browser_bridge
     import privacy
-    why = _owner_check(request)
-    if why:
-        return {"available": False, "reason": why}
-    st = await browser_bridge.status(privacy.LOCAL_PERSON)
-    return {"available": True, "server": browser_bridge.server_address(), **st}
+    addr = _page_address(request)
+    if not addr:
+        return {"available": False, "reason": _OTHER_SITE}
+    st = await browser_bridge.status(privacy.WEB_PERSON)
+    # shared: others can open this web UI too, so they could use the Chrome.
+    return {"available": True, "server": addr, "shared": not privacy.local_only(), **st}
 
 
-@app.post("/browser/local/code")
-async def browser_local_code(request: Request) -> dict:
-    """A pairing code for the owner's own Chrome — the settings-page twin
-    of 「連接瀏覽器」 in Telegram."""
+@app.post("/browser/web/code")
+async def browser_web_code(request: Request) -> dict:
+    """A pairing code for this OpenTeddy, from any page that reaches its
+    Settings — the web twin of 「連接瀏覽器」 in Telegram."""
     import browser_bridge
     import privacy
-    why = _owner_check(request)
-    if why:
-        raise HTTPException(status_code=403, detail=browser_bridge.ONLY_TELEGRAM)
-    return {"code": browser_bridge.begin(privacy.LOCAL_PERSON),
-            "server": browser_bridge.server_address(),
+    addr = _page_address(request)
+    if not addr:
+        raise HTTPException(status_code=403, detail=_OTHER_SITE)
+    return {"code": browser_bridge.begin(privacy.WEB_PERSON), "server": addr,
             "expires_in": browser_bridge.CODE_TTL_S}
 
 
-@app.post("/browser/local/unlink")
-async def browser_local_unlink(request: Request) -> dict:
+@app.post("/browser/web/unlink")
+async def browser_web_unlink(request: Request) -> dict:
     import browser_bridge
     import privacy
-    if _owner_check(request):
-        raise HTTPException(status_code=403, detail=browser_bridge.ONLY_TELEGRAM)
-    return {"removed": await browser_bridge.unlink(privacy.LOCAL_PERSON)}
+    if not _page_address(request):
+        raise HTTPException(status_code=403, detail=_OTHER_SITE)
+    return {"removed": await browser_bridge.unlink(privacy.WEB_PERSON)}
 
 
 @app.websocket("/browser/ws")

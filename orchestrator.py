@@ -1751,7 +1751,8 @@ class Orchestrator:
         import google_personal as G
         # Not available here is an answer, not a failure: someone without
         # Google (or on the web UI) uses everything else as usual.
-        if not person:
+        import privacy as _pv
+        if not _pv.has_account(person):
             return await self._finish_direct(req, G.ONLY_TELEGRAM, True)
         if not GA.configured():
             return await self._finish_direct(req, "📅 " + GA.NOT_CONFIGURED, True)
@@ -1769,10 +1770,12 @@ class Orchestrator:
 
     async def _google_link(self, req: TaskRequest, person: Optional[str],
                            cmd: Optional[str], callback: Any) -> TaskResult:
-        """Link / unlink this person's Google account (google_auth.py)."""
+        """Link / unlink this person's Google account (google_auth.py) —
+        never the web UI's person, which anyone reaching the server shares."""
         import google_auth as GA
         import google_personal as G
-        if not person:
+        import privacy as _pv
+        if not _pv.has_account(person):
             return await self._finish_direct(req, G.ONLY_TELEGRAM, True)
         try:
             if callback:

@@ -261,7 +261,7 @@ async def main() -> None:
         req = types.SimpleNamespace(id="t-x", context={}, session_id="")
         assert await privacy.resolve(req, None) == B.EVAL_PERSON
         B.unmark_eval_task("t-x")                     # what /tasks does for a call without the key
-        assert await privacy.resolve(req, None) is None
+        assert await privacy.resolve(req, None) == privacy.WEB_PERSON
         print("  ✓ eval key: wrong key refused; the eval person only with the key, not by reusing a task id")
 
         rig = BrowserRig(base, key)

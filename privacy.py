@@ -6,21 +6,23 @@ Telegram private chat: the bridge sets the in-process origin "telegram"
 (tools._context), which an HTTP client cannot. So a person is "tg:<chat
 id>" — only for a private chat (a positive id; groups are negative), and
 only when the request really came through the bridge or a schedule
-running in that person's Telegram session. The web UI, CLI, MCP and
-group chats have no person; personal Google data is refused there.
+running in that person's Telegram session. Group chats have no person.
 
-The web UI has no login and shows every session's history and live
-events. So once a task reads someone's calendar or mail it is marked
-private: what is stored (task summary, subtask results) and what is
-broadcast to browsers is replaced by a note, memory doesn't keep it, and
-only the Telegram reply carries the full answer.
+The web UI, CLI, MCP and Task API are one person between them,
+WEB_PERSON: whoever uses this OpenTeddy's web UI. Its Settings page pairs
+a Chrome for it, from any address that reaches the page — 127.0.0.1 on
+the desktop app, the LAN or a VPN on a home server (the user, 2026-11-11:
+"只要我可以連到設定裡面就應該取得該台電腦的配對碼"). On a server others can
+reach, that means anyone who opens the web UI can use that Chrome, and
+the web UI's task history shows what it read; Settings says so. Google
+stays Telegram-only (has_account): a shared web UI must never become
+everyone's calendar and mail.
 
-One exception, LOCAL_PERSON: when the server listens only on this
-computer (the desktop app, `./run.sh` without --host), nobody else can
-open the web UI, so whoever uses it IS the computer's owner — someone
-without Telegram can still pair their own Chrome. Their private tasks
-still stay out of memory (the desktop syncs memory to the cloud) and off
-cloud models; only the web UI shows them, since it is theirs alone.
+Once a task reads someone's calendar, mail or browser it is marked
+private: memory doesn't keep it and cloud models don't see it. For a
+Telegram person the web UI also gets a note instead of the content
+(stored summary, subtask results, live events) and only their Telegram
+reply carries it; WEB_PERSON asked from the web UI, so it shows there.
 """
 from __future__ import annotations
 
@@ -31,19 +33,25 @@ from typing import Any, Dict, Optional
 
 NOTE = "🔒 這則回答含有個人資料（行事曆、信件或你的瀏覽器），只顯示在本人的 Telegram，不保存在這裡。"
 
-LOCAL_PERSON = "local:owner"
+WEB_PERSON = "web:owner"
 _LOOPBACK = ("127.0.0.1", "localhost", "::1")
 
 _scope: ContextVar[Optional[Dict[str, Any]]] = ContextVar("openteddy_personal_scope", default=None)
 _private: Dict[str, float] = {}               # task_id → when it was marked
-_owner_view: Dict[str, float] = {}            # private tasks of LOCAL_PERSON: the web UI may show them
+_web_view: Dict[str, float] = {}              # private tasks of WEB_PERSON: the web UI shows them
 
 
 def local_only() -> bool:
-    """True when this server listens on this computer only. Launchers say so
-    in OPENTEDDY_HOST (run.sh, the desktop sidecar); unset counts as shared,
-    so a hand-started uvicorn on 0.0.0.0 can never hand out the owner."""
+    """True when this server listens on this computer only (run.sh and the
+    desktop sidecar say so in OPENTEDDY_HOST). Settings then needn't warn
+    that others can use the paired Chrome."""
     return os.environ.get("OPENTEDDY_HOST", "").strip().lower() in _LOOPBACK
+
+
+def has_account(person: Optional[str]) -> bool:
+    """May link and read personal accounts (Google): a real person, not the
+    web UI that anyone reaching this server can open."""
+    return bool(person) and person != WEB_PERSON
 
 
 def person_for_chat(chat_id: Any) -> Optional[str]:
@@ -52,7 +60,8 @@ def person_for_chat(chat_id: Any) -> Optional[str]:
 
 
 async def resolve(req: Any, tracker: Any) -> Optional[str]:
-    """The person behind this request, or None (web / CLI / MCP / group)."""
+    """The person behind this request: tg:<id>, WEB_PERSON (web UI, CLI,
+    MCP, API), or None (a group chat)."""
     from tools._context import get_triggered_by
     import browser_bridge
     if browser_bridge.is_eval_task(req.id):          # the delivery eval's throwaway browser
@@ -68,7 +77,7 @@ async def resolve(req: Any, tracker: Any) -> Optional[str]:
         tg = person_for_chat((sess or {}).get("telegram_chat_id"))
         if tg:
             return tg
-    return LOCAL_PERSON if local_only() else None
+    return WEB_PERSON
 
 
 def begin(task_id: str, person: Optional[str]) -> None:
@@ -94,10 +103,10 @@ def mark(task_id: Optional[str] = None) -> None:
         return
     now = time.time()
     _private[tid] = now
-    if current_person() == LOCAL_PERSON and local_only():
-        _owner_view[tid] = now
+    if current_person() == WEB_PERSON:
+        _web_view[tid] = now
     if len(_private) > 2000:                  # keep a day's worth
-        for d in (_private, _owner_view):
+        for d in (_private, _web_view):
             for k in [k for k, t in d.items() if now - t > 86400]:
                 d.pop(k, None)
 
@@ -109,8 +118,8 @@ def is_private(task_id: Optional[str]) -> bool:
 
 def hidden_from_web(task_id: Optional[str]) -> bool:
     """Personal data the web UI must not show — everything private except
-    the local owner's own, on a server only they can reach."""
-    return is_private(task_id) and not (task_id in _owner_view and local_only())
+    what the web UI's own person asked for there."""
+    return is_private(task_id) and task_id not in _web_view
 
 
 _EVENT_KEEP = {"type", "event", "task_id", "subtask_id", "session_id", "status", "order", "total",

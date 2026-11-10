@@ -386,7 +386,7 @@ async def test_who() -> None:
     assert not r["success"] and "沒有連上" in r["error"], "paired but offline is explained"
     names = {s["function"]["name"] for _, s, _ in T.BROWSER_EXT_TOOLS}
     assert names == set(B.TOOL_NAMES)
-    print("  ✓ tools only for a person who paired; web is told to use Telegram; offline explained")
+    print("  ✓ tools only for a person who paired; no person (a group) is told how to pair; offline explained")
 
     assert B.parse_command("連接瀏覽器") == "link" and B.parse_command("/browser") == "link"
     assert B.parse_command("幫我連接我的 Chrome") == "link"
@@ -411,58 +411,59 @@ async def test_who() -> None:
     print("  ✓ commands, 好 without a question passes through, lane, risky / secret rules")
 
 
-async def test_local_owner(base: str, port: int) -> None:
-    """No Telegram: on a server only this computer can reach (desktop app,
-    ./run.sh), Settings pairs the owner's Chrome; anywhere else it can't."""
+async def test_web_pairing(base: str, port: int) -> None:
+    """No Telegram: whoever reaches Settings gets this OpenTeddy's code, with
+    the address they reached it at — 127.0.0.1, LAN or VPN alike."""
     import types
     import httpx
-    own = {"origin": base}
-    web_req = types.SimpleNamespace(id="t-local-web", context={}, session_id="")
+    import google_personal as G
+    web_req = types.SimpleNamespace(id="t-web-pair", context={}, session_id="")
     os.environ.pop("OPENTEDDY_HOST", None)
     async with httpx.AsyncClient(base_url=base) as c:
-        r = (await c.get("/browser/local")).json()
-        assert r == {"available": False, "reason": "shared"}, r
-        r = await c.post("/browser/local/code", headers=own)
-        assert r.status_code == 403 and "Telegram" in r.json()["detail"], "shared server → Telegram"
-        assert await privacy.resolve(web_req, None) is None, "web UI on a shared server is nobody"
-        print("  ✓ shared server (no OPENTEDDY_HOST): no code from the page, told to use Telegram")
+        vpn = {"host": "10.255.147.17:8000", "origin": "http://10.255.147.17:8000"}
+        r = (await c.get("/browser/web", headers=vpn)).json()
+        assert r["available"] and r["server"] == "http://10.255.147.17:8000" and r["shared"], r
+        got = (await c.post("/browser/web/code", headers=vpn)).json()
+        assert re.fullmatch(r"\d{6}", got["code"]) and got["server"] == "http://10.255.147.17:8000"
+        assert got["expires_in"] == 600
+        r = await c.post("/browser/web/code", headers={"origin": "https://evil.example"})
+        assert r.status_code == 403, "another site's page gets no code"
+        assert not (await c.get("/browser/web", headers={"origin": "https://evil.example"})).json()["available"]
+        r = await c.post("/browser/pair", json={"code": got["code"], "label": "Mac"},
+                         headers={"origin": "chrome-extension://abc"})
+        assert r.status_code == 200 and r.json()["token"]
+        assert (await c.get("/browser/web")).json()["linked"] == 1
+        print("  ✓ a code at the address the page was opened at (VPN here); another site refused; it pairs")
 
-        os.environ["OPENTEDDY_HOST"], os.environ["OPENTEDDY_PORT"] = "127.0.0.1", str(port)
+        os.environ["OPENTEDDY_HOST"] = "127.0.0.1"
         try:
-            for bad in ({"origin": "https://evil.example"}, {"x-forwarded-for": "10.0.0.9", **own},
-                        {"host": "evil.test", **own}):
-                r = await c.post("/browser/local/code", headers=bad)
-                assert r.status_code == 403, f"{bad} must not get a code"
-            r = (await c.get("/browser/local", headers=own)).json()
-            assert r["available"] and r["server"] == f"http://127.0.0.1:{port}" and r["linked"] == 0, r
-            got = (await c.post("/browser/local/code", headers=own)).json()
-            assert re.fullmatch(r"\d{6}", got["code"]) and got["server"] == r["server"] and got["expires_in"] == 600
-            r = await c.post("/browser/pair", json={"code": got["code"], "label": "Mac"},
-                             headers={"origin": "chrome-extension://abc"})
-            assert r.status_code == 200 and r.json()["token"]
-            assert (await c.get("/browser/local", headers=own)).json()["linked"] == 1
-            print("  ✓ server on 127.0.0.1: the page gets a code (not another site, a proxy or a rebound host); it pairs")
-
-            assert await privacy.resolve(web_req, None) == privacy.LOCAL_PERSON
-            privacy.begin("t-local", privacy.LOCAL_PERSON)
-            assert await B.unusable_tools() == set() or await B.unusable_tools() <= B.VISION_TOOLS
-            privacy.mark()
-            assert privacy.is_private("t-local") and not privacy.hidden_from_web("t-local")
-            ev = {"type": "tool_result", "task_id": "t-local", "result": "訂單 3 筆"}
-            assert privacy.scrub_event(ev) == ev, "the owner's own page shows the owner's browser task"
-            privacy.begin("t-tg", ALICE)
-            privacy.mark()
-            assert privacy.hidden_from_web("t-tg"), "a Telegram person's task stays hidden from the web"
-            assert "設定" in B.not_linked_text(privacy.LOCAL_PERSON) and "Telegram" in B.not_linked_text(ALICE)
-            print("  ✓ the owner's browser tasks: private (memory, cloud) but shown on their own page")
-
-            assert (await c.post("/browser/local/unlink", headers=own)).json()["removed"] == 1
-            assert (await c.get("/browser/local", headers=own)).json()["linked"] == 0
+            r = (await c.get("/browser/web")).json()
+            assert r["server"] == base and not r["shared"], "desktop: 127.0.0.1, no shared warning"
         finally:
             os.environ.pop("OPENTEDDY_HOST", None)
-            os.environ.pop("OPENTEDDY_PORT", None)
-    assert privacy.hidden_from_web("t-local"), "served to the network again → hidden again"
-    print("  ✓ unpair from the page; the owner exists only while the server is local")
+
+        assert await privacy.resolve(web_req, None) == privacy.WEB_PERSON
+        privacy.begin("t-web-pair", privacy.WEB_PERSON)
+        assert await B.unusable_tools() <= B.VISION_TOOLS, "paired from the web → the web UI has the browser"
+        privacy.mark()
+        assert privacy.is_private("t-web-pair") and not privacy.hidden_from_web("t-web-pair")
+        ev = {"type": "tool_result", "task_id": "t-web-pair", "result": "訂單 3 筆"}
+        assert privacy.scrub_event(ev) == ev, "asked from the web UI → shown there"
+        privacy.begin("t-tg", ALICE)
+        privacy.mark()
+        assert privacy.hidden_from_web("t-tg"), "a Telegram person's task stays hidden from the web"
+        assert "設定" in B.not_linked_text(privacy.WEB_PERSON) and "Telegram" in B.not_linked_text(ALICE)
+        print("  ✓ the web UI's browser tasks: kept from memory and cloud, shown in the web UI; Telegram's hidden")
+
+        assert not privacy.has_account(privacy.WEB_PERSON) and privacy.has_account(ALICE)
+        try:
+            G.person_or_raise(privacy.WEB_PERSON)
+            raise AssertionError("the shared web UI must not reach Google")
+        except G.PersonalError:
+            pass
+        assert (await c.post("/browser/web/unlink")).json()["removed"] == 1
+        assert (await c.get("/browser/web")).json()["linked"] == 0
+    print("  ✓ Google stays per person (never the web UI's); unpair from the page")
 
 
 async def test_orchestrator() -> None:
@@ -501,7 +502,9 @@ async def test_orchestrator() -> None:
     assert res.status == TaskStatus.COMPLETED and B._codes[code]["person"] == "tg:999", res.summary
     assert "/browser/extension.zip" in res.summary and "密碼和信用卡我不會幫你填" in res.summary
     res = await run("連接瀏覽器", origin="")
-    assert "Telegram" in res.summary and not any(e["person"] is None for e in B._codes.values()), "web: nobody"
+    web_code = re.search(r"配對碼：(\d{6})", res.summary).group(1)
+    assert B._codes[web_code]["person"] == privacy.WEB_PERSON, "web UI: its own person's code"
+    assert not any(e["person"] is None for e in B._codes.values())
     assert "還沒有連接" in (await run("瀏覽器狀態")).summary
     await B.pair(code, "Mac 的 Chrome", "chrome-extension://abc")
     assert "沒有連上" in (await run("瀏覽器狀態")).summary
@@ -539,7 +542,7 @@ async def test_orchestrator() -> None:
     privacy.mark("private-1")
     assert OR._is_local_only(), "a task that touched someone's personal data never goes to a cloud model"
     assert "已解除" in (await run("解除瀏覽器")).summary and await B.linked("tg:999") == 0
-    print("  ✓ 「連接瀏覽器」 gives this person a code (never from the web); status; 「解除瀏覽器」; "
+    print("  ✓ 「連接瀏覽器」 gives this person a code (the web UI gets its own); status; 「解除瀏覽器」; "
           "a browser chore is one subtask in the person's own words")
 
 
@@ -672,7 +675,7 @@ async def main() -> None:
         print("A. pairing"); await test_pairing(base, f"ws://127.0.0.1:{port}")
         print("B–D. the extension in Chromium"); await test_browser(base)
         print("E. who"); await test_who(); await test_orchestrator(); await test_executor_guards()
-        print("F. no Telegram: the computer's owner"); await test_local_owner(base, port)
+        print("F. no Telegram: pair from Settings"); await test_web_pairing(base, port)
     finally:
         server.should_exit = True
         await serving

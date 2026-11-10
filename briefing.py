@@ -106,8 +106,9 @@ async def morning_briefing(session_id: str = "", person: Optional[str] = None) -
     mail. Without Google it's weather, typhoons, reminders and the house."""
     import google_auth as GA
     today = datetime.now().date()
+    import privacy
     linked = None
-    if person:
+    if privacy.has_account(person):
         try:
             acct = await GA.account(person)
             linked = person if acct and acct.get("status") == "ok" else None

@@ -45,7 +45,8 @@ TOOL_SCOPES = {"calendar_events": GA.CAL_SCOPE, "gmail_unread": GA.MAIL_SCOPE}
 async def unusable_tools() -> set:
     """Names of TOOL_SCOPES this task's person can't use (all of them for
     nobody / not linked)."""
-    have = await GA.granted(privacy.current_person())
+    p = privacy.current_person()
+    have = await GA.granted(p) if privacy.has_account(p) else set()
     return {name for name, scope in TOOL_SCOPES.items() if scope not in have}
 
 
@@ -63,7 +64,7 @@ def day_label(d: date) -> str:
 
 def person_or_raise(person: Optional[str] = None) -> str:
     p = person or privacy.current_person()
-    if not p:
+    if not privacy.has_account(p):
         raise PersonalError(ONLY_TELEGRAM)
     return p
 

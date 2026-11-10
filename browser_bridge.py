@@ -1,9 +1,9 @@
 """
 The person's own browser, through the OpenTeddy browser extension
 (browser_ext/). Like Google (google_auth.py) it belongs to one person —
-privacy.py — and is linked from that person's Telegram private chat, or,
-when the server listens only on this computer (desktop app), from
-Settings → Chrome extension in the web UI (privacy.LOCAL_PERSON):
+privacy.py — and is linked from that person's Telegram private chat, or
+from Settings → Chrome extension in the web UI for the web UI's person
+(privacy.WEB_PERSON), at whatever address reached the page:
 
   1. 「連接瀏覽器」 / 「產生配對碼」 → a 6-digit pairing code (one use, 10 minutes)
   2. in the extension: this server's address + the code → POST /browser/pair
@@ -68,17 +68,16 @@ EXT_VERSION = _ext_version()            # what this server ships in browser_ext/
 _told_outdated: set = set()             # (person, version) already told to reload
 
 # Said to the person (the model passes these on as they are).
-ONLY_TELEGRAM = ("🔒 這台 OpenTeddy 開放給其他電腦連線，網頁分不出是誰在用，所以瀏覽器只能從 Telegram "
-                 "私訊連接：說「連接瀏覽器」，之後也從 Telegram 叫我操作。如果 OpenTeddy 只在你自己的電腦上執行"
-                 "（桌面版，或 ./run.sh 不加 --host），可以在「設定 → Chrome 擴充功能」直接產生配對碼。")
+ONLY_TELEGRAM = ("🔒 瀏覽器是個人的，群組裡不能用。請在 Telegram 私訊說「連接瀏覽器」，"
+                 "或在 OpenTeddy 網頁的「設定 → Chrome 擴充功能」配對。")
 NOT_LINKED = "你還沒有連接瀏覽器。想用的話在 Telegram 私訊說「連接瀏覽器」，我會給你配對碼。"
-NOT_LINKED_LOCAL = "你還沒有連接瀏覽器。到 OpenTeddy 的「設定 → Chrome 擴充功能」按「產生配對碼」就能連接。"
+NOT_LINKED_WEB = "你還沒有連接瀏覽器。到 OpenTeddy 網頁的「設定 → Chrome 擴充功能」按「產生配對碼」就能連接。"
 NEW_CODE = "請重新拿一組配對碼：Telegram 私訊說「連接瀏覽器」，或在 OpenTeddy「設定 → Chrome 擴充功能」按「產生配對碼」。"
 
 
 def not_linked_text(person: Optional[str]) -> str:
     """How this person gets a pairing code: the settings page or Telegram."""
-    return NOT_LINKED_LOCAL if person == privacy.LOCAL_PERSON else NOT_LINKED
+    return NOT_LINKED_WEB if person == privacy.WEB_PERSON else NOT_LINKED
 NOT_CONNECTED = "你的瀏覽器現在沒有連上（電腦關機、Chrome 沒開，或網路不通）。打開 Chrome 後再試一次。"
 PAUSED = "你在擴充功能按了「暫停」，OpenTeddy 現在不能操作瀏覽器。要繼續請在擴充功能按「繼續」。"
 

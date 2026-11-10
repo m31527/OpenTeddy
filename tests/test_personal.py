@@ -254,7 +254,8 @@ async def test_who(tracker) -> None:
     class _T:
         async def get_session(self, sid): return {"telegram_chat_id": {"s-tg": "777", "s-grp": "-55"}.get(sid, "")}
     req = lambda **c: TaskRequest(goal="x", session_id=c.pop("sid", "s-web"), context=c)
-    assert await privacy.resolve(req(telegram_chat_id="777"), _T()) is None, "web: spoofed context is nobody"
+    W = privacy.WEB_PERSON
+    assert await privacy.resolve(req(telegram_chat_id="777"), _T()) == W, "web: a spoofed chat id isn't that person"
     tok = set_triggered_by("telegram")
     try:
         assert await privacy.resolve(req(telegram_chat_id="777"), _T()) == ALICE
@@ -264,15 +265,16 @@ async def test_who(tracker) -> None:
     tok = set_triggered_by("schedule")
     try:
         assert await privacy.resolve(req(sid="s-tg"), _T()) == ALICE
-        assert await privacy.resolve(req(sid="s-web"), _T()) is None
+        assert await privacy.resolve(req(sid="s-web"), _T()) == W
     finally:
         reset_triggered_by(tok)
     tok = set_triggered_by("api_trusted")
     try:
-        assert await privacy.resolve(req(sid="s-tg", telegram_chat_id="777"), _T()) is None
+        assert await privacy.resolve(req(sid="s-tg", telegram_chat_id="777"), _T()) == W
     finally:
         reset_triggered_by(tok)
-    print("  ✓ a Telegram private chat is a person; web / API / group / spoofed context are nobody; schedules")
+    assert not privacy.has_account(W) and not privacy.has_account(None) and privacy.has_account(ALICE)
+    print("  ✓ a Telegram private chat is a person; web / API / spoofed context are the web UI (no Google); a group is nobody; schedules")
 
 
 async def test_storage(tracker) -> None:

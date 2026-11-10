@@ -5390,10 +5390,9 @@
               </div>
             </div>
 
-            <!-- Chrome extension — when only this computer can open OpenTeddy
-                 (desktop app, ./run.sh), its owner pairs Chrome right here;
-                 on a shared server the page can't tell who's asking, so it
-                 points to Telegram instead (privacy.local_only). -->
+            <!-- Chrome extension — pairs a Chrome for this OpenTeddy's web UI
+                 (privacy.WEB_PERSON), at the address this page was opened
+                 at; on a server others reach too, it says they can use it. -->
             <div class="settings-section collapsed">
               <h3 onclick="toggleSettingsSection(this); refreshChromeExt()" data-i18n="chrome_heading">🧩 Chrome extension</h3>
               <div class="settings-section-body">
@@ -10915,8 +10914,9 @@
     }
 
     // ── Settings → Chrome extension ────────────────────────────────────
-    // GET /browser/local says whether this page may pair the owner's
-    // Chrome (server on this computer only) and whether it's connected.
+    // GET /browser/web: the web UI's Chrome — paired / online — and the
+    // address this page was opened at, which the extension should use
+    // too (127.0.0.1, LAN or VPN alike).
     // While a code is on screen we look again every 3 s, so the page
     // flips to "Connected" the moment the extension pairs.
     let _chromeExtPoll = null;
@@ -10926,14 +10926,14 @@
       if (!box || !setup) return;
       let r;
       try {
-        r = await fetch(`${API}/browser/local`, { cache: 'no-store' }).then(res => res.json());
+        r = await fetch(`${API}/browser/web`, { cache: 'no-store' }).then(res => res.json());
       } catch (e) {
         box.textContent = '⚠️ ' + e;
         return;
       }
       if (!r.available) {
         setup.hidden = true;
-        box.textContent = t(r.reason === 'shared' ? 'chrome_shared' : 'chrome_not_local');
+        box.textContent = r.reason || '';
         return;
       }
       setup.hidden = false;
@@ -10950,6 +10950,8 @@
         line = t('chrome_not_linked');
       }
       if (r.outdated) line += `\n🧩 ${t('chrome_outdated').replace('{v}', r.latest || '')}`;
+      // Others can open this web UI too (home server on the LAN / VPN).
+      if (r.shared) line += `\n👥 ${t('chrome_shared_note')}`;
       box.style.whiteSpace = 'pre-line';
       box.textContent = line;
     }
@@ -10959,7 +10961,7 @@
     async function newChromeCode() {
       const box = document.getElementById('chromeExtStatus');
       try {
-        const res = await fetch(`${API}/browser/local/code`, { method: 'POST' });
+        const res = await fetch(`${API}/browser/web/code`, { method: 'POST' });
         const r = await res.json();
         if (!res.ok) throw new Error(r.detail || res.status);
         document.getElementById('chromeExtServer').textContent = r.server;
@@ -10985,7 +10987,7 @@
         okLabel: t('chrome_unlink'), cancelLabel: t('btn_cancel'), danger: true,
       });
       if (!ok) return;
-      try { await fetch(`${API}/browser/local/unlink`, { method: 'POST' }); } catch {}
+      try { await fetch(`${API}/browser/web/unlink`, { method: 'POST' }); } catch {}
       refreshChromeExt();
     }
     async function copyChromeExt(el) {
