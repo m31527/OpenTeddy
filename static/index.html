@@ -2290,6 +2290,8 @@
       border: 1px solid var(--border); border-radius: var(--radius-md);
       background: var(--bg-secondary);
     }
+    /* Their own display rules would otherwise beat the hidden attribute. */
+    .chrome-ext-pair[hidden], .mem-btn[hidden] { display: none; }
     .chrome-ext-label { font-size: 0.72rem; color: var(--text-muted); margin-bottom: 0.15rem; }
     .chrome-ext-copy {
       cursor: copy; user-select: all; word-break: break-all;

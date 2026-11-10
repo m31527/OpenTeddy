@@ -141,6 +141,13 @@ a = Analysis(
         "matplotlib",      # only used inside python_exec subprocess sandbox
         "PIL", "Pillow",   # ditto
         "pytest", "unittest",
+        # The decision engine's optional local router (requirements-
+        # decision.txt) — decide.py falls back without it. A dev venv that
+        # has it installed made PyInstaller pull in laya + PyTorch (1.1.8
+        # build, 2026-11-10): the .dmg grew from ~105 MB to 376 MB and the
+        # sidecar aborted ~10 s after start when the router loaded torch
+        # ("cannot initialize type GradBucket: already defined").
+        "laya", "torch", "transformers", "safetensors", "sympy", "networkx",
     ],
     noarchive=False,
 )
