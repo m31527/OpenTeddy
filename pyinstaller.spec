@@ -114,6 +114,12 @@ DATA_DIRS = [
     # Maintainer rebuilds via `python cyber_skills/update.py` before
     # each release and commits the refreshed index.
     ("cyber_skills/index.json", "cyber_skills"),
+    # The how-to guides (agent_skills/<name>/SKILL.md) the planner and
+    # executor follow — read from beside agent_skills/__init__.py.
+    ("agent_skills", "agent_skills"),
+    # The Chrome extension: /browser/extension.zip serves this folder and
+    # the server reads its version from manifest.json.
+    ("browser_ext", "browser_ext"),
 ]
 
 

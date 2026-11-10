@@ -2284,6 +2284,18 @@
     }
     .settings-section.collapsed .settings-section-body { display: none; }
     .settings-section.collapsed h3 { padding-bottom: 0.8rem; }
+    .chrome-ext-pair {
+      display: flex; flex-direction: column; gap: 0.55rem;
+      padding: 0.75rem 0.85rem; margin-bottom: 0.8rem;
+      border: 1px solid var(--border); border-radius: var(--radius-md);
+      background: var(--bg-secondary);
+    }
+    .chrome-ext-label { font-size: 0.72rem; color: var(--text-muted); margin-bottom: 0.15rem; }
+    .chrome-ext-copy {
+      cursor: copy; user-select: all; word-break: break-all;
+      color: var(--text-strong); font-size: 0.82rem;
+    }
+    .chrome-ext-code { font-size: 1.35rem; letter-spacing: 0.22em; font-weight: 600; }
     .ollama-status {
       display: flex;
       align-items: center;
@@ -5373,6 +5385,43 @@
               <button type="button" class="mem-btn" onclick="checkGoogle()" style="font-size:0.78rem">
                 <span>🔌</span><span data-i18n="ha_test">Test connection</span>
               </button>
+              </div>
+            </div>
+
+            <!-- Chrome extension — when only this computer can open OpenTeddy
+                 (desktop app, ./run.sh), its owner pairs Chrome right here;
+                 on a shared server the page can't tell who's asking, so it
+                 points to Telegram instead (privacy.local_only). -->
+            <div class="settings-section collapsed">
+              <h3 onclick="toggleSettingsSection(this); refreshChromeExt()" data-i18n="chrome_heading">🧩 Chrome extension</h3>
+              <div class="settings-section-body">
+              <div style="font-size:0.78rem;color:var(--text-secondary);margin-bottom:0.9rem;line-height:1.5" data-i18n="chrome_desc">
+                Lets OpenTeddy read and use pages in your own Chrome.
+              </div>
+              <div id="chromeExtStatus" style="font-size:0.78rem;color:var(--text-secondary);line-height:1.6;margin-bottom:0.7rem"></div>
+              <div id="chromeExtSetup" hidden>
+                <ol style="font-size:0.78rem;color:var(--text-secondary);line-height:1.7;margin:0 0 0.8rem;padding-left:1.2rem">
+                  <li><span data-i18n="chrome_step1">In Chrome, open this address to download the extension, then unzip it:</span>
+                    <code id="chromeExtZip" class="chrome-ext-copy" onclick="copyChromeExt(this)"></code></li>
+                  <li data-i18n="chrome_step2">Open chrome://extensions, turn on Developer mode (top right), click "Load unpacked" and pick that folder.</li>
+                  <li data-i18n="chrome_step3">Click the OpenTeddy icon in Chrome's toolbar and enter the address and code below.</li>
+                </ol>
+                <div id="chromeExtPair" hidden class="chrome-ext-pair">
+                  <div><div class="chrome-ext-label" data-i18n="chrome_server_label">OpenTeddy address</div>
+                    <code id="chromeExtServer" class="chrome-ext-copy" onclick="copyChromeExt(this)"></code></div>
+                  <div><div class="chrome-ext-label" data-i18n="chrome_code_label">Pairing code</div>
+                    <code id="chromeExtCode" class="chrome-ext-copy chrome-ext-code" onclick="copyChromeExt(this)"></code></div>
+                  <div style="font-size:0.74rem;color:var(--text-muted)" data-i18n="chrome_code_hint">Valid for 10 minutes, once. This page shows "Connected" when it's done.</div>
+                </div>
+                <div style="display:flex;gap:0.5rem;flex-wrap:wrap">
+                  <button type="button" class="mem-btn" onclick="newChromeCode()" style="font-size:0.78rem">
+                    <span>🔑</span><span data-i18n="chrome_new_code">Get a pairing code</span>
+                  </button>
+                  <button type="button" class="mem-btn" id="chromeExtUnlinkBtn" onclick="unlinkChrome()" style="font-size:0.78rem" hidden>
+                    <span data-i18n="chrome_unlink">Unpair</span>
+                  </button>
+                </div>
+              </div>
               </div>
             </div>
 
@@ -10861,6 +10910,88 @@
       } catch (e) {
         box.textContent = '⚠️ ' + e;
       }
+    }
+
+    // ── Settings → Chrome extension ────────────────────────────────────
+    // GET /browser/local says whether this page may pair the owner's
+    // Chrome (server on this computer only) and whether it's connected.
+    // While a code is on screen we look again every 3 s, so the page
+    // flips to "Connected" the moment the extension pairs.
+    let _chromeExtPoll = null;
+    async function refreshChromeExt() {
+      const box = document.getElementById('chromeExtStatus');
+      const setup = document.getElementById('chromeExtSetup');
+      if (!box || !setup) return;
+      let r;
+      try {
+        r = await fetch(`${API}/browser/local`, { cache: 'no-store' }).then(res => res.json());
+      } catch (e) {
+        box.textContent = '⚠️ ' + e;
+        return;
+      }
+      if (!r.available) {
+        setup.hidden = true;
+        box.textContent = t(r.reason === 'shared' ? 'chrome_shared' : 'chrome_not_local');
+        return;
+      }
+      setup.hidden = false;
+      document.getElementById('chromeExtZip').textContent = `${r.server}/browser/extension.zip`;
+      document.getElementById('chromeExtUnlinkBtn').hidden = !r.linked;
+      let line;
+      if (r.online && r.online.length) {
+        line = `🟢 ${t('chrome_connected')}：${r.online.join('、')}` + (r.paused ? `（${t('chrome_paused')}）` : '');
+        document.getElementById('chromeExtPair').hidden = true;
+        _stopChromeExtPoll();
+      } else if (r.linked) {
+        line = `🔗 ${t('chrome_offline')}`;
+      } else {
+        line = t('chrome_not_linked');
+      }
+      if (r.outdated) line += `\n🧩 ${t('chrome_outdated').replace('{v}', r.latest || '')}`;
+      box.style.whiteSpace = 'pre-line';
+      box.textContent = line;
+    }
+    function _stopChromeExtPoll() {
+      if (_chromeExtPoll) { clearInterval(_chromeExtPoll); _chromeExtPoll = null; }
+    }
+    async function newChromeCode() {
+      const box = document.getElementById('chromeExtStatus');
+      try {
+        const res = await fetch(`${API}/browser/local/code`, { method: 'POST' });
+        const r = await res.json();
+        if (!res.ok) throw new Error(r.detail || res.status);
+        document.getElementById('chromeExtServer').textContent = r.server;
+        document.getElementById('chromeExtCode').textContent = r.code;
+        document.getElementById('chromeExtPair').hidden = false;
+        _stopChromeExtPoll();
+        const until = Date.now() + (r.expires_in || 600) * 1000;
+        _chromeExtPoll = setInterval(() => {
+          if (Date.now() > until) {
+            document.getElementById('chromeExtPair').hidden = true;
+            _stopChromeExtPoll();
+          }
+          refreshChromeExt();
+        }, 3000);
+      } catch (e) {
+        if (box) box.textContent = '⚠️ ' + (e.message || e);
+      }
+    }
+    async function unlinkChrome() {
+      // In-app dialog: the desktop shell blocks the native confirm().
+      const ok = await showConfirm({
+        title: t('chrome_unlink'), body: t('chrome_unlink_confirm'),
+        okLabel: t('chrome_unlink'), cancelLabel: t('btn_cancel'), danger: true,
+      });
+      if (!ok) return;
+      try { await fetch(`${API}/browser/local/unlink`, { method: 'POST' }); } catch {}
+      refreshChromeExt();
+    }
+    async function copyChromeExt(el) {
+      try { await navigator.clipboard.writeText(el.textContent.trim()); } catch { return; }
+      const was = el.dataset.copied;
+      el.dataset.copied = '1';
+      el.style.opacity = '0.55';
+      if (!was) setTimeout(() => { el.style.opacity = ''; delete el.dataset.copied; }, 600);
     }
 
     // ── Settings → Printer ─────────────────────────────────────────────

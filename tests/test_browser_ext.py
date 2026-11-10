@@ -411,6 +411,60 @@ async def test_who() -> None:
     print("  ✓ commands, 好 without a question passes through, lane, risky / secret rules")
 
 
+async def test_local_owner(base: str, port: int) -> None:
+    """No Telegram: on a server only this computer can reach (desktop app,
+    ./run.sh), Settings pairs the owner's Chrome; anywhere else it can't."""
+    import types
+    import httpx
+    own = {"origin": base}
+    web_req = types.SimpleNamespace(id="t-local-web", context={}, session_id="")
+    os.environ.pop("OPENTEDDY_HOST", None)
+    async with httpx.AsyncClient(base_url=base) as c:
+        r = (await c.get("/browser/local")).json()
+        assert r == {"available": False, "reason": "shared"}, r
+        r = await c.post("/browser/local/code", headers=own)
+        assert r.status_code == 403 and "Telegram" in r.json()["detail"], "shared server → Telegram"
+        assert await privacy.resolve(web_req, None) is None, "web UI on a shared server is nobody"
+        print("  ✓ shared server (no OPENTEDDY_HOST): no code from the page, told to use Telegram")
+
+        os.environ["OPENTEDDY_HOST"], os.environ["OPENTEDDY_PORT"] = "127.0.0.1", str(port)
+        try:
+            for bad in ({"origin": "https://evil.example"}, {"x-forwarded-for": "10.0.0.9", **own},
+                        {"host": "evil.test", **own}):
+                r = await c.post("/browser/local/code", headers=bad)
+                assert r.status_code == 403, f"{bad} must not get a code"
+            r = (await c.get("/browser/local", headers=own)).json()
+            assert r["available"] and r["server"] == f"http://127.0.0.1:{port}" and r["linked"] == 0, r
+            got = (await c.post("/browser/local/code", headers=own)).json()
+            assert re.fullmatch(r"\d{6}", got["code"]) and got["server"] == r["server"] and got["expires_in"] == 600
+            r = await c.post("/browser/pair", json={"code": got["code"], "label": "Mac"},
+                             headers={"origin": "chrome-extension://abc"})
+            assert r.status_code == 200 and r.json()["token"]
+            assert (await c.get("/browser/local", headers=own)).json()["linked"] == 1
+            print("  ✓ server on 127.0.0.1: the page gets a code (not another site, a proxy or a rebound host); it pairs")
+
+            assert await privacy.resolve(web_req, None) == privacy.LOCAL_PERSON
+            privacy.begin("t-local", privacy.LOCAL_PERSON)
+            assert await B.unusable_tools() == set() or await B.unusable_tools() <= B.VISION_TOOLS
+            privacy.mark()
+            assert privacy.is_private("t-local") and not privacy.hidden_from_web("t-local")
+            ev = {"type": "tool_result", "task_id": "t-local", "result": "訂單 3 筆"}
+            assert privacy.scrub_event(ev) == ev, "the owner's own page shows the owner's browser task"
+            privacy.begin("t-tg", ALICE)
+            privacy.mark()
+            assert privacy.hidden_from_web("t-tg"), "a Telegram person's task stays hidden from the web"
+            assert "設定" in B.not_linked_text(privacy.LOCAL_PERSON) and "Telegram" in B.not_linked_text(ALICE)
+            print("  ✓ the owner's browser tasks: private (memory, cloud) but shown on their own page")
+
+            assert (await c.post("/browser/local/unlink", headers=own)).json()["removed"] == 1
+            assert (await c.get("/browser/local", headers=own)).json()["linked"] == 0
+        finally:
+            os.environ.pop("OPENTEDDY_HOST", None)
+            os.environ.pop("OPENTEDDY_PORT", None)
+    assert privacy.hidden_from_web("t-local"), "served to the network again → hidden again"
+    print("  ✓ unpair from the page; the owner exists only while the server is local")
+
+
 async def test_orchestrator() -> None:
     """「連接瀏覽器」 / 「瀏覽器狀態」 / 「解除瀏覽器」 answered without a model."""
     import types
@@ -618,6 +672,7 @@ async def main() -> None:
         print("A. pairing"); await test_pairing(base, f"ws://127.0.0.1:{port}")
         print("B–D. the extension in Chromium"); await test_browser(base)
         print("E. who"); await test_who(); await test_orchestrator(); await test_executor_guards()
+        print("F. no Telegram: the computer's owner"); await test_local_owner(base, port)
     finally:
         server.should_exit = True
         await serving

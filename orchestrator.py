@@ -1825,7 +1825,7 @@ class Orchestrator:
             if cmd == "status":
                 st = await BB.status(person)
                 if not st["linked"]:
-                    return await self._finish_direct(req, BB.NOT_LINKED, True)
+                    return await self._finish_direct(req, BB.not_linked_text(person), True)
                 if not st["online"]:
                     return await self._finish_direct(req, "🔗 瀏覽器已配對，但現在沒有連上（Chrome 沒開或電腦關機）。", True)
                 state = "（你按了暫停）" if st["paused"] else ""

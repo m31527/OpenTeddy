@@ -305,7 +305,7 @@ class Tracker:
             TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.ESCALATED
         ) else None
         import privacy
-        if summary and privacy.is_private(task_id):
+        if summary and privacy.hidden_from_web(task_id):
             summary = privacy.NOTE              # someone's calendar / mail: Telegram only
         await self.db.execute(
             "UPDATE tasks SET status=?, summary=?, completed_at=? WHERE id=?",
@@ -1092,7 +1092,7 @@ class Tracker:
         completed_at = subtask.completed_at.isoformat() if subtask.completed_at else None
         import privacy
         result = subtask.result
-        if result and privacy.is_private(subtask.parent_task_id):
+        if result and privacy.hidden_from_web(subtask.parent_task_id):
             result = privacy.NOTE
         await self.db.execute(
             "UPDATE subtasks SET status=?, result=?, confidence=?, error=?, "

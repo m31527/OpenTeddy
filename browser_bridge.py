@@ -1,9 +1,11 @@
 """
 The person's own browser, through the OpenTeddy browser extension
 (browser_ext/). Like Google (google_auth.py) it belongs to one person —
-privacy.py — and is linked from that person's Telegram private chat:
+privacy.py — and is linked from that person's Telegram private chat, or,
+when the server listens only on this computer (desktop app), from
+Settings → Chrome extension in the web UI (privacy.LOCAL_PERSON):
 
-  1. 「連接瀏覽器」 → a 6-digit pairing code (one use, 10 minutes)
+  1. 「連接瀏覽器」 / 「產生配對碼」 → a 6-digit pairing code (one use, 10 minutes)
   2. in the extension: this server's address + the code → POST /browser/pair
      returns a token; only its SHA-256 is kept here
   3. the extension holds a WebSocket to /browser/ws (token in the first
@@ -66,9 +68,17 @@ EXT_VERSION = _ext_version()            # what this server ships in browser_ext/
 _told_outdated: set = set()             # (person, version) already told to reload
 
 # Said to the person (the model passes these on as they are).
-ONLY_TELEGRAM = ("🔒 瀏覽器只能連到你自己的帳號：請在 Telegram 私訊 OpenTeddy 說「連接瀏覽器」，"
-                 "之後也從 Telegram 叫我操作。")
+ONLY_TELEGRAM = ("🔒 這台 OpenTeddy 開放給其他電腦連線，網頁分不出是誰在用，所以瀏覽器只能從 Telegram "
+                 "私訊連接：說「連接瀏覽器」，之後也從 Telegram 叫我操作。如果 OpenTeddy 只在你自己的電腦上執行"
+                 "（桌面版，或 ./run.sh 不加 --host），可以在「設定 → Chrome 擴充功能」直接產生配對碼。")
 NOT_LINKED = "你還沒有連接瀏覽器。想用的話在 Telegram 私訊說「連接瀏覽器」，我會給你配對碼。"
+NOT_LINKED_LOCAL = "你還沒有連接瀏覽器。到 OpenTeddy 的「設定 → Chrome 擴充功能」按「產生配對碼」就能連接。"
+NEW_CODE = "請重新拿一組配對碼：Telegram 私訊說「連接瀏覽器」，或在 OpenTeddy「設定 → Chrome 擴充功能」按「產生配對碼」。"
+
+
+def not_linked_text(person: Optional[str]) -> str:
+    """How this person gets a pairing code: the settings page or Telegram."""
+    return NOT_LINKED_LOCAL if person == privacy.LOCAL_PERSON else NOT_LINKED
 NOT_CONNECTED = "你的瀏覽器現在沒有連上（電腦關機、Chrome 沒開，或網路不通）。打開 Chrome 後再試一次。"
 PAUSED = "你在擴充功能按了「暫停」，OpenTeddy 現在不能操作瀏覽器。要繼續請在擴充功能按「繼續」。"
 
@@ -262,7 +272,7 @@ async def pair(code: str, label: str, origin: str) -> str:
             logger.warning("browser pairing: %d wrong codes — every pending code voided", _bad_codes)
             _codes.clear()
             _bad_codes = 0
-        raise BrowserError("配對碼不對或已過期。請在 Telegram 重新說「連接瀏覽器」拿新的配對碼。")
+        raise BrowserError("配對碼不對或已過期。" + NEW_CODE)
     _bad_codes = 0
     token = secrets.token_urlsafe(32)
     db = await _db()
@@ -294,13 +304,18 @@ async def status(person: str) -> Dict[str, Any]:
     live = _conns.get(person, [])
     return {"linked": await linked(person),
             "online": [c.label or "瀏覽器" for c in live],
-            "paused": any(c.paused for c in live)}
+            "paused": any(c.paused for c in live),
+            # No Telegram to say "reload the extension" — the settings page shows it.
+            "outdated": bool(EXT_VERSION) and bool(live) and not any(c.version == EXT_VERSION for c in live),
+            "latest": EXT_VERSION}
 
 
 def server_address() -> str:
-    """This machine's address on its main network, for the pairing message."""
-    import os
+    """The address the extension should use: this computer's own when the
+    server listens only here, else its address on the main network."""
     port = os.environ.get("OPENTEDDY_PORT", "8000")
+    if privacy.local_only():
+        return f"http://127.0.0.1:{port}"
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.connect(("192.0.2.1", 80))               # no packet is sent; picks the outbound address
@@ -528,7 +543,7 @@ async def call(op: str, params: Optional[Dict[str, Any]] = None, timeout: float 
         raise BrowserError(ONLY_TELEGRAM)
     conn = _live(person)
     if not conn:
-        raise BrowserError(NOT_CONNECTED if await linked(person) else NOT_LINKED)
+        raise BrowserError(NOT_CONNECTED if await linked(person) else not_linked_text(person))
     if conn.paused:
         raise BrowserError(PAUSED)
     reply = await conn.request(op, params or {}, timeout)

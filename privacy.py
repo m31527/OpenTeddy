@@ -14,17 +14,36 @@ events. So once a task reads someone's calendar or mail it is marked
 private: what is stored (task summary, subtask results) and what is
 broadcast to browsers is replaced by a note, memory doesn't keep it, and
 only the Telegram reply carries the full answer.
+
+One exception, LOCAL_PERSON: when the server listens only on this
+computer (the desktop app, `./run.sh` without --host), nobody else can
+open the web UI, so whoever uses it IS the computer's owner — someone
+without Telegram can still pair their own Chrome. Their private tasks
+still stay out of memory (the desktop syncs memory to the cloud) and off
+cloud models; only the web UI shows them, since it is theirs alone.
 """
 from __future__ import annotations
 
+import os
 import time
 from contextvars import ContextVar
 from typing import Any, Dict, Optional
 
 NOTE = "🔒 這則回答含有個人資料（行事曆、信件或你的瀏覽器），只顯示在本人的 Telegram，不保存在這裡。"
 
+LOCAL_PERSON = "local:owner"
+_LOOPBACK = ("127.0.0.1", "localhost", "::1")
+
 _scope: ContextVar[Optional[Dict[str, Any]]] = ContextVar("openteddy_personal_scope", default=None)
 _private: Dict[str, float] = {}               # task_id → when it was marked
+_owner_view: Dict[str, float] = {}            # private tasks of LOCAL_PERSON: the web UI may show them
+
+
+def local_only() -> bool:
+    """True when this server listens on this computer only. Launchers say so
+    in OPENTEDDY_HOST (run.sh, the desktop sidecar); unset counts as shared,
+    so a hand-started uvicorn on 0.0.0.0 can never hand out the owner."""
+    return os.environ.get("OPENTEDDY_HOST", "").strip().lower() in _LOOPBACK
 
 
 def person_for_chat(chat_id: Any) -> Optional[str]:
@@ -45,9 +64,11 @@ async def resolve(req: Any, tracker: Any) -> Optional[str]:
         try:
             sess = await tracker.get_session(req.session_id)
         except Exception:  # noqa: BLE001
-            return None
-        return person_for_chat((sess or {}).get("telegram_chat_id"))
-    return None
+            sess = None
+        tg = person_for_chat((sess or {}).get("telegram_chat_id"))
+        if tg:
+            return tg
+    return LOCAL_PERSON if local_only() else None
 
 
 def begin(task_id: str, person: Optional[str]) -> None:
@@ -73,13 +94,23 @@ def mark(task_id: Optional[str] = None) -> None:
         return
     now = time.time()
     _private[tid] = now
+    if current_person() == LOCAL_PERSON and local_only():
+        _owner_view[tid] = now
     if len(_private) > 2000:                  # keep a day's worth
-        for k in [k for k, t in _private.items() if now - t > 86400]:
-            _private.pop(k, None)
+        for d in (_private, _owner_view):
+            for k in [k for k, t in d.items() if now - t > 86400]:
+                d.pop(k, None)
 
 
 def is_private(task_id: Optional[str]) -> bool:
+    """Personal data: keep it out of memory and off cloud models."""
     return bool(task_id) and task_id in _private
+
+
+def hidden_from_web(task_id: Optional[str]) -> bool:
+    """Personal data the web UI must not show — everything private except
+    the local owner's own, on a server only they can reach."""
+    return is_private(task_id) and not (task_id in _owner_view and local_only())
 
 
 _EVENT_KEEP = {"type", "event", "task_id", "subtask_id", "session_id", "status", "order", "total",
@@ -89,7 +120,7 @@ _EVENT_KEEP = {"type", "event", "task_id", "subtask_id", "session_id", "status",
 
 def scrub_event(data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """What a browser may see of a private task's event; None = drop it."""
-    if not is_private(data.get("task_id")):
+    if not hidden_from_web(data.get("task_id")):
         return data
     if str(data.get("type", "")).endswith("stream.delta"):
         return None

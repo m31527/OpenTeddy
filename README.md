@@ -1249,7 +1249,8 @@ Turn each one on or off, set the timings, or name devices to ignore in
 With the OpenTeddy extension installed, OpenTeddy can read pages, click
 and fill in fields in **your everyday Chrome**, including sites you're
 logged in to. Like Google, a browser belongs to the one person who paired
-it, and only their Telegram private chat can drive it.
+it, and only that person can drive it: from their Telegram private chat,
+or — when OpenTeddy runs only on their own computer — from its web UI.
 
 **How it works.** The extension turns the page into text in which every
 link, button and field has a number (`[12] button "Search"`); the model
@@ -1259,15 +1260,32 @@ click or typing step the page is read again, so OpenTeddy can see whether
 it worked. Edge and Brave take the same extension.
 
 **Install and pair**
-1. In your Telegram private chat say **「連接瀏覽器」** (or `/browser`). You
-   get the OpenTeddy address and a 6-digit code (10 minutes, one use).
-2. Download `http://<openteddy>/browser/extension.zip` and unzip it (or use
-   `browser_ext/` from the repo), open `chrome://extensions`, turn on
-   Developer mode, **Load unpacked**, pick the folder.
+1. Get the OpenTeddy address and a 6-digit code (10 minutes, one use):
+   - **No Telegram — desktop app, or `./run.sh` without `--host`:**
+     Settings → **🧩 Chrome extension** → **Get a pairing code**. The page
+     also shows the download address and turns to "Connected" once paired.
+   - **Telegram:** say **「連接瀏覽器」** (or `/browser`) in your private chat.
+2. Download `http://<openteddy>/browser/extension.zip` in Chrome and unzip
+   it (or use `browser_ext/` from the repo), open `chrome://extensions`,
+   turn on Developer mode, **Load unpacked**, pick the folder.
 3. Click the OpenTeddy icon in the toolbar, enter the address and the code.
 
-「瀏覽器狀態」 shows whether it's connected; 「解除瀏覽器」 (or *Unpair* in the
-extension) removes it.
+「瀏覽器狀態」 shows whether it's connected; 「解除瀏覽器」, *Unpair* in
+Settings, or *Unpair* in the extension removes it.
+
+**Why the settings page only works on your own computer.** The web UI has
+no login. When OpenTeddy listens on `127.0.0.1` only (the desktop app;
+`./run.sh` by default), nobody else can open it, so whoever uses it is
+the computer's owner and may pair their Chrome there. On a shared server
+(`--host 0.0.0.0`, like a home box the family reaches over the LAN) the
+page can't tell who is asking, so it refuses and points to Telegram, where
+each person pairs their own. The code is also refused to other websites,
+proxies and rebound host names, and only the extension can trade it for a
+token. The owner's browser tasks still stay out of memory (the desktop
+syncs memory to the cloud) and off cloud models; their own web UI shows
+the results. The desktop app keeps the same address,
+`http://127.0.0.1:8730`, across launches (another free port only if 8730
+is taken), so the extension reconnects by itself.
 
 **Safety**
 - Sending, buying, paying, deleting, posting, accepting terms and

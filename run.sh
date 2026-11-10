@@ -96,6 +96,11 @@ if [[ "$DO_OPEN" = "1" ]]; then
   ) &
 fi
 
+# Tell the server where it listens: on 127.0.0.1 only this computer can
+# open the web UI, so its settings page may pair the owner's Chrome
+# without Telegram (privacy.local_only); the pairing message shows the port.
+export OPENTEDDY_HOST="$HOST" OPENTEDDY_PORT="$PORT"
+
 # exec so signals (Ctrl+C) hit uvicorn directly, not this wrapper.
 RELOAD_FLAG=""
 [[ "$RELOAD" = "1" ]] && RELOAD_FLAG="--reload"

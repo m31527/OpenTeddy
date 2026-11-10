@@ -737,7 +737,7 @@ async def websocket_endpoint(ws: WebSocket) -> None:
 
 @app.post("/browser/pair")
 async def browser_pair(request: Request) -> dict:
-    """Pairing code (from 「連接瀏覽器」 in Telegram) → this browser's token.
+    """Pairing code (「連接瀏覽器」 in Telegram, or Settings on a desktop) → this browser's token.
     Only the extension may call it (Origin chrome-extension://…)."""
     import browser_bridge
     try:
@@ -764,6 +764,63 @@ async def browser_eval_code(request: Request) -> dict:
     if not browser_bridge.eval_key_ok(body.get("key")):
         raise HTTPException(status_code=403, detail="wrong eval key")
     return {"code": browser_bridge.begin(browser_bridge.EVAL_PERSON)}
+
+
+def _owner_check(request: Request) -> str:
+    """'' when this request is the computer's owner (privacy.LOCAL_PERSON):
+    the server listens on this computer only, the call comes from it, and
+    from OpenTeddy's own page — not a proxy, and not another site the
+    person has open (CORS is open, so a page could otherwise ask for a
+    code; it still couldn't pair, only the extension can). Else why not."""
+    import urllib.parse
+    import privacy
+    if not privacy.local_only():
+        return "shared"
+    loop = ("127.0.0.1", "localhost", "::1")
+    client = (request.client.host if request.client else "") or ""
+    if client not in loop or request.headers.get("x-forwarded-for") or request.headers.get("forwarded"):
+        return "not_local"
+    host = urllib.parse.urlsplit("//" + request.headers.get("host", "")).hostname or ""
+    origin = request.headers.get("origin", "")
+    if host not in loop or (origin and (urllib.parse.urlsplit(origin).hostname or "") not in loop):
+        return "not_local"
+    return ""
+
+
+@app.get("/browser/local")
+async def browser_local_status(request: Request) -> dict:
+    """Settings → Chrome extension: can this page pair the owner's Chrome
+    (no Telegram needed), and is it paired / online."""
+    import browser_bridge
+    import privacy
+    why = _owner_check(request)
+    if why:
+        return {"available": False, "reason": why}
+    st = await browser_bridge.status(privacy.LOCAL_PERSON)
+    return {"available": True, "server": browser_bridge.server_address(), **st}
+
+
+@app.post("/browser/local/code")
+async def browser_local_code(request: Request) -> dict:
+    """A pairing code for the owner's own Chrome — the settings-page twin
+    of 「連接瀏覽器」 in Telegram."""
+    import browser_bridge
+    import privacy
+    why = _owner_check(request)
+    if why:
+        raise HTTPException(status_code=403, detail=browser_bridge.ONLY_TELEGRAM)
+    return {"code": browser_bridge.begin(privacy.LOCAL_PERSON),
+            "server": browser_bridge.server_address(),
+            "expires_in": browser_bridge.CODE_TTL_S}
+
+
+@app.post("/browser/local/unlink")
+async def browser_local_unlink(request: Request) -> dict:
+    import browser_bridge
+    import privacy
+    if _owner_check(request):
+        raise HTTPException(status_code=403, detail=browser_bridge.ONLY_TELEGRAM)
+    return {"removed": await browser_bridge.unlink(privacy.LOCAL_PERSON)}
 
 
 @app.websocket("/browser/ws")

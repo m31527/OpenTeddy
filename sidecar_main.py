@@ -80,15 +80,30 @@ def _patch_paths_if_frozen() -> None:
         (data_dir / sub).mkdir(parents=True, exist_ok=True)
 
 
-# ── Step 2: pick a free port ────────────────────────────────────────────
+# ── Step 2: pick a port ─────────────────────────────────────────────────
+# The same port every launch when it's free: the Chrome extension keeps
+# this address (http://127.0.0.1:8730) and reconnects to it by itself, so
+# a new random port each time would unpair it in effect after every
+# restart. Busy (another copy, something else) → any free port, and the
+# settings page shows that address.
+PREFERRED_PORT = 8730
+
+
 def _pick_free_port() -> int:
     """Ask the kernel for a free local port and immediately release it.
     There's a tiny race window between this socket close and uvicorn
     bind, but in practice nothing else grabs it that fast on a single-
     user machine. If we ever hit it we can extend to retry-on-bind-fail."""
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
+    want = int(os.environ.get("OPENTEDDY_PORT") or PREFERRED_PORT)
+    for port in (want, 0):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)   # as uvicorn binds
+            try:
+                s.bind(("127.0.0.1", port))
+            except OSError:
+                continue
+            return s.getsockname()[1]
+    raise RuntimeError("no free local port")
 
 
 # ── Step 3: handshake line to stdout ────────────────────────────────────
@@ -163,6 +178,11 @@ def main() -> None:
 
     port = _pick_free_port()
     logging.info("OpenTeddy sidecar starting on 127.0.0.1:%d", port)
+    # Listening on this computer only — the settings page may pair the
+    # owner's Chrome without Telegram (privacy.local_only). Set before
+    # main is imported.
+    os.environ["OPENTEDDY_HOST"] = "127.0.0.1"
+    os.environ["OPENTEDDY_PORT"] = str(port)
 
     # Kick off the deferred handshake on a daemon thread BEFORE
     # entering the blocking uvicorn.run() call. The thread polls
