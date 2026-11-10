@@ -3,6 +3,7 @@
 #
 #   ./deploy.sh home                    # m31527@10.255.147.17:/home/m31527/OpenTeddy (NetBird)
 #   ./deploy.sh demo                    # m31527@10.255.131.73:/home/m31527/OpenTeddy (NetBird)
+#   ./deploy.sh demo2                   # inai@10.255.104.174:/home/inai/OpenTeddy (NetBird)
 #   ./deploy.sh user@host[:/path]       # any other machine (default path ~/OpenTeddy)
 #   ./deploy.sh home --system           # the service was installed with --system
 #   ./deploy.sh home --restart          # restart even when nothing changed
@@ -27,12 +28,13 @@ case "$1" in
   # NetBird addresses: reachable from anywhere on the mesh, not only the home LAN.
   home) HOST="m31527@10.255.147.17"; REMOTE_DIR="/home/m31527/OpenTeddy" ;;
   demo) HOST="m31527@10.255.131.73"; REMOTE_DIR="/home/m31527/OpenTeddy" ;;
+  demo2) HOST="inai@10.255.104.174"; REMOTE_DIR="/home/inai/OpenTeddy" ;;
   *@*)
     HOST="${1%%:*}"
     REMOTE_DIR="${1#*:}"
     [[ "$REMOTE_DIR" == "$1" ]] && REMOTE_DIR="OpenTeddy"   # no ":path" given
     ;;
-  *) echo "unknown target '$1' (use home, demo, or user@host[:/path])" >&2; exit 1 ;;
+  *) echo "unknown target '$1' (use home, demo, demo2, or user@host[:/path])" >&2; exit 1 ;;
 esac
 shift
 SYSTEM=0; RESTART=0; AUTOSTASH=0
