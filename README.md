@@ -501,6 +501,28 @@ Then set it in **Settings → Executor Model** (or `QWEN_MODEL` in `.env`).
 >   discipline — fine for pure chat sessions, disqualifying for the executor,
 >   whose #1 job is reliably emitting tool calls.
 
+**Vision model — lets OpenTeddy see pages.** `page_look` (checking a page
+OpenTeddy made, like a game it wrote) and the browser extension's icon and
+canvas lookups screenshot the page and ask a local vision model:
+Settings → Vision Model, default `qwen3-vl:8b-instruct` (~6 GB). Without
+it, `page_look` still reports covered elements and JS errors but can't say
+what's on screen, and the extension can't recognise icons or canvas
+content. One command installs it and checks it works:
+
+```bash
+./scripts/install-vision-model.sh
+```
+
+It pulls the model the setting names (skipped if Ollama already has it),
+shows it a red square to make sure it answers, and tells you whether the
+setting points at it. No sudo, no restart; safe to run again. Pass a name
+to pull a different one (`./scripts/install-vision-model.sh <model>`). To
+install on another box from this checkout, without updating it first:
+
+```bash
+ssh user@box 'bash -s' < scripts/install-vision-model.sh
+```
+
 If you're deploying OpenTeddy on a Linux server (NVIDIA DGX Spark, Jetson, Raspberry Pi 5, a rack box, anywhere without a permanent monitor), there are extra moving parts beyond `uvicorn main:app`:
 
 - a **Chromium-based browser** running as a systemd service so OpenTeddy can scrape login-gated sites (X / Twitter, LinkedIn, paid SaaS, corp wikis) via the [`chrome_attached_tool`](tools/chrome_attached_tool.py) suite
@@ -1273,7 +1295,8 @@ off): `browser_look` answers a question about the screen, `browser_click_at`
 clicks what it was told to find. Before a button with no words is clicked,
 the vision model says what icon it is — a trash can still asks first. Use
 an *instruct* build: plain `qwen3-vl:8b` is the thinking one and took
-seconds to minutes per lookup.
+seconds to minutes per lookup. Install it with
+`./scripts/install-vision-model.sh` (see [Vision model](#recommended-models-capable-hardware)).
 
 **Eval.** `tests/eval` has 11 web tasks run on the real extension
 (`--category web`). On 2026-11-04, on home (qwen3.6:35b), two runs each:
