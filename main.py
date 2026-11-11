@@ -474,6 +474,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:  # type: ignore[type-arg]
 
     tracker = Tracker()
     await tracker.open()
+    # Every task's notes and actions, saved with it when it ends — shown
+    # folded under the answer ("How it got there"), see process_log.py.
+    import process_log
+    _proc_tracker = tracker
+
+    async def _record_process(ev: dict) -> None:
+        await process_log.listener(_proc_tracker, ev)
+
+    ws_manager.subscribe(_record_process)
     try:
         _swept = await tracker.fail_interrupted_tasks()
         if _swept:
@@ -2572,11 +2581,17 @@ async def claude_fix_task(task_id: str, body: Optional[dict] = None) -> dict:
                 user_hint=user_hint,
                 ws_callback=ws_manager.broadcast,
             )
-            final_status = TaskStatus.COMPLETED if result.get("success") else TaskStatus.ESCALATED
+            # A partial answer (out of turns, but it found things) is shown
+            # as the answer; the failed steps keep the badge at "partial".
+            ok = result.get("success") or result.get("partial")
+            final_status = TaskStatus.COMPLETED if ok else TaskStatus.ESCALATED
             summary = result.get("summary") or "(Claude returned no summary)"
             # Prepend a marker so the user can tell which summary came
             # from a Claude fix vs the original local run.
             marked = f"🛠️ **Claude Fix**\n\n{summary}"
+            if not ok and (task.get("summary") or "").strip():
+                # Nothing better came back: keep the answer that was there.
+                marked = f"{task['summary'].strip()}\n\n---\n🛠️ **Claude Fix**：{summary}"
             try:
                 await tracker.update_task_status(task_id, final_status, marked)
             except Exception:  # noqa: BLE001
@@ -2586,6 +2601,7 @@ async def claude_fix_task(task_id: str, body: Optional[dict] = None) -> dict:
                 "task_id":  task_id,
                 "status":   final_status.value,
                 "summary":  marked,
+                "partial":  bool(result.get("partial")),
                 "turns":    result.get("turns"),
                 "tools_used": result.get("tools_used", []),
             })
@@ -2617,6 +2633,16 @@ async def get_task_status(task_id: str) -> StatusResponse:
         created_at=task.get("created_at"),
         updated_at=task.get("updated_at") or task.get("completed_at"),
     )
+
+
+@app.get("/tasks/{task_id}/process")
+async def get_task_process(task_id: str) -> dict:
+    """The task's notes and actions on the way to its answer, for the
+    folded "How it got there" under it. Private tasks keep none."""
+    import privacy
+    if privacy.hidden_from_web(task_id):
+        return {"items": []}
+    return {"items": await tracker.get_task_process(task_id)}
 
 
 @app.get("/tasks", response_model=list)

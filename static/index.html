@@ -2809,6 +2809,22 @@
     .process-plan li.is-failed .process-mark::before { content: '!'; }
     .process-plan li.is-escalated .process-mark::before { content: '↗'; }
     .result-process .run-steps { margin-left: -4px; }
+    /* The model's own words between actions — quieter than the answer. */
+    .run-steps .process-note {
+      margin: 4px 0 6px 6px;
+      padding: 2px 0 2px 10px;
+      border-left: 2px solid var(--overlay-2);
+      color: var(--text-secondary);
+      font-size: 0.8rem;
+    }
+    .run-steps .process-note .md-body { line-height: 1.5; }
+    .run-steps .process-phase {
+      margin: 10px 0 4px 4px;
+      font-size: 0.78rem;
+      font-weight: 600;
+      color: var(--text-secondary);
+    }
+    .process-empty { margin: 6px 0; color: var(--text-muted); }
 
     /* Markdown */
     .md-body {
@@ -6039,6 +6055,7 @@
           if (data.type  === 'approval_required' || data.event === 'approval_request') handleApprovalRequired(data);
           if (data.type  === 'chat.stream.delta') handleStreamDelta(data);
           if (data.type  === 'chat.stream.end')   handleStreamEnd(data);
+          if (data.type  === 'process.note')      _runNote(data.task_id, data.text, false);
           if (data.type  === 'plan.stream.delta') handlePlanStreamDelta(data);
           if (data.type  === 'plan.stream.end')   handlePlanStreamEnd(data);
           if (data.type  === 'update.progress')   handleUpdateProgress(data);
@@ -7092,7 +7109,8 @@
         ? renderMarkdown(_summaryWithoutOutputLine(tk.summary, files))
         : escHtml(t('result_no_summary'));
       return `<div class="md-body">${summary}</div>` + renderArtifactList(files) +
-        _resultFootHTML({ status: tk.status, elapsedMs, steps, quiet: currentMode() === 'chat' });
+        _resultFootHTML({ status: tk.status, elapsedMs, steps, quiet: currentMode() === 'chat',
+                          lazyTaskId: tk.has_process ? tk.id : null });
     }
 
     // Goals sent with files start with an "[Attachments in workspace …]"
@@ -7341,7 +7359,23 @@
         taskId, anchor: anchor || null, startMs: startMs || Date.now(),
         card: null, steps: [], byKey: {}, done: 0, total: 0,
         showAll: false, note: '', timer: null,
+        timeline: [],   // the model's notes and the steps, in order
       };
+    }
+
+    // The model's words between actions, kept in order with the steps for
+    // the answer's "How it got there" — an unfinished run keeps what it found.
+    function _runNote(taskId, text, streaming) {
+      const run = _runFor(taskId);
+      if (!run || !text) return;
+      const last = run.timeline[run.timeline.length - 1];
+      if (streaming && last && last.k === 'note' && last.open) { last.text += text; return; }
+      run.timeline.push({ k: 'note', text, open: !!streaming });
+    }
+    function _runNoteEnd(taskId) {
+      const run = _run && _run.taskId === taskId ? _run : null;
+      const last = run && run.timeline[run.timeline.length - 1];
+      if (last && last.k === 'note') last.open = false;
     }
 
     // The run an event belongs to. A task still running from an earlier
@@ -7490,6 +7524,8 @@
         state: 'running', output: '', t0: Date.now(), node: null,
       };
       run.steps.push(s);
+      _runNoteEnd(data.task_id);
+      run.timeline.push(s);
       run.byKey[key] = s;
       const list = _runCard().querySelector('.run-steps');
       list.insertAdjacentHTML('beforeend', _stepHTML(s));
@@ -7502,14 +7538,19 @@
       const run = _runFor(data.task_id);
       const s = run && run.byKey[_stepKey(data)];
       if (!s) return;
-      const err = String(data.error || '');
       s.output = data.error || data.output || '';
-      s.state = data.success !== false ? 'done'
-        : /loop detected|refusing to re-run/i.test(err) ? 'skipped'
-        : /user rejected|blocked by/i.test(err) ? 'denied'
-        : 'retry';
+      s.state = _stepState(data.success !== false, data.error);
       _paintStep(s);
       _paintRunHead();
+    }
+
+    function _stepState(ok, err) {
+      if (ok === undefined) return 'stopped';
+      const e = String(err || '');
+      return ok ? 'done'
+        : /loop detected|refusing to re-run/i.test(e) ? 'skipped'
+        : /user rejected|blocked by/i.test(e) ? 'denied'
+        : 'retry';
     }
 
     // A tool waiting on the user's OK: mark its step so the card says so.
@@ -7524,8 +7565,9 @@
       _paintRunHead();
     }
 
-    // Ends the live card and hands back its steps for the answer's
-    // "How it got there". Steps still open are marked stopped.
+    // Ends the live card and hands back its timeline — the model's notes
+    // and the steps, in order — for the answer's "How it got there".
+    // Steps still open are marked stopped.
     function finishRun() {
       const run = _run;
       _run = null;
@@ -7536,7 +7578,7 @@
       }
       if (run.card) run.card.remove();
       if (run.anchor) run.anchor.classList.remove('run-hidden');
-      return run.steps;
+      return run.timeline.filter(x => x.k !== 'note' || x.text.trim());
     }
 
     // Collect file-produced artifacts from the stream. They're attached
@@ -9133,7 +9175,7 @@
       const steps = finishRun();
       const summary = data.summary || '(no summary)';
       const html = `<div class="md-body">${renderMarkdown(summary)}</div>` +
-        _resultFootHTML({ status: 'completed', steps });
+        _resultFootHTML({ status: data.status || 'completed', steps, partial: !!data.partial });
       addAgentMessage(html, false);
       // Remove the now-stale "Let Claude fix this" buttons so the user
       // doesn't accidentally double-fire (and re-burn tokens).
@@ -9247,6 +9289,7 @@
       // Only render chunks for the currently-running task. Stale events
       // from previously-aborted tasks would otherwise leak into the UI.
       if (_streamState.taskId && data.task_id !== _streamState.taskId) return;
+      _runNote(data.task_id, data.text, true);
       const el = _streamState.el;
       if (!el) return;
       _streamState.accumulated += data.text;
@@ -9270,6 +9313,7 @@
     }
     function handleStreamEnd(data) {
       if (_streamState.taskId && data.task_id !== _streamState.taskId) return;
+      _runNoteEnd(data.task_id);
       const el = _streamState.el;
       if (el) el.classList.remove('streaming');
       // Note: we DON'T detach yet — loadTaskStatus is about to swap in
@@ -9335,33 +9379,64 @@
     // Footer under an answer: how it went, how long, how many actions —
     // and, when there is anything to show, "How it got there": the plan
     // and every step, each step opening to its technical detail.
-    function _resultFootHTML({ status, elapsedMs = null, steps = [], subtasks = [], quiet = false }) {
+    // `steps` is a timeline: tool steps and the model's notes ({k:'note'}),
+    // in order. A saved answer without one in memory passes lazyTaskId and
+    // its record loads when "How it got there" is opened.
+    function _resultFootHTML({ status, elapsedMs = null, steps = [], subtasks = [], quiet = false,
+                               partial = false, lazyTaskId = null }) {
       const failedSubs = subtasks.filter(s => ['failed', 'escalated'].includes(s.status)).length;
-      const tone = status === 'completed' ? (failedSubs ? 'warn' : 'ok')
+      const tone = status === 'completed' ? ((failedSubs || partial) ? 'warn' : 'ok')
                  : status === 'cancelled' ? 'muted' : 'fail';
+      const actions = steps.filter(s => s.k !== 'note');
       const bits = [];
       if (!quiet || tone !== 'ok') {
         const label = { ok: 'result_done', warn: 'result_partial', fail: 'result_failed', muted: 'result_stopped' }[tone];
         bits.push(`<span class="result-badge tone-${tone}">${escHtml(t(label))}</span>`);
       }
       if (elapsedMs != null) bits.push(`<span>${escHtml(fmtElapsed(elapsedMs))}</span>`);
-      if (steps.length) bits.push(`<span>${escHtml(t('result_actions', { n: steps.length }))}</span>`);
+      if (actions.length) bits.push(`<span>${escHtml(t('result_actions', { n: actions.length }))}</span>`);
       if (!bits.length) return '';
       let panel = '';
-      if (steps.length || subtasks.length > 1) {
+      if (steps.length || subtasks.length > 1 || lazyTaskId) {
         const plan = subtasks.length > 1
           ? `<div class="process-label">${escHtml(t('process_plan'))}</div>
              <ol class="process-plan">${subtasks.map(st =>
                `<li class="is-${escHtml(st.status || '')}"><span class="process-mark" aria-hidden="true"></span>` +
                `<span>${escHtml(st.description || '')}</span></li>`).join('')}</ol>`
           : '';
-        const acts = steps.length
-          ? `<div class="process-label">${escHtml(t('process_steps'))}</div>
-             <ol class="run-steps">${steps.map(_stepHTML).join('')}</ol>`
-          : '';
-        panel = `<details class="result-process"><summary>${escHtml(t('result_how'))}</summary>${plan}${acts}</details>`;
+        const acts = steps.length ? _timelineHTML(steps) : '';
+        const lazy = !steps.length && lazyTaskId
+          ? ` data-process-task="${escHtml(lazyTaskId)}" ontoggle="_loadProcess(this)"` : '';
+        panel = `<details class="result-process"${lazy}><summary>${escHtml(t('result_how'))}</summary>${plan}${acts}</details>`;
       }
       return `<div class="result-foot"><div class="result-meta">${bits.join('<span class="dot">·</span>')}</div>${panel}</div>`;
+    }
+
+    function _timelineHTML(items) {
+      const li = x => x.k === 'note'
+          ? `<li class="process-note"><div class="md-body">${renderMarkdown(x.text)}</div></li>`
+        : x.k === 'phase'
+          ? `<li class="process-phase">${escHtml(t('process_phase_fix'))}</li>`
+        : _stepHTML(x);
+      return `<div class="process-label">${escHtml(t('process_steps'))}</div>
+              <ol class="run-steps">${items.map(li).join('')}</ol>`;
+    }
+
+    // A saved answer's process, fetched the first time it's opened.
+    async function _loadProcess(det) {
+      if (!det.open || det.dataset.loaded) return;
+      det.dataset.loaded = '1';
+      let items = [];
+      try {
+        const r = await fetch(`${API}/tasks/${encodeURIComponent(det.dataset.processTask)}/process`);
+        if (r.ok) items = (await r.json()).items || [];
+      } catch (_) { /* shown as "no record" below */ }
+      const timeline = items.map(x => x.k === 'step'
+        ? { ...describeStep(x.tool, x.args), tool: x.tool, args: x.args || null,
+            state: _stepState(x.ok, x.out), output: x.out || '' }
+        : x);
+      det.insertAdjacentHTML('beforeend', timeline.length ? _timelineHTML(timeline)
+        : `<div class="process-empty">${escHtml(t('process_none'))}</div>`);
     }
 
     // The summary's own "📎 Output: x" line repeats the file cards — and

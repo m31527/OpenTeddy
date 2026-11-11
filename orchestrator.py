@@ -640,6 +640,7 @@ _FRAMING: Dict[str, Dict[str, str]] = {
         "result":            "Result",
         "error":             "Error",
         "no_output":         "no output",
+        "notes":             "Working notes (written mid-way, may be incomplete)",
         "task_completed":    "Task completed",
         "confirmation_header": "\n\n---\n📋 **Confirmation status**",
         "container_status":  "Container status (this task)",
@@ -654,6 +655,7 @@ _FRAMING: Dict[str, Dict[str, str]] = {
         "result":            "結果",
         "error":             "錯誤",
         "no_output":         "無輸出",
+        "notes":             "過程筆記（做到一半時寫下的，可能不完整）",
         "task_completed":    "任務已完成",
         "confirmation_header": "\n\n---\n📋 **確認狀態**",
         "container_status":  "本任務容器狀態",
@@ -668,154 +670,6 @@ _FRAMING: Dict[str, Dict[str, str]] = {
 def _L(goal: str, key: str) -> str:
     """Look up a framing label in the user's goal language."""
     return _FRAMING[_framing_lang(goal)][key]
-
-
-# ── Empty-artifact hallucination guard (#A) ─────────────────────────────
-# Small models on long-context tool-use tasks routinely "complete"
-# work by writing a plausible summary instead of actually producing
-# the requested file. The deliverable judge (line ~786 area in
-# _run_subtask) catches THIS-FILE-IS-WRONG cases, but is silent when
-# NO file was produced at all. _looks_like_file_producing_task is the
-# heuristic that decides whether the absence of artifacts should be
-# treated as a failure.
-#
-# Conservative by design: explain/describe/tell-me tasks are skipped
-# entirely (they're answer-shaped, not file-shaped), and we require
-# BOTH a strong production verb AND a concrete artifact noun /
-# extension. So "explain how to build a website" won't trigger.
-_FILE_PRODUCTION_VERBS = (
-    # English
-    "build", "create", "implement", "write", "generate", "render",
-    "export", "develop", "produce", "make", "save", "scaffold",
-    # 中文
-    "建立", "建構", "建造", "撰寫", "產生", "產出", "輸出",
-    "開發", "編寫", "做出", "寫一", "寫個", "寫成",
-)
-_ARTIFACT_NOUNS = (
-    # English (multi-char so they don't collide with verb roots)
-    "file", "script", "code", "report", " app", "application",
-    "website", "web app", "page", "dashboard", "module",
-    "function", "class ", "test ", "config", "component",
-    "deck", "slide", "presentation", "spreadsheet", "csv",
-    # 中文
-    "檔案", "腳本", "程式", "程序", "代碼", "代码",
-    "報告", "报告", "報表", "报表",
-    "網頁", "网页", "網站", "网站", "應用", "应用",
-    "頁面", "页面", "儀表板", "仪表板",
-)
-_ARTIFACT_EXTENSIONS = (
-    ".py", ".js", ".ts", ".tsx", ".jsx", ".html", ".htm", ".css",
-    ".csv", ".json", ".yaml", ".yml", ".md", ".sh", ".sql",
-    ".java", ".go", ".rs", ".cpp", ".hpp", ".rb", ".php",
-    ".swift", ".kt", ".scala", ".dart", ".toml", ".dockerfile",
-)
-# Multi-word command phrases that are unambiguously side-effect-producing
-# regardless of what surrounds them in the goal. Catches user-reported
-# "I say tell me what's this project and docker build ..." where the
-# verb+noun pair didn't match (no concrete artifact noun) but the
-# explicit shell phrase makes the production intent obvious.
-# Lowercased; matched via substring-in-string for speed (these are
-# all distinctive enough that false positives are very unlikely —
-# nobody writes "tell me about the history of docker build" expecting
-# pure prose).
-_EXECUTION_PHRASES = (
-    "docker build", "docker run", "docker compose up", "docker compose build",
-    "docker-compose up", "docker-compose build",
-    "npm run build", "npm install", "yarn install", "yarn build",
-    "pnpm install", "pnpm build",
-    "pip install", "uv install", "uv pip install", "uv run",
-    "make build", "make install",
-    "go build", "go install", "cargo build", "cargo install", "cargo run",
-    "git clone", "git pull", "git push",
-    "terraform apply", "kubectl apply",
-)
-# Answer-shaped task starts — exclude these entirely. Match on the
-# first ~30 chars so we catch "describe how..." but not "write a
-# function that describes...".
-_ANSWER_TASK_STARTS = (
-    "explain", "describe", "summarise", "summarize", "tell me",
-    "what is", "what are", "how does", "how do",
-    "解釋", "解释", "說明", "说明", "描述",
-    "告訴我", "告诉我", "請問", "请问",
-)
-
-
-def _looks_like_file_producing_task(
-    description: Optional[str], mode: str = "code",
-) -> bool:
-    """True iff the subtask description strongly implies a file should
-    appear on disk. Used to detect hallucinated successes — see the
-    callsite in _run_subtask for the full rationale.
-
-    Issue #2A fix (2026-05-17): strong-signal-precedes ordering.
-    Previously this checked the answer-shaped-start blacklist FIRST,
-    which mis-classified goals like "I say tell me what's this project
-    and docker build and tell me the service URL(s)" as pure-answer
-    tasks → skipped the guard entirely. User-reported case where
-    Mixed mode failed to escalate because the empty-artifact check
-    never ran.
-
-    New order:
-      1. Compute production-verb + artifact-noun/ext signals first
-      2. If BOTH are present → return True (strong signal wins, even
-         if the goal starts with "tell me / explain / describe")
-      3. Otherwise apply the answer-shape blacklist as before — pure
-         "explain X" / "what is Y" tasks still skip the guard
-    """
-    if not description:
-        return False
-    text = description.strip()
-    lower = text.lower()
-
-    has_verb = any(v in lower for v in _FILE_PRODUCTION_VERBS)
-    has_noun = any(n in lower for n in _ARTIFACT_NOUNS)
-    has_ext = any(ext in lower for ext in _ARTIFACT_EXTENSIONS)
-    has_exec_phrase = any(p in lower for p in _EXECUTION_PHRASES)
-
-    # Analytic-mode exception: path A of the analytic design emits the
-    # report AS the result text — "整理成 Markdown 表格並輸出最終報告"
-    # is NOT supposed to write a file, yet "輸出"+"報告" tripped the
-    # verb+noun signal, force-failed the subtask through every retry,
-    # and burned minutes (exported trace 6ded1f30). In analytic mode
-    # only demand an on-disk artifact when the description names a real
-    # file signal: an extension, a save-to-file phrase, or the
-    # render_chart_report tool.
-    if mode == "analytic":
-        # Only an explicit SAVE intent counts. A bare extension does not:
-        # analytic descriptions routinely name their INPUT data file
-        # ("分析 sales.csv 並輸出圖表報告"), and path A of the analytic
-        # design emits the report as result text with ```chart blocks —
-        # no file is written by design. Demanding an artifact there
-        # force-fails a correctly-completed subtask through every retry.
-        _save_phrases = (
-            "存成", "存檔", "储存", "儲存為", "写入", "寫入", "另存",
-            "save to", "save as", "write to", "output to",
-            "render_chart_report", "output_path",
-        )
-        if not any(p in lower for p in _save_phrases):
-            return False
-
-    # Strong signal #1: production verb + concrete artifact / file ext
-    # → treat as file-producing regardless of how the goal opens.
-    if has_verb and (has_noun or has_ext):
-        return True
-
-    # Strong signal #2: explicit multi-word execution phrase
-    # ("docker build", "npm install", "git clone", …) — these have
-    # unmistakable side effects on disk / container state, so any goal
-    # mentioning them is a production task even when it ALSO contains
-    # "tell me / explain" wrappers (compound goals are common).
-    if has_exec_phrase:
-        return True
-
-    # Otherwise the answer-shape blacklist applies — "explain X" /
-    # "describe Y" without any production signal genuinely IS an
-    # answer task.
-    head = lower[:40]
-    if any(head.startswith(start) for start in _ANSWER_TASK_STARTS):
-        return False
-
-    return False  # weak signal and no answer-shape match either
 
 
 class Orchestrator:
@@ -1436,18 +1290,7 @@ class Orchestrator:
             # leaking into the final summary (those labels go into the
             # LLM-summary prompt and the model mirrors them verbatim).
             _g = req.goal or ""
-            tool_log_lines: List[str] = []
-            for st in subtasks:
-                tool_log_lines.append(
-                    f"[{_L(_g, 'subtask_prefix')} {st.order}] {st.description}"
-                )
-                tool_log_lines.append(f"  {_L(_g, 'status')}: {st.status.value}")
-                tool_log_lines.append(
-                    f"  {_L(_g, 'result')}: "
-                    f"{(st.result or _L(_g, 'no_output'))[:500]}"
-                )
-                if st.error:
-                    tool_log_lines.append(f"  {_L(_g, 'error')}: {st.error}")
+            tool_log_lines, _all_notes = self._step_log(_g, subtasks)
             # What actually changed on disk — so the summary can't report
             # a fix nobody made (it did: "已調整…主角已可見", 2026-11-08).
             _changes_line = workspace_changes.describe(workspace_changes.changed_since(_ws_task_before))
@@ -1476,7 +1319,8 @@ class Orchestrator:
             elif had_escalation or not results_texts:
                 # 只有真的升級過才用 Claude 做 summary
                 summary = await self.escalation.synthesize_summary(
-                    req.goal, results_texts, task_id=req.id
+                    req.goal, results_texts + [f"[{_L(_g, 'notes')}] {n}" for n in _all_notes],
+                    task_id=req.id,
                 )
             else:
                 # 全部地端完成 → 用 Gemma 讀取工具記錄，產出中文完成報告
@@ -2008,10 +1852,12 @@ class Orchestrator:
 
     _MUST_CHANGE_SYSTEM = (
         "You check one step of an AI agent's plan. Reply with JSON only: "
-        '{"must_change_files": true} if the step, to be done, has to create, edit or save a file '
-        "(fix a file, write code, save a report or page); "
+        '{"must_change_files": true} if the step, to be done, has to create, edit or save a file: '
+        "build or write an app, web app, web page, site, game, script or program; fix a file; "
+        "save a report, chart or data file; "
         '{"must_change_files": false} if looking, reading, checking, analysing, searching, '
-        "running something or answering is enough."
+        "running something or answering is enough — including an answer given in the reply "
+        "as a list, table, JSON or code block."
     )
 
     async def _step_must_change_files(self, st: SubTask) -> bool:
@@ -2551,27 +2397,17 @@ class Orchestrator:
                 artifacts = self.executor.pop_subtask_artifacts(st.id)
 
                 # ── #A: empty-artifact hallucination guard ───────────
-                # Catches the "Qwen claimed success without writing
-                # anything" failure mode the deliverable judge below
-                # CAN'T catch (the judge needs a file to look at).
-                # User-reported on macOS desktop: "build a GitHub
-                # trending web app" returned a confident success
-                # summary with workspace size = 0 bytes.
-                #
-                # Heuristic: code/analytic mode + description has a
-                # strong production verb + concrete artifact noun (or
-                # a known file extension) + zero new artifacts.
-                # Conservative — answer-type subtasks ("explain X",
-                # "describe Y") are explicitly skipped so they don't
-                # get false-failed.
-                # Files changed in the workspace by any means (edit_file,
-                # sed, a script) count as producing, not just artifacts.
+                # Catches "claimed success without writing anything" —
+                # the deliverable judge below needs a file to look at.
+                # Whether this step had to change a file is the model's
+                # call: a keyword list read "以程式碼輸出為 JSON 或
+                # Markdown 表格" (answer in the reply) as "write a file"
+                # and failed a correct price list (2026-11-11), and missed
+                # "修好 X". Files changed by any means count, not just
+                # artifacts.
                 _changed = workspace_changes.changed_since(_ws_before)
                 if (mode in ("code", "analytic") and not artifacts and _changed == []
-                        and not _looks_like_file_producing_task(st.description, mode)
                         and await self._step_must_change_files(st)):
-                    # The keyword check below misses "修好 X" — the model
-                    # judges whether this step had to change a file.
                     logger.info("Subtask %s had to change a file but changed none — retrying.", st.id)
                     st.status = TaskStatus.FAILED
                     st.error = (
@@ -2582,27 +2418,6 @@ class Orchestrator:
                     st.confidence = 0.3
                     await self.tracker.update_subtask(st)
                     continue
-                if (mode in ("code", "analytic")
-                        and not artifacts and not _changed
-                        and _looks_like_file_producing_task(st.description, mode)):
-                    logger.info(
-                        "Subtask %s should have produced a file but "
-                        "workspace got 0 new artifacts — clamping "
-                        "confidence and retrying.",
-                        st.id,
-                    )
-                    st.status = TaskStatus.FAILED
-                    st.error = (
-                        "Task description suggested building / creating "
-                        "a concrete file, but no file was produced "
-                        "(workspace got 0 new artifacts). The model "
-                        "may have answered with prose instead of "
-                        "writing the artifact. Retrying with stronger "
-                        "guidance, then escalating if it fails again."
-                    )
-                    st.confidence = 0.3
-                    await self.tracker.update_subtask(st)
-                    continue  # → next retry attempt, eventually escalates
 
                 deliverable = await self._verify_deliverable(st, artifacts)
                 if deliverable:
@@ -3036,6 +2851,31 @@ class Orchestrator:
             logger.debug("Command '%s' failed (non-fatal): %s", cmd[:80], exc)
             return None
 
+    def _step_log(self, goal: str, subtasks: List[SubTask]) -> Tuple[List[str], List[str]]:
+        """Each step's description, status, result and — when they add
+        something — its working notes, for the summary model; plus the
+        notes alone. A price list or table is the answer itself (the old
+        500-char cut dropped most of it), and a step cut off before its
+        answer still found things (2026-11-11: PChome prices in the notes,
+        "All results on page 1 are Pro and" as the result). The budget is
+        shared so a long plan still fits the summary model's context."""
+        n = max(1, len(subtasks))
+        result_cap = max(1200, 9000 // n)
+        pop_notes = getattr(self.executor, "pop_notes", None)
+        lines: List[str] = []
+        all_notes: List[str] = []
+        for st in subtasks:
+            lines.append(f"[{_L(goal, 'subtask_prefix')} {st.order}] {st.description}")
+            lines.append(f"  {_L(goal, 'status')}: {st.status.value}")
+            lines.append(f"  {_L(goal, 'result')}: {(st.result or _L(goal, 'no_output'))[:result_cap]}")
+            if st.error:
+                lines.append(f"  {_L(goal, 'error')}: {st.error}")
+            notes = pop_notes(st.id, budget=max(800, 4500 // n)) if pop_notes else ""
+            if notes and notes.strip() not in (st.result or ""):
+                lines.append(f"  {_L(goal, 'notes')}:\n{notes}")
+                all_notes.append(notes)
+        return lines, all_notes
+
     async def _gemma_summarize(self, goal: str, tool_log: str, task_id: str = "") -> str:
         """用 Gemma 讀取工具執行記錄，產出最後要交回給使用者的回應。
 
@@ -3105,6 +2945,14 @@ class Orchestrator:
   只有列在那裡的檔案，才能說「已修好／已調整／已改／已建立／已存」。
   使用者要改東西、但那一行寫「沒有」→ 直接說**還沒改好**，
   再說查到了什麼原因、卡在哪裡。不可以寫成已完成。
+- 「過程筆記」是代理人做事途中寫下的整理。結果完整時以結果為準；
+  結果被截斷、是半句話、或那一步失敗／沒做完時，從過程筆記把已經
+  找到的實際資料（數字、價格、名稱、連結、表格）整理出來交付，
+  再用一句話說哪些部分沒做完（例如「momo 沒有讀完」）。
+  「Let me…／我來看看…」這類自言自語不要放進回答。
+- 一步沒做完 ≠ 東西不存在。不可以因為某一步失敗或沒找完，就說
+  「尚未上市／找不到／不存在」，除非記錄裡真的有頁面這樣寫；
+  也不要用自己的知識推測現在的最新型號或日期。
 """
         # The clock rides in the message (not the system prompt) so the
         # synthesizer has today's date without breaking the prompt cache.

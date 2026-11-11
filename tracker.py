@@ -56,6 +56,10 @@ def _task_row_to_dict(row: Any) -> dict:
     "artifacts is always a list" holds even on a corrupt DB row.
     """
     d = dict(row)
+    # The process record can be long; lists carry only whether there is
+    # one, and GET /tasks/{id}/process returns it when it's opened.
+    proc = d.pop("process", None)
+    d["has_process"] = bool(proc and proc != "[]")
     raw = d.get("artifacts")
     if raw:
         try:
@@ -132,6 +136,9 @@ class Tracker:
             # back to a session re-rendered the agent message WITHOUT
             # the chip + preview button. Read+rendered by loadChatHistory.
             "ALTER TABLE tasks ADD COLUMN artifacts TEXT NOT NULL DEFAULT '[]'",
+            # What the task did on the way (process_log.py): notes between
+            # tool calls and each action, shown folded under the answer.
+            "ALTER TABLE tasks ADD COLUMN process TEXT NOT NULL DEFAULT '[]'",
             # Telegram inbound bridge — chat_id is the per-chat-id key
             # that maps a Telegram conversation to *one* persistent
             # OpenTeddy session. See telegram_bridge.py: "one chat = one
@@ -383,6 +390,27 @@ class Tracker:
                 "append_task_artifact failed for task %s (%s) — skipped",
                 task_id, exc,
             )
+
+    async def save_task_process(self, task_id: str, items: list, append: bool = False) -> None:
+        """Store a task's process record (process_log.py); `append` adds a
+        later phase (a Claude Fix) after what's there."""
+        if append:
+            old = await self.get_task_process(task_id)
+            items = old + items
+        await self.db.execute(
+            "UPDATE tasks SET process=? WHERE id=?",
+            (json.dumps(items, ensure_ascii=False), task_id),
+        )
+        await self.db.commit()
+
+    async def get_task_process(self, task_id: str) -> list:
+        async with self.db.execute("SELECT process FROM tasks WHERE id=?", (task_id,)) as cur:
+            row = await cur.fetchone()
+        try:
+            items = json.loads(row[0]) if row and row[0] else []
+        except Exception:  # noqa: BLE001
+            items = []
+        return items if isinstance(items, list) else []
 
     # ── Session CRUD ──────────────────────────────────────────────────────────
 

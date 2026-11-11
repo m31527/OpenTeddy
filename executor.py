@@ -620,6 +620,11 @@ class Executor:
         # "loop" (loop detector) or "max_rounds". The orchestrator doesn't
         # retry such an attempt with the same prompt (pop_exit_reason).
         self._exit_reason: Dict[str, str] = {}
+        # subtask_id → what the model wrote between tool calls, across
+        # attempts. A step cut off before its answer still found things
+        # ("PChome: iPhone 18 256GB $30,900 …"); the summary reads these
+        # so an unfinished step doesn't become "nothing was found".
+        self._notes: Dict[str, List[str]] = {}
 
     async def close(self) -> None:
         await self._http.aclose()
@@ -1344,6 +1349,12 @@ class Executor:
                 return self._finalize_response(raw_text, objective_failure_seen)
 
             # ── Process tool calls ────────────────────────────────────────────
+            _note = _answer_text(message.get("content") or "").strip()
+            if _note:
+                self._notes.setdefault(subtask_id, []).append(_note)
+                if not stream_on:   # streamed notes already reached the process record
+                    await self._push_event({"type": "process.note", "task_id": task_id,
+                                            "subtask_id": subtask_id, "text": _note})
             # Add assistant's message (with tool_calls) to history
             messages.append({
                 "role": "assistant",
@@ -2025,6 +2036,20 @@ class Executor:
     def pop_exit_reason(self, subtask_id: str) -> Optional[str]:
         """'loop' / 'max_rounds' when a guard ended the last attempt, else None."""
         return self._exit_reason.pop(subtask_id, None)
+
+    def pop_notes(self, subtask_id: str, budget: int = 3000) -> str:
+        """What the model noted between tool calls, for the summary. Over
+        the budget the longest notes stay (tables, prices, names) and the
+        one-liners ("let me read the page") go; order is kept."""
+        notes = list(dict.fromkeys(self._notes.pop(subtask_id, [])))
+        if sum(len(n) for n in notes) > budget:
+            keep, used = set(), 0
+            for i in sorted(range(len(notes)), key=lambda i: -len(notes[i])):
+                if used + len(notes[i]) <= budget:
+                    keep.add(i)
+                    used += len(notes[i])
+            notes = [n for i, n in enumerate(notes) if i in keep] or [notes[-1][:budget]]
+        return "\n\n".join(notes)
 
     def pop_subtask_artifacts(self, subtask_id: str) -> List[Dict[str, Any]]:
         """Return + clear the artifact list collected for a given subtask."""

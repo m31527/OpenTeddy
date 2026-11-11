@@ -28,6 +28,15 @@ from tracker import Tracker
 
 logger = logging.getLogger(__name__)
 
+# Rides on the last tool result of a takeover that ran out of turns.
+_WRAP_UP_NOTE = (
+    "\n\n[OpenTeddy] That was your last tool turn. Do NOT call any more tools. "
+    "Write the final answer for the person now, in the language they wrote in: "
+    "give every concrete result you already found (numbers, prices, names, links, "
+    "tables), then say plainly which parts are not done. Never say something "
+    "doesn't exist just because you didn't finish looking."
+)
+
 _SYSTEM_PROMPT = """\
 You are Teddy-Prime, an expert AI assistant acting as the escalation layer in \
 OpenTeddy — a self-growing multi-agent system.
@@ -261,6 +270,7 @@ class EscalationAgent:
         history.add_user_message("\n".join(user_msg_parts))
 
         tools_used: List[str] = []
+        notes: List[str] = []
         total_tokens_in = 0
         total_tokens_out = 0
 
@@ -334,6 +344,16 @@ class EscalationAgent:
             # Echo the assistant turn back into history so the next call
             # has full context.
             history.add_assistant_turn(response)
+            # What it says between tool calls goes into the task's process
+            # record ("How it got there"), and is the fallback answer.
+            if (response.text or "").strip():
+                notes.append(response.text.strip())
+                if ws_callback:
+                    try:
+                        await ws_callback({"type": "process.note", "task_id": task_id,
+                                           "text": response.text.strip(), "source": "claude-fix"})
+                    except Exception:  # noqa: BLE001
+                        pass
 
             # Execute every tool call in this turn.
             tool_results: List[LLMToolResult] = []
@@ -401,9 +421,52 @@ class EscalationAgent:
                     is_error=not result.get("success"),
                 ))
 
+            if turn == max_turns - 1 and tool_results:
+                # Out of turns: the next call is the last. Without this the
+                # takeover ended on "ran 15 turns without converging" and
+                # dropped the prices it had already found (2026-11-11).
+                last = tool_results[-1]
+                last.content = (last.content or "") + _WRAP_UP_NOTE
             history.add_tool_results(tool_results)
 
-        # max_turns exhausted
+        # max_turns exhausted — one more call to answer with what it found.
+        final_text = ""
+        try:
+            response = await self.provider.complete_with_tools(
+                history=history, tools=registry.get_schemas(), system=system, max_tokens=4096,
+            )
+            total_tokens_in += response.usage.input_tokens
+            total_tokens_out += response.usage.output_tokens
+            try:
+                await self.tracker.record_usage(
+                    task_id=task_id, model=self.provider.model_name,
+                    model_provider=self.provider.provider_name,
+                    tokens_in=response.usage.input_tokens, tokens_out=response.usage.output_tokens,
+                    task_description=f"[claude-fix wrap-up] {task.get('goal', '')[:200]}",
+                )
+            except Exception:  # noqa: BLE001
+                pass
+            final_text = (response.text or "").strip()
+        except LLMProviderError as exc:
+            logger.warning("%s wrap-up call failed: %s", self.provider.provider_name, exc)
+        if not final_text and notes:
+            final_text = max(notes, key=len)      # the fullest thing it wrote on the way
+        if final_text:
+            logger.warning(
+                "%s whole-task takeover hit max_turns=%d for task %s — partial answer kept",
+                self.provider.provider_name, max_turns, task_id,
+            )
+            return {
+                "success":    False,
+                "partial":    True,
+                "summary":    final_text,
+                "tools_used": tools_used,
+                "turns":      max_turns + 1,
+                "tokens_in":  total_tokens_in,
+                "tokens_out": total_tokens_out,
+            }
+
+        # Nothing to show at all
         logger.warning(
             "%s whole-task takeover hit max_turns=%d for task %s",
             self.provider.provider_name, max_turns, task_id,
