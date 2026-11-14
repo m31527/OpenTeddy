@@ -11184,10 +11184,18 @@
       }
     }
 
-    async function loadOllamaModels(selectedOrch = '', selectedExec = '') {
+    async function loadOllamaModels(selectedOrch = null, selectedExec = null) {
       const list    = document.getElementById('modelList');
       const selOrch = document.getElementById('sel_orchestrator_model');
       const selExec = document.getElementById('sel_executor_model');
+      // A reload after a pull or a delete keeps what is selected. Without
+      // this the executor fell back to the first (newest) model, and the
+      // next Save quietly made a just-pulled vision model the executor.
+      if (selectedOrch == null) {
+        const v = selOrch?.value || '';
+        selectedOrch = (v && !v.startsWith('cloud:')) ? v : _lastLocalOrch;
+      }
+      if (selectedExec == null) selectedExec = selExec?.value || _lastLocalExec;
       try {
         const res  = await fetch(`${API}/settings/ollama/models`);
         const data = await res.json();
