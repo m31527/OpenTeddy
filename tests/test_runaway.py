@@ -152,7 +152,7 @@ async def test_retries() -> None:
             return r
 
     class _Esc:
-        async def resolve(self, st, ctx):
+        async def resolve(self, st, ctx, **kw):
             escalated.append(st.id)
             st.status = TaskStatus.COMPLETED
             return st

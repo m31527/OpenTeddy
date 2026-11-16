@@ -603,6 +603,36 @@ def _is_local_only() -> bool:
     return is_session_local_only() or privacy.is_private(privacy.current_task())
 
 
+async def _cloud_step(o: Any, st: "SubTask", context: Dict[str, Any], mode: str,
+                      step_before: Any = None) -> "SubTask":
+    """Hand a step to the cloud model and check it like a local one. Its
+    "done" counted unchecked: "invoices.json written" with no file there
+    (2026-11-14 eval). A step that had to write or change a file and didn't
+    is not done, whoever says so. `o` is the Orchestrator (or a test's
+    stand-in); `step_before` is the workspace as the step started."""
+    import workspace_changes
+    before = workspace_changes.snapshot()
+    st = await o.escalation.resolve(st, context, mode=mode)
+    if mode not in ("code", "analytic"):
+        return st
+    emit_files = getattr(o.executor, "emit_files", None)
+    if emit_files:
+        try:
+            await emit_files(st, workspace_changes.changed_since(before) or [])
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("file cards for the cloud step failed: %s", exc)
+    if st.status == TaskStatus.COMPLETED:
+        changed = workspace_changes.changed_since(step_before if step_before is not None else before)
+        if changed == [] and await Orchestrator._step_must_change_files(o, st):
+            logger.info("Subtask %s: the cloud model said done but changed no file.", st.id)
+            st.status = TaskStatus.FAILED
+            st.confidence = 0.3
+            st.error = ("這一步要寫出或改動檔案，但雲端模型接手後，工作目錄裡仍然沒有任何檔案"
+                        "被改動或新增，所以不算完成。")
+            await o.tracker.update_subtask(st)
+    return st
+
+
 # ── Response-framing language detection ─────────────────────────────────
 # Server-side label strings the orchestrator wraps around tool logs +
 # confirmation blocks USED to be Chinese-only (the project started as
@@ -2258,7 +2288,7 @@ class Orchestrator:
                 st.id,
             )
             try:
-                return await self.escalation.resolve(st, context)
+                return await _cloud_step(self, st, context, mode)
             except Exception as exc:  # noqa: BLE001
                 # Cloud failed → fall through to local executor as a
                 # safety net rather than failing the whole subtask. The
@@ -2358,8 +2388,7 @@ class Orchestrator:
                 await self.tracker.update_subtask(st)
                 if _is_local_only():
                     return st  # respect privacy guardrail
-                st = await self.escalation.resolve(st, context)
-                return st
+                return await _cloud_step(self, st, context, mode, _ws_before)
 
             confidence = getattr(st, 'confidence', 1.0)
 
@@ -2384,8 +2413,7 @@ class Orchestrator:
                         await self.tracker.update_subtask(st)
                         if _is_local_only():
                             return st
-                        st = await self.escalation.resolve(st, context)
-                        return st
+                        return await _cloud_step(self, st, context, mode, _ws_before)
 
                 # ── Per-step deliverable verification (#2) ───────────
                 # Pull the artifacts the executor produced for this
@@ -2515,8 +2543,7 @@ class Orchestrator:
             "Subtask %s escalating to Claude after %d failed attempts.",
             st.id, max_local_retries,
         )
-        st = await self.escalation.resolve(st, context)
-        return st
+        return await _cloud_step(self, st, context, mode, _ws_before)
 
     # ── Per-step deliverable verification (#2) ──────────────────────────
     # LLM-as-judge check: for tasks that produced a file, ask Qwen

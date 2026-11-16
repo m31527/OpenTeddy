@@ -501,7 +501,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:  # type: ignore[type-arg]
         registry=tool_registry,
         ws_callback=ws_manager.broadcast,   # ← 接線 WebSocket 廣播
     )
-    escalation_agent = EscalationAgent(tracker)
+    # The cloud model takes over a step with the same tools and the same
+    # event stream (process record, file cards) as the local executor.
+    escalation_agent = EscalationAgent(
+        tracker, registry=tool_registry, push_event=executor._push_event,
+    )
     orchestrator     = Orchestrator(
         tracker, executor, escalation_agent, skill_factory,
         memory=memory_manager,

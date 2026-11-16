@@ -145,7 +145,7 @@ async def test_human_wait() -> None:
             return None
 
     class _Esc:
-        async def resolve(self, st, ctx):  # noqa: ANN001
+        async def resolve(self, st, ctx, **kw):  # noqa: ANN001
             return st
 
     class _T:

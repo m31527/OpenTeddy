@@ -48,6 +48,13 @@ _ONLY_INTENT = re.compile(
 _GAVE_UP = re.compile(r"(無法|尚未|未能|沒辦法|做不到|未完成|\b(couldn'?t|could not|unable|not able|cannot)\b)", re.I)
 
 
+def _tools_named_in(description: str, tools: List[Dict[str, Any]]) -> List[str]:
+    """The offered tools a step's text names ("用 python_exec 讀取 …")."""
+    names = {(t.get("function") or {}).get("name") or "" for t in (tools or [])}
+    return sorted(n for n in names if n and re.search(rf"(?<![A-Za-z0-9_]){re.escape(n)}(?![A-Za-z0-9_])",
+                                                      description or ""))
+
+
 def _answer_text(raw: str) -> str:
     """The answer itself: the "result" of a {"result": …} reply, or the text."""
     t = (raw or "").strip()
@@ -735,6 +742,21 @@ class Executor:
         except Exception as exc:  # noqa: BLE001
             logger.debug("workspace diff failed: %s", exc)
             return
+        await self._emit_file_cards(workspace_path, subtask, new_files)
+
+    async def emit_files(self, subtask: SubTask, paths: List[str]) -> None:
+        """File cards for files written during a step by something other
+        than this executor (the cloud model taking the step over)."""
+        import os as _os
+        from config import effective_workspace_dir as _ws
+        files = [(p, _os.path.getsize(p)) for p in paths if _os.path.isfile(p)]
+        if files:
+            await self._emit_file_cards(_ws() or "", subtask, files)
+        self._subtask_artifacts.pop(subtask.id, None)   # the step is over
+
+    async def _emit_file_cards(
+        self, workspace_path: str, subtask: SubTask, new_files: List[Tuple[str, int]],
+    ) -> None:
         if not new_files:
             return
 
@@ -1039,6 +1061,7 @@ class Executor:
         browser_used = browser_acted = claim_checked = gave_up_checked = False
         browser_calls = 0
         intent_nudges = 0
+        named_nudged = False
         # "Click [5]" on the results page and "click [5]" on the product page
         # are different clicks: a browser call's duplicate key includes the
         # page it was made on (the last address a browser result showed).
@@ -1322,6 +1345,22 @@ class Executor:
                         "You described your next step but didn't call a tool, so nothing happened. Do it now "
                         "with the tool. If you're actually finished, give the final answer for the person, in "
                         "the language they wrote in.")})
+                    continue
+                # The plan named a tool for this step and none has run: what
+                # came back is a plan or a guess, not a result ("I need to
+                # first check what files exist…", 2026-11-14 eval).
+                _named = [] if (tool_name_counts or named_nudged or mode == "chat"
+                                or round_idx >= max_rounds - 1) \
+                    else _tools_named_in(description, tools)
+                if _named:
+                    named_nudged = True
+                    logger.info("task=%s answered without the tool its step names (%s) — sent back once",
+                                task_id, ", ".join(_named))
+                    messages.append({"role": "assistant", "content": raw_text})
+                    messages.append({"role": "user", "content": (
+                        f"This step says to use {', '.join(_named)}, but no tool has run yet, so nothing in "
+                        "your reply is a result. Call the tool now. If the step really needs none, give "
+                        "the final answer for the person, in the language they wrote in.")})
                     continue
                 if browser_used and browser_calls <= 2 and not gave_up_checked and round_idx < max_rounds - 1 \
                         and (_GAVE_UP.search(_answer_text(raw_text))

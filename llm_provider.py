@@ -539,15 +539,20 @@ class _OpenAICompatHistory(LLMHistory):
         #     with 400, so we put any text into a SEPARATE preceding
         #     assistant message when both are present.
         text = response.text or ""
+        reasoning = getattr(response, "_reasoning_content", None)
+        extra = {"reasoning_content": reasoning} if reasoning is not None else {}
         if not response.tool_uses:
             # Pure text turn.
-            self.messages.append({"role": "assistant", "content": text})
+            self.messages.append({"role": "assistant", "content": text, **extra})
             return
 
         # Tool-using turn. If the model also produced text alongside the
         # tool_uses (Claude-via-OpenRouter does this often, raw GPT-4
         # rarely), split into two assistant messages so neither rejects.
-        if text.strip():
+        # A thinking model (DeepSeek) is the exception: every assistant
+        # message must carry its reasoning, so it stays one message —
+        # content, reasoning and calls together, as DeepSeek sends it.
+        if text.strip() and reasoning is None:
             self.messages.append({"role": "assistant", "content": text})
 
         tool_calls = []
@@ -565,8 +570,9 @@ class _OpenAICompatHistory(LLMHistory):
             })
         self.messages.append({
             "role":       "assistant",
-            "content":    None,
+            "content":    (text or None) if reasoning is not None else None,
             "tool_calls": tool_calls,
+            **extra,
         })
 
     def add_tool_results(self, results: List[LLMToolResult]) -> None:
@@ -840,7 +846,15 @@ class _OpenAICompatProvider(LLMProvider):
             input_tokens=int(usage_raw.get("prompt_tokens", 0) or 0),
             output_tokens=int(usage_raw.get("completion_tokens", 0) or 0),
         )
-        return LLMToolTurnResponse(text=text, tool_uses=tool_uses, usage=usage)
+        out = LLMToolTurnResponse(text=text, tool_uses=tool_uses, usage=usage)
+        # DeepSeek's thinking models want their reasoning back on the next
+        # tool turn, or answer 400 ("The `reasoning_content` in the thinking
+        # mode must be passed back"). Kept on the side, like Anthropic's
+        # raw blocks, for add_assistant_turn — even when it's empty: the
+        # field has to come back all the same.
+        if "reasoning_content" in msg:
+            out._reasoning_content = msg.get("reasoning_content") or ""  # type: ignore[attr-defined]
+        return out
 
     # ── Text completion ──────────────────────────────────────────────────────
 
