@@ -3499,7 +3499,7 @@ class Orchestrator:
                 "generating skill '%s'",
                 len(matching), similarity_threshold, skill_name,
             )
-            await self.skill_factory.generate_skill(skill_name, skill_desc)
+            await self.skill_factory.generate_skill(skill_name, skill_desc, auto=True)
         except Exception as exc:  # noqa: BLE001
             logger.warning(
                 "Skill auto-detect failed (non-fatal): %s", exc,

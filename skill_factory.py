@@ -30,6 +30,35 @@ from tracker import Tracker
 
 logger = logging.getLogger(__name__)
 
+# Names a model gives a "skill" that isn't one. The 2026-11-14/15 evals left
+# "none" and "python_exec_skill" (the python_exec tool, renamed to dodge the
+# tool-name rule) on home as ACTIVE skills; the second answered every data
+# step after that with "no executable code supplied", 52 times, counted as
+# successes, and 6 of the person's own tasks with it.
+_NOT_SKILL_NAMES = frozenset({
+    "none", "null", "nil", "na", "n_a", "no", "false", "true", "skill", "skills",
+    "unknown", "default", "general", "task", "tool", "tools",
+})
+
+
+def auto_skill_name_problem(name: str) -> str:
+    """Why a name the model proposed can't become a skill, or ""."""
+    import re
+    n = (name or "").strip().lower()
+    if not re.fullmatch(r"[a-z][a-z0-9_]{2,63}", n):
+        return "not a usable skill name"
+    if n in _NOT_SKILL_NAMES:
+        return "not a skill name"
+    stem = re.sub(r"_(skill|tool)$", "", n)
+    try:
+        from tool_registry import tool_registry as _tools
+        names = getattr(_tools, "_tools", {})
+    except Exception:  # noqa: BLE001
+        names = {}
+    if n in names or stem in names:
+        return f"it names the {stem} tool"
+    return ""
+
 # ── Prompt templates ──────────────────────────────────────────────────────────
 
 _GENERATION_SYSTEM = """\
@@ -118,8 +147,17 @@ class SkillFactory:
         name: str,
         description: str,
         input_keys: Optional[list] = None,
+        auto: bool = False,
     ) -> SkillMetadata:
         """Ask the LLM to write a new skill, TEST it, and persist to DB + disk.
+
+        auto=True is a skill the system proposed by itself (a step's
+        "skill_needed", a recurring pattern). It is refused when its name
+        isn't one (auto_skill_name_problem), and it registers as TESTING
+        whatever its test says: it runs only after the person promotes it
+        in Skills. Passing a test proves little: returning "no executable
+        code supplied" passes, since the test only checks that run()
+        returns a string.
 
         Loop A of the self-improvement design (test-before-register):
         syntax-checking alone let "compiles but doesn't work" skills into
@@ -137,6 +175,10 @@ class SkillFactory:
         skill_test_before_register off, the old syntax-check-only path and
         TESTING status are preserved.
         """
+        if auto:
+            problem = auto_skill_name_problem(name)
+            if problem:
+                raise ValueError(f"Not creating skill {name!r}: {problem}")
         # A skill must never share a tool's name: the planner can't tell them
         # apart, and a "browser_fetch" skill shadowed the browser_fetch tool.
         try:
@@ -191,8 +233,8 @@ class SkillFactory:
             description=description,
             code=code,
             version=1,
-            status=SkillStatus.ACTIVE if tested else SkillStatus.TESTING,
-            success_count=1 if tested else 0,   # the passed test
+            status=SkillStatus.ACTIVE if (tested and not auto) else SkillStatus.TESTING,
+            success_count=1 if (tested and not auto) else 0,   # the passed test
             created_at=datetime.utcnow(),
             updated_at=datetime.utcnow(),
         )

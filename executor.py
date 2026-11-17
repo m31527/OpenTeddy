@@ -2274,6 +2274,8 @@ class Executor:
             if existing:
                 return
             logger.info("Requesting new skill creation: '%s'", name)
-            await self.skill_factory.generate_skill(name, description)
+            await self.skill_factory.generate_skill(name, description, auto=True)
+        except ValueError as exc:
+            logger.info("%s", exc)
         except Exception as exc:  # noqa: BLE001
             logger.warning("Skill creation for '%s' failed: %s", name, exc)
