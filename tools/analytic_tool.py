@@ -36,6 +36,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from tool_registry import RiskLevel, make_result
+from tools.shell_tool import confine_git
 
 logger = logging.getLogger(__name__)
 
@@ -340,7 +341,7 @@ async def _run_python(code: str, cwd: str, timeout: int) -> Tuple[int, str, str]
         cwd=cwd,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
-        env={**os.environ, "PYTHONUNBUFFERED": "1"},
+        env=confine_git({**os.environ, "PYTHONUNBUFFERED": "1"}),
     )
     try:
         stdout_b, stderr_b = await asyncio.wait_for(proc.communicate(), timeout=timeout)

@@ -798,6 +798,26 @@ class Executor:
 
     # ── Ollama Function Calling ───────────────────────────────────────────────
 
+    async def _person_request(self, task_id: str, description: str) -> str:
+        """The person's own words for this task, unless the step already
+        carries them.
+
+        The planner rewrites a request into steps and sometimes loses a
+        detail on the way. In the 11/18 eval, "run python count_words.py
+        <file name>" became a step to count the words in every file in
+        the folder, and the script never read the file it was given."""
+        get = getattr(self.tracker, "get_task", None)
+        if get is None or not task_id or task_id == "unknown":
+            return ""
+        try:
+            task = await get(task_id)
+        except Exception:  # noqa: BLE001
+            return ""
+        goal = str(task.get("goal") or "").strip() if isinstance(task, dict) else ""
+        if not goal or goal in (description or ""):
+            return ""
+        return goal if len(goal) <= 1500 else goal[:1500] + "…"
+
     async def _qwen_execute(
         self,
         description: str,
@@ -878,6 +898,16 @@ class Executor:
             k: v for k, v in (context or {}).items()
             if k not in _internal_ctx_keys
         }
+        request_block = ""
+        _request = await self._person_request(task_id, description)
+        if _request:
+            request_block = (
+                "THE PERSON'S REQUEST, in their own words (the whole task; "
+                "this step is one part of it):\n" + _request + "\n"
+                "Do only this step, but where the step leaves out or changes "
+                "a detail the person gave — a file name, an argument, a "
+                "number, a format, a rule — follow the person's words.\n\n"
+            )
         from orchestrator import _clock_note
         messages: List[Dict[str, Any]] = [
             {
@@ -885,6 +915,7 @@ class Executor:
                 "content": (
                     _clock_note()
                     + workspace_block
+                    + request_block
                     + prior_block
                     + f"Task: {description}\n\n"
                     f"Context: {json.dumps(_public_ctx, ensure_ascii=False)[:2000]}"

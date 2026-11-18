@@ -321,6 +321,31 @@ def _openteddy_project_root() -> str:
     return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
+def confine_git(env: Dict[str, str]) -> Dict[str, str]:
+    """Stop git run by a tool from climbing out of the workspace into a
+    repository above it.
+
+    The default workspace sits inside OpenTeddy's own checkout, so git in
+    a task folder that isn't a repository itself used OpenTeddy's: in the
+    11/18 eval a step ran `git add -f buggy.py && git commit` in its eval
+    folder and the commit landed on OpenTeddy's main. Git never climbs
+    into a GIT_CEILING_DIRECTORIES entry, so OpenTeddy's own folder and the
+    folder holding the workspace go there. Repositories inside the
+    workspace, and folders a session points at elsewhere, work as before.
+    """
+    from config import config as _cfg
+    ceilings = [_openteddy_project_root()]
+    ws = getattr(_cfg, "agent_workspace_dir", "") or ""
+    if ws:
+        ceilings.append(os.path.dirname(os.path.abspath(ws)))
+    have = [p for p in (env.get("GIT_CEILING_DIRECTORIES") or "").split(os.pathsep) if p]
+    for c in ceilings:
+        if c and c not in have:
+            have.append(c)
+    env["GIT_CEILING_DIRECTORIES"] = os.pathsep.join(have)
+    return env
+
+
 def _is_openteddy_source_path(path: str) -> bool:
     """True when ``path`` is inside OpenTeddy's own source tree BUT NOT
     inside an ``agent-workspace/`` subdir.
@@ -541,7 +566,7 @@ def _augmented_subprocess_env() -> Dict[str, str]:
             parts.append(p)
             seen.add(p)
     env["PATH"] = os.pathsep.join(parts)
-    return env
+    return confine_git(env)
 
 
 def _truncate_output(text: str) -> str:
