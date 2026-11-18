@@ -151,11 +151,11 @@ async def _call_small_model(
         num_ctx=int(getattr(config, "gemma_num_ctx", 16384)) if model == config.gemma_model else _NUM_CTX,
         keep_alive=getattr(config, "ollama_keep_alive", "24h"),
     )
-    if not local_engine.is_vllm():
+    if not local_engine.is_vllm(model):
         # A reasoning pass would spend the entire latency budget before
         # the first spoken word. Off for this lane, always.
         payload["think"] = False
-    url = local_engine.chat_endpoint()
+    url = local_engine.chat_endpoint(model)
     # A connect stall (engine down, IPv6 loopback blackholed) must fail in
     # seconds, not eat the whole 30 s read budget before the caller can
     # say "not ready".

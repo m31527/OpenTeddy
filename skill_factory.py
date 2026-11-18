@@ -41,6 +41,15 @@ _NOT_SKILL_NAMES = frozenset({
 })
 
 
+def _stays_local() -> bool:
+    """Writing or repairing a skill is a cloud call carrying what the task
+    was about. A local-only session or a private task (someone's mail,
+    calendar, browser) never makes one."""
+    from config import is_session_local_only
+    import privacy
+    return is_session_local_only() or privacy.is_private(privacy.current_task())
+
+
 def auto_skill_name_problem(name: str) -> str:
     """Why a name the model proposed can't become a skill, or ""."""
     import re
@@ -179,6 +188,8 @@ class SkillFactory:
             problem = auto_skill_name_problem(name)
             if problem:
                 raise ValueError(f"Not creating skill {name!r}: {problem}")
+            if _stays_local():
+                raise ValueError(f"Not creating skill {name!r}: this task stays local")
         # A skill must never share a tool's name: the planner can't tell them
         # apart, and a "browser_fetch" skill shadowed the browser_fetch tool.
         try:
@@ -440,6 +451,8 @@ class SkillFactory:
         must never take down anything else.
         """
         name = skill.name
+        if _stays_local():      # the repair would send the failing input to the cloud
+            return
         if name in self._regen_inflight:
             return
         self._regen_inflight.add(name)

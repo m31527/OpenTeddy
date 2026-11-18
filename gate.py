@@ -101,29 +101,40 @@ async def ask(orch: Any, prompt: str, task_id: str = "") -> Tuple[str, Optional[
         return (r.text or "").strip(), None
 
     import local_engine
-    payload = {
-        "model": config.gemma_model,
-        "messages": [{"role": "system", "content": system_prompt()}, {"role": "user", "content": prompt}],
-        "tools": [START_TASK],
-        "stream": False,
-        "options": {"temperature": float(getattr(config, "gemma_temperature", 0.1)),
-                    "num_predict": config.gemma_max_tokens,
-                    "num_ctx": int(getattr(config, "gemma_num_ctx", 16384))},
-        "keep_alive": getattr(config, "ollama_keep_alive", "24h"),
-    }
-    th = local_engine.think_setting(config.gemma_model)
-    if th is not None:
-        payload["think"] = th
+    on_vllm = local_engine.routed(config.gemma_model)
+    if on_vllm:
+        payload = local_engine.build_payload(
+            model=config.gemma_model, messages=[{"role": "user", "content": prompt}],
+            system=system_prompt(), tools=[START_TASK], stream=False,
+            temperature=float(getattr(config, "gemma_temperature", 0.1)),
+            num_predict=config.gemma_max_tokens)
+        url = local_engine.chat_endpoint(config.gemma_model)
+    else:
+        payload = {
+            "model": config.gemma_model,
+            "messages": [{"role": "system", "content": system_prompt()}, {"role": "user", "content": prompt}],
+            "tools": [START_TASK],
+            "stream": False,
+            "options": {"temperature": float(getattr(config, "gemma_temperature", 0.1)),
+                        "num_predict": config.gemma_max_tokens,
+                        "num_ctx": int(getattr(config, "gemma_num_ctx", 16384))},
+            "keep_alive": getattr(config, "ollama_keep_alive", "24h"),
+        }
+        th = local_engine.think_setting(config.gemma_model)
+        if th is not None:
+            payload["think"] = th
+        url = f"{config.gemma_base_url}/api/chat"
     t0 = time.monotonic()
-    resp = await orch._http.post(f"{config.gemma_base_url}/api/chat", json=payload)
+    resp = await orch._http.post(url, json=payload)
     resp.raise_for_status()
-    data = resp.json()
+    data = local_engine.normalize_response(resp.json())
     t = local_engine.log_timing("[gate]", config.gemma_model, data)
     try:
         out = data.get("eval_count", 0) or 0
         dur = data.get("eval_duration", 0) or 0
         await orch.tracker.record_usage(
-            task_id=task_id, model=config.gemma_model, model_provider="ollama",
+            task_id=task_id, model=config.gemma_model,
+            model_provider="vllm" if on_vllm else "ollama",
             tokens_in=data.get("prompt_eval_count", 0) or 0, tokens_out=out,
             task_description="[gate]", duration_ms=int((data.get("total_duration") or 0) / 1e6)
             or int((time.monotonic() - t0) * 1000),

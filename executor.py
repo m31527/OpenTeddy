@@ -1091,7 +1091,7 @@ class Executor:
             import local_engine
             stream_on = (
                 bool(getattr(config, "streaming_enabled", True))
-                and local_engine.supports_streaming()
+                and local_engine.supports_streaming(config.qwen_model)
             )
             # #A: stitch discovery memos onto the system prompt so the
             # model sees them every turn. Putting them in `system`
@@ -1209,7 +1209,7 @@ class Executor:
                 num_ctx=num_ctx,
                 keep_alive=getattr(config, "ollama_keep_alive", "24h"),
             )
-            _chat_url = local_engine.chat_endpoint()
+            _chat_url = local_engine.chat_endpoint(config.qwen_model)
 
             try:
                 if stream_on:
@@ -1311,7 +1311,7 @@ class Executor:
                 await self.tracker.record_usage(
                     task_id=task_id,
                     model=config.qwen_model,
-                    model_provider=local_engine.usage_provider_label(),
+                    model_provider=local_engine.usage_provider_label(config.qwen_model),
                     tokens_in=_tokens_in,
                     tokens_out=_tokens_out,
                     task_description=description,
@@ -1946,7 +1946,7 @@ class Executor:
         try:
             import local_engine
             resp = await self._http.post(
-                local_engine.chat_endpoint(),
+                local_engine.chat_endpoint(config.qwen_model),
                 json=local_engine.build_payload(
                     model=config.qwen_model,
                     messages=messages,
@@ -2151,7 +2151,7 @@ class Executor:
         try:
             import local_engine
             resp = await self._http.post(
-                local_engine.chat_endpoint(),
+                local_engine.chat_endpoint(config.qwen_model),
                 json=local_engine.build_payload(
                     model=config.qwen_model,
                     messages=[{"role": "user", "content": prompt}],

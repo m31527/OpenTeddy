@@ -201,9 +201,10 @@ def run_task(client: httpx.Client, task: Dict[str, Any], ws: str, args: argparse
         context["eval_browser_key"] = rig.key
     t0 = time.monotonic()
     try:
-        acc = client.post("/tasks", json={"intent": goal, "workspace_dir": ws, "auto_lane": True,
-                                          "context": context},
-                          timeout=60).json()
+        body = {"intent": goal, "workspace_dir": ws, "auto_lane": True, "context": context}
+        if getattr(args, "local_only", False):
+            body["privacy"] = "local_only"     # the session never calls a cloud model
+        acc = client.post("/tasks", json=body, timeout=60).json()
     except Exception as exc:  # noqa: BLE001
         return {"id": task["id"], "error": f"could not start: {exc}", "passed": False, "seconds": 0}
     task_id = acc.get("task_id", "")
@@ -286,7 +287,9 @@ def summarize(results: List[Dict[str, Any]]) -> Dict[str, Any]:
 def markdown(meta: Dict[str, Any], s: Dict[str, Any], results: List[Dict[str, Any]]) -> str:
     L = [f"# 交付壓測 {meta['stamp']}", "",
          f"OpenTeddy {meta.get('version', '?')} · {meta.get('executor', '?')} / {meta.get('planner', '?')} · "
-         f"{meta['tasks']} 題 × {meta['runs']} 次", "",
+         f"{meta['tasks']} 題 × {meta['runs']} 次"
+         + (" · 只用本地模型" if meta.get("local_only") else "")
+         + (f" · vLLM：{meta['vllm']}" if meta.get("vllm") else ""), "",
          "| 指標 | 數值 |", "|---|---|",
          f"| **實際成功率**（通過自動檢查） | **{s['pass_rate']:.0%}** |",
          f"| **假成功率**（回報完成但檢查沒過） | **{s['false_success_rate']:.0%}** |",
@@ -356,6 +359,8 @@ def main() -> int:
     ap.add_argument("--cool-to", type=int, default=65)
     ap.add_argument("--keep-sessions", action="store_true", help="don't delete the eval sessions afterwards")
     ap.add_argument("--executor", default="", help="run with this executor model, then put the previous one back")
+    ap.add_argument("--local-only", action="store_true",
+                    help="every task in a local-only session: no cloud model at all (no escalation)")
     ap.add_argument("--ollama", default=os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434"))
     ap.add_argument("--compare", nargs=2, metavar=("A.json", "B.json"))
     args = ap.parse_args()
@@ -379,6 +384,8 @@ def main() -> int:
         st = (client.get("/settings", timeout=10).json().get("data") or {})
         meta["executor"] = (st.get("executor_model") or {}).get("value")
         meta["planner"] = (st.get("orchestrator_model") or {}).get("value")
+        meta["vllm"] = (st.get("vllm_models") or {}).get("value") or ""
+        meta["local_only"] = bool(args.local_only)
     except Exception as exc:  # noqa: BLE001
         print(f"✗ OpenTeddy not reachable at {args.server}: {exc}")
         return 1
@@ -398,7 +405,8 @@ def main() -> int:
     if args.executor and args.executor != meta["executor"]:
         restore = switch_executor(client, args.executor, args.ollama.rstrip("/"))
         meta["executor"] = args.executor
-    print(f"Eval {stamp}: {len(tasks)} tasks × {args.runs} on {meta['executor']} / {meta['planner']}")
+    print(f"Eval {stamp}: {len(tasks)} tasks × {args.runs} on {meta['executor']} / {meta['planner']}"
+          + (" · local only" if args.local_only else "") + (f" · vLLM {meta['vllm']}" if meta["vllm"] else ""))
     try:
         return _run_all(client, tasks, args, meta, stamp)
     finally:

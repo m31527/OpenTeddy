@@ -178,6 +178,13 @@ class EscalationAgent:
         """Return a friendly message if escalation should not run, else None."""
         if not config.escalation_enabled:
             return self._disabled_message()
+        # Every cloud call here passes this gate (a step, a whole task, a
+        # summary). A local-only session or a private task never reaches a
+        # cloud model — the summary of an empty run did, before.
+        from config import is_session_local_only
+        import privacy
+        if is_session_local_only() or privacy.is_private(privacy.current_task()):
+            return "This task stays on this machine (local only), so no cloud model is used."
         if not self.provider.is_configured():
             return self.provider.get_unconfigured_message()
         return None

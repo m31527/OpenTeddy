@@ -46,6 +46,7 @@ from __future__ import annotations
 
 import logging
 import platform
+import re
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
@@ -67,11 +68,39 @@ def active_engine() -> str:
     return requested if requested in ("ollama", "vllm") else "ollama"
 
 
-def is_vllm() -> bool:
+def vllm_routes() -> Dict[str, str]:
+    """model → base URL of the vLLM server that serves it, from the
+    `vllm_models` setting ("qwen3.6:35b=http://127.0.0.1:8001, …"). One
+    vLLM server serves one model, so a planner and an executor on vLLM
+    are two servers, and a model left out stays where it was (Ollama).
+    Empty on macOS, for the same reason as active_engine()."""
+    from config import config
+    if platform.system() == "Darwin":
+        return {}
+    out: Dict[str, str] = {}
+    for part in re.split(r"[,\n]", getattr(config, "vllm_models", "") or ""):
+        model, _, url = part.partition("=")
+        if model.strip() and url.strip():
+            out[model.strip()] = url.strip().rstrip("/")
+    return out
+
+
+def routed(model: str) -> bool:
+    """`model` has a vLLM server of its own (vllm_models). The planner's
+    calls check this, not is_vllm(): with local_engine=vllm alone the one
+    vLLM server serves the executor, and the planner stays on Ollama."""
+    return model in vllm_routes()
+
+
+def is_vllm(model: Optional[str] = None) -> bool:
+    """Whether a call for `model` goes to vLLM: its own server when it is
+    in vllm_models, else whatever local_engine says."""
+    if model is not None and model in vllm_routes():
+        return True
     return active_engine() == "vllm"
 
 
-def supports_streaming() -> bool:
+def supports_streaming(model: Optional[str] = None) -> bool:
     """Whether to use token-streaming for the active engine.
 
     Ollama streams NDJSON and we render word-by-word in the chat UI.
@@ -80,26 +109,29 @@ def supports_streaming() -> bool:
     throughput-for-batch engine anyway — word-by-word UI matters less
     for the scheduled / fleet workloads vLLM targets). Streaming for
     vLLM is a follow-up enhancement, not a correctness requirement."""
-    return not is_vllm()
+    return not is_vllm(model)
 
 
-def base_url() -> str:
+def base_url(model: Optional[str] = None) -> str:
     from config import config
+    if model is not None and model in vllm_routes():
+        return vllm_routes()[model]
     if is_vllm():
         return getattr(config, "vllm_base_url", "http://127.0.0.1:8001")
     return config.qwen_base_url
 
 
-def chat_endpoint() -> str:
-    """Full POST URL for a chat completion against the active engine."""
-    b = base_url().rstrip("/")
-    return f"{b}/v1/chat/completions" if is_vllm() else f"{b}/api/chat"
+def chat_endpoint(model: Optional[str] = None) -> str:
+    """Full POST URL for a chat completion of `model` (default: the
+    executor's) on the engine that serves it."""
+    b = base_url(model).rstrip("/")
+    return f"{b}/v1/chat/completions" if is_vllm(model) else f"{b}/api/chat"
 
 
-def usage_provider_label() -> str:
+def usage_provider_label(model: Optional[str] = None) -> str:
     """String stamped on usage records' model_provider column so the
     Usage tab can break local cost/speed down by engine."""
-    return "vllm" if is_vllm() else "ollama"
+    return "vllm" if is_vllm(model) else "ollama"
 
 
 # ── Request building ──────────────────────────────────────────────────────────
@@ -135,13 +167,16 @@ def build_payload(
     num_predict: int,
     num_ctx: Optional[int] = None,
     keep_alive: str = "24h",
+    json_mode: bool = False,
 ) -> Dict[str, Any]:
     """Build the engine-appropriate request body.
 
     Inputs are in OpenTeddy's canonical (Ollama-ish) terms; this fn
-    translates to whichever dialect the active engine speaks.
+    translates to whichever dialect the engine serving `model` speaks.
+    json_mode asks for a JSON reply (Ollama `format: json`, OpenAI
+    `response_format`).
     """
-    if is_vllm():
+    if is_vllm(model):
         # OpenAI format: system folds into the messages array, params
         # are flat, no keep_alive / num_ctx (those are set when the vLLM
         # server is launched, via --max-model-len etc.).
@@ -157,6 +192,12 @@ def build_payload(
         }
         if tools:
             payload["tools"] = tools
+        if json_mode:
+            payload["response_format"] = {"type": "json_object"}
+        # Thinking off, as on Ollama: through the chat template, which is
+        # where Qwen and Gemma read the switch on vLLM.
+        if think_setting(model) is False:
+            payload["chat_template_kwargs"] = {"enable_thinking": False}
         if stream:
             # Ask vLLM to include a final usage chunk so we can record
             # token counts even on the streaming path.
@@ -188,6 +229,8 @@ def build_payload(
     }
     if tools:
         payload["tools"] = tools
+    if json_mode:
+        payload["format"] = "json"
     th = think_setting(model)
     if th is not None:
         payload["think"] = th
@@ -207,8 +250,9 @@ def normalize_response(raw: Dict[str, Any]) -> Dict[str, Any]:
     (eval_duration etc.), so those come back 0 and the executor's t/s
     calculation falls back to wall-clock timing.
     """
-    if not is_vllm():
-        return raw  # already Ollama shape
+    if "choices" not in (raw or {}):
+        return raw  # already Ollama shape (read from the reply: which engine
+                    # answered depends on the model, not one global setting)
 
     choice = (raw.get("choices") or [{}])[0]
     msg = choice.get("message") or {}
@@ -262,7 +306,7 @@ def normalize_stream_chunk(chunk: Dict[str, Any]) -> Dict[str, Any]:
     block can route through it uniformly, and so vLLM SSE streaming can
     be slotted in later without touching the executor.
     """
-    if not is_vllm():
+    if "choices" not in (chunk or {}):
         return chunk
     # vLLM SSE delta → Ollama-ish chunk. (Wired for completeness; not
     # exercised until supports_streaming() returns True for vLLM.)

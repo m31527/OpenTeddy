@@ -226,6 +226,15 @@ SETTINGS_META: dict[str, dict[str, Any]] = {
                        "scripts/setup-vllm.sh.",
         "type":        "text",
     },
+    "vllm_models": {
+        "label":       "Models on vLLM",
+        "description": "Models served by a vLLM server of their own, as "
+                       "model=url pairs separated by commas, e.g. "
+                       "'qwen3.6:35b=http://127.0.0.1:8001'. A listed model "
+                       "goes to that server whatever the engine setting says; "
+                       "the others stay on Ollama. Empty = none.",
+        "type":        "text",
+    },
     "escalation_threshold": {
         "label":       "Escalation Confidence Threshold",
         "description": "Escalate to Claude when executor confidence is below this value",
@@ -594,6 +603,7 @@ def _defaults_from_config() -> dict[str, str]:
         "ollama_keep_alive":        getattr(config, "ollama_keep_alive", "24h"),
         "local_engine":             getattr(config, "local_engine", "ollama"),
         "vllm_base_url":            getattr(config, "vllm_base_url", "http://127.0.0.1:8001"),
+        "vllm_models":              getattr(config, "vllm_models", ""),
         "escalation_threshold":     str(config.escalation_confidence_threshold),
         "escalation_failure_limit": str(config.escalation_failure_limit),
         "gemma_max_tokens":         str(config.gemma_max_tokens),
@@ -931,6 +941,8 @@ class SettingsStore:
             config.local_engine = settings["local_engine"].strip().lower()
         if "vllm_base_url" in settings and settings["vllm_base_url"]:
             config.vllm_base_url = settings["vllm_base_url"].strip()
+        if "vllm_models" in settings:
+            config.vllm_models = (settings["vllm_models"] or "").strip()
         if "ollama_keep_alive" in settings and settings["ollama_keep_alive"]:
             # Non-empty only — clearing the field via the UI keeps the
             # 24h default rather than disabling keep_alive entirely

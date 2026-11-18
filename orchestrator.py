@@ -2652,12 +2652,12 @@ class Orchestrator:
                     num_ctx=int(getattr(config, "qwen_num_ctx", 16384)),
                     keep_alive=getattr(config, "ollama_keep_alive", "24h"),
                 )
-                if not local_engine.is_vllm():
+                if not local_engine.is_vllm(config.qwen_model):
                     payload["format"] = "json"
                 # 30s cap: the judge needs ~50 output tokens; past 30s
                 # something else is wrong and skipping beats stalling.
                 resp = await self._http.post(
-                    local_engine.chat_endpoint(), json=payload, timeout=30,
+                    local_engine.chat_endpoint(config.qwen_model), json=payload, timeout=30,
                 )
                 resp.raise_for_status()
                 msg = local_engine.normalize_response(resp.json()).get("message") or {}
@@ -3755,8 +3755,30 @@ class Orchestrator:
         _th = local_engine.think_setting(config.gemma_model)
         if _th is not None:
             payload["think"] = _th
+        import time as _time
+        _t0 = _time.monotonic()
         try:
-            if stream_on:
+            if local_engine.routed(config.gemma_model):
+                # The planner on a vLLM server of its own (vllm_models):
+                # OpenAI chat, not streamed, so no plan.stream deltas.
+                resp = await self._http.post(
+                    local_engine.chat_endpoint(config.gemma_model),
+                    json=local_engine.build_payload(
+                        model=config.gemma_model,
+                        messages=[{"role": "user", "content": prompt}],
+                        system=system or _PLAN_SYSTEM_BASE, tools=None, stream=False,
+                        temperature=float(getattr(config, "gemma_temperature", 0.1)),
+                        num_predict=config.gemma_max_tokens,
+                    ),
+                )
+                resp.raise_for_status()
+                data = local_engine.normalize_response(resp.json())
+                tokens_in    = data.get("prompt_eval_count", 0) or 0
+                tokens_out   = data.get("eval_count", 0) or 0
+                eval_dur_ns  = 0
+                total_dur_ns = int((_time.monotonic() - _t0) * 1e9)
+                response_text = (data.get("message") or {}).get("content") or ""
+            elif stream_on:
                 # /api/generate streams as NDJSON, each line:
                 #   {"response": "...", "done": false}
                 # final line carries done: true plus prompt/eval counts.
@@ -3832,7 +3854,7 @@ class Orchestrator:
                     await self.tracker.record_usage(
                         task_id=task_id,
                         model=config.gemma_model,
-                        model_provider="ollama",
+                        model_provider="vllm" if local_engine.routed(config.gemma_model) else "ollama",
                         tokens_in=tokens_in,
                         tokens_out=tokens_out,
                         task_description=task_description,

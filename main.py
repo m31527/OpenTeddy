@@ -372,6 +372,10 @@ async def _warmup_ollama_models() -> None:
     v_model = (getattr(config, "voice_model", "") or "").strip()
     if v_model and v_model not in (g_model, q_model):
         models_to_warm.append(("voice", v_model))
+    # A model on a vLLM server of its own is loaded there already; asking
+    # Ollama for it would load a second copy.
+    import local_engine as _le
+    models_to_warm = [(r, m) for r, m in models_to_warm if not _le.routed(m)]
 
     if not models_to_warm:
         return

@@ -294,6 +294,12 @@ class Config:
     vllm_base_url: str = field(
         default_factory=lambda: os.getenv("VLLM_BASE_URL", "http://127.0.0.1:8001")
     )
+    # Models with a vLLM server of their own, as "model=url" pairs:
+    # "qwen3.6:35b=http://127.0.0.1:8001, gemma4:e4b=http://127.0.0.1:8002".
+    # A listed model goes to its server whatever local_engine says; the
+    # rest stay where they are. One vLLM server serves one model, so this
+    # is how a planner and an executor split across engines or servers.
+    vllm_models: str = field(default_factory=lambda: os.getenv("VLLM_MODELS", ""))
 
     # Claude upgrade / escalation
     anthropic_api_key: str = field(
@@ -849,6 +855,8 @@ class Config:
             self.local_engine = settings["local_engine"].lower()
         if _s("vllm_base_url"):
             self.vllm_base_url = settings["vllm_base_url"]
+        if "vllm_models" in settings:     # empty is a value: everything back on Ollama
+            self.vllm_models = (settings["vllm_models"] or "").strip()
 
         # Claude API key — only overwrite when the user actually saved one
         # in the UI. Empty string keeps the env-var fallback.

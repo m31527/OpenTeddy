@@ -105,14 +105,14 @@ async def evaluate(
                 num_ctx=int(getattr(config, "qwen_num_ctx", 16384)),
                 keep_alive=getattr(config, "ollama_keep_alive", "24h"),
             )
-            if not local_engine.is_vllm():
+            if not local_engine.is_vllm(mdl):
                 payload["format"] = "json"
                 payload["think"] = False
             async with httpx.AsyncClient(timeout=httpx.Timeout(90.0, connect=5.0)) as c:
-                resp = await c.post(local_engine.chat_endpoint(), json=payload)
+                resp = await c.post(local_engine.chat_endpoint(mdl), json=payload)
                 if resp.status_code == 400 and "think" in resp.text.lower():
                     payload.pop("think", None)
-                    resp = await c.post(local_engine.chat_endpoint(), json=payload)
+                    resp = await c.post(local_engine.chat_endpoint(mdl), json=payload)
                 resp.raise_for_status()
                 msg = local_engine.normalize_response(resp.json()).get("message") or {}
             raw = (msg.get("content") or "").strip()
