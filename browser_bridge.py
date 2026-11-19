@@ -12,6 +12,12 @@ from Settings → Chrome extension in the web UI for the web UI's person
      message) and reconnects by itself; tools (tools/browser_ext_tool.py)
      send it one request at a time and wait for the answer
 
+One Chrome can serve the same person's Telegram and the web UI: they are
+two people here (tg:<id> and WEB_PERSON), so the extension pairs with a
+code from each and keeps both tokens. Its connection then answers for
+everyone it holds a token of. (2026-11-19: the Mac's Chrome was paired from
+Settings, and every Telegram request found "no browser connected".)
+
 Only extension pages may pair or connect (Origin chrome-extension://…), so
 a web page the person visits can't. Five wrong codes void every pending
 code. Clicks that send, buy, delete … wait for the person's OK — a real
@@ -47,6 +53,7 @@ MAX_BAD_CODES = 5
 AUTH_TIMEOUT_S = 10.0
 PING_EVERY_S = 20.0
 CONFIRM_TTL_S = 180.0
+MAX_TOKENS = 8                          # pairings one extension may present at once
 EXT_ORIGINS = ("chrome-extension://", "moz-extension://")
 
 TOOL_NAMES = frozenset({"browser_tabs", "browser_open", "browser_read", "browser_click", "browser_type",
@@ -284,12 +291,16 @@ async def pair(code: str, label: str, origin: str) -> str:
 
 
 async def unlink(person: str) -> int:
-    """Forget every browser of this person and hang up on them."""
+    """Forget every browser of this person and hang up on them. A browser
+    that also serves someone else stays connected for them."""
     db = await _db()
     cur = await db.execute("DELETE FROM browser_links WHERE person=?", (person,))
     await db.commit()
     for conn in list(_conns.get(person, [])):
-        await conn.close("unpaired")
+        if len(conn.persons) > 1:
+            await conn.drop(person)
+        else:
+            await conn.close("unpaired")
     return cur.rowcount or 0
 
 
@@ -327,9 +338,24 @@ def server_address() -> str:
 
 # ── The connection ───────────────────────────────────────────────────────────
 
+def _kind(person: str) -> str:
+    """Who a pairing is for, as the extension's popup names it."""
+    return ("telegram" if person.startswith("tg:") else "web" if person == privacy.WEB_PERSON
+            else "eval" if person == EVAL_PERSON else "other")
+
+
+def _detach(conn: "_Conn", person: str) -> None:
+    live = _conns.get(person, [])
+    if conn in live:
+        live.remove(conn)
+    if not live:
+        _conns.pop(person, None)
+
+
 class _Conn:
     def __init__(self, ws: Any, person: str, token_hash: str, label: str, paused: bool) -> None:
-        self.ws, self.person, self.token_hash = ws, person, token_hash
+        self.ws = ws
+        self.persons: Dict[str, str] = {person: token_hash}   # everyone it serves → their token's hash
         self.label, self.paused = label, paused
         self.version = ""
         self.pending: Dict[str, asyncio.Future] = {}
@@ -370,12 +396,27 @@ class _Conn:
             self.paused = bool(msg.get("value"))
             if self.paused:
                 self.fail_all(PAUSED)
-                _resolve_confirm(self.person, None, False)
+                for p in list(self.persons):
+                    _resolve_confirm(p, None, False)
         elif kind == "confirm":
-            _resolve_confirm(self.person, str(msg.get("id") or ""), bool(msg.get("allow")))
-        elif kind == "forget":                     # 「解除配對」 pressed in the extension
-            await _forget_token(self.token_hash)
+            for p in list(self.persons):
+                _resolve_confirm(p, str(msg.get("id") or ""), bool(msg.get("allow")))
+        elif kind == "forget":                     # 「解除配對」 pressed in the extension: all of them
+            for h in set(self.persons.values()):
+                await _forget_token(h)
             await self.close("unpaired")
+
+    async def drop(self, person: str) -> None:
+        """Stop serving one person (they unpaired elsewhere); the extension
+        throws away just that token and stays connected for the rest."""
+        h = self.persons.pop(person, None)
+        _detach(self, person)
+        if h is None:
+            return
+        try:
+            await self.send({"type": "unpaired", "hash": h, "for": [_kind(p) for p in self.persons]})
+        except Exception:  # noqa: BLE001
+            pass
 
     async def close(self, kind: str) -> None:
         try:
@@ -400,30 +441,45 @@ async def serve(ws: Any) -> None:
         await ws.close(code=4403)
         return
     await ws.accept()
+    # Extension 0.2.5+ sends every token it holds ("tokens"); older ones one ("token").
+    found: Dict[str, Tuple[str, str]] = {}           # person → (token hash, label)
+    stale: List[str] = []                            # hashes of tokens nobody has any more
     try:
         hello = await asyncio.wait_for(ws.receive_json(), AUTH_TIMEOUT_S)
-        token = str(hello.get("token") or "") if hello.get("type") == "hello" else ""
-        person, label = await _person_for_token(token)
+        if not isinstance(hello, dict) or hello.get("type") != "hello":
+            hello = {}
+        tokens = hello.get("tokens")
+        if not isinstance(tokens, list) or not tokens:
+            tokens = [hello.get("token")]
+        for token in [str(t) for t in tokens if t][:MAX_TOKENS]:
+            person, label = await _person_for_token(token)
+            if person:
+                found.setdefault(person, (_hash(token), label))
+            else:
+                stale.append(_hash(token))
     except Exception:  # noqa: BLE001
-        person, label, hello, token = None, "", {}, ""
-    if not person:
+        hello, found = {}, {}
+    if not found:
         try:
             await ws.send_json({"type": "unpaired"})
             await ws.close(code=4401)
         except Exception:  # noqa: BLE001
             pass
         return
-    conn = _Conn(ws, person, _hash(token), str(hello.get("label") or label or "")[:60],
-                 bool(hello.get("paused")))
+    first, (h, label) = next(iter(found.items()))
+    conn = _Conn(ws, first, h, str(hello.get("label") or label or "")[:60], bool(hello.get("paused")))
+    for p, (h, _label) in found.items():
+        conn.persons[p] = h
+        _conns.setdefault(p, []).append(conn)
     have = str(hello.get("version") or "")
     conn.version = have
-    _conns.setdefault(person, []).append(conn)
-    logger.info("Browser online for %s (%s, extension %s)", person, conn.label, have or "?")
-    if EXT_VERSION and have != EXT_VERSION and person.startswith("tg:") and (person, have) not in _told_outdated:
-        _told_outdated.add((person, have))
-        asyncio.create_task(_say(person[3:], (
-            f"🧩 你的 OpenTeddy 擴充功能是舊版（{have or '?'}，最新 {EXT_VERSION}）。請到 chrome://extensions，"
-            "在 OpenTeddy 按「重新載入」↻；如果是從 zip 裝的，請重新下載 zip 解壓縮後再載入一次。")))
+    logger.info("Browser online for %s (%s, extension %s)", ", ".join(conn.persons), conn.label, have or "?")
+    for person in conn.persons:
+        if EXT_VERSION and have != EXT_VERSION and person.startswith("tg:") and (person, have) not in _told_outdated:
+            _told_outdated.add((person, have))
+            asyncio.create_task(_say(person[3:], (
+                f"🧩 你的 OpenTeddy 擴充功能是舊版（{have or '?'}，最新 {EXT_VERSION}）。請到 chrome://extensions，"
+                "在 OpenTeddy 按「重新載入」↻；如果是從 zip 裝的，請重新下載 zip 解壓縮後再載入一次。")))
 
     async def _ping() -> None:
         while True:
@@ -432,20 +488,19 @@ async def serve(ws: Any) -> None:
 
     pinger = asyncio.create_task(_ping())
     try:
-        await conn.send({"type": "welcome", "latest": EXT_VERSION})
+        await conn.send({"type": "welcome", "latest": EXT_VERSION,
+                         "for": [_kind(p) for p in conn.persons], "drop": stale})
         while True:
             await conn.handle(await ws.receive_json())
     except Exception:  # noqa: BLE001 — disconnect, bad frame
         pass
     finally:
         pinger.cancel()
-        live = _conns.get(person, [])
-        if conn in live:
-            live.remove(conn)
-        if not live:
-            _conns.pop(person, None)
+        gone = list(conn.persons)
+        for p in gone:
+            _detach(conn, p)
         conn.fail_all(NOT_CONNECTED)
-        logger.info("Browser offline for %s (%s)", person, conn.label)
+        logger.info("Browser offline for %s (%s)", ", ".join(gone), conn.label)
 
 
 # ── Is this a chore for the person's own browser? ────────────────────────────

@@ -1721,7 +1721,9 @@ class Orchestrator:
             "2. 按 Chrome 右上角的 OpenTeddy 圖示，填入：\n"
             f"   OpenTeddy 網址：{addr or '你平常打開 OpenTeddy 網頁的網址'}\n"
             f"   配對碼：{code}\n"
-            f"配對碼 {BB.CODE_TTL_S // 60} 分鐘內有效、只能用一次。\n\n"
+            f"配對碼 {BB.CODE_TTL_S // 60} 分鐘內有效、只能用一次。\n"
+            "（這個 Chrome 已經從 OpenTeddy 網頁配對過的話：按圖示，展開「也讓 Telegram 或網頁使用」，"
+            "只填配對碼就好，網頁那邊照樣能用。）\n\n"
             "連上之後可以說「看一下我 Chrome 開著的頁面」或「幫我在 momo 搜尋電風扇」。"
             "送出、購買、刪除之前我都會先問你；密碼和信用卡我不會幫你填。"
         ), True)

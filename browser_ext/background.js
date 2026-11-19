@@ -6,6 +6,10 @@
 // side). Pairing, the pause switch and the server address live in
 // chrome.storage.local; the connection state in chrome.storage.session,
 // where the popup reads it.
+//
+// One pairing per person on that OpenTeddy: the same Chrome can be paired
+// from Telegram and from the web UI's Settings, and keeps a token for each
+// ("tokens"). It sends them all when it connects and serves all of them.
 
 const VERSION = chrome.runtime.getManifest().version;
 const PAUSED_MSG = '你在擴充功能按了「暫停」，OpenTeddy 現在不能操作瀏覽器。要繼續請在擴充功能按「繼續」。';
@@ -16,14 +20,37 @@ const confirmTabs = new Map();          // question id → tab it is shown in
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-function stored() {
-  return chrome.storage.local.get({ server: '', token: '', label: '', paused: false });
+async function stored() {
+  const s = await chrome.storage.local.get({ server: '', token: '', tokens: [], label: '', paused: false });
+  // Up to 0.2.4 there was one token ("token").
+  s.tokens = Array.isArray(s.tokens) && s.tokens.length ? s.tokens : (s.token ? [s.token] : []);
+  return s;
+}
+
+async function saveTokens(tokens) {
+  // "token" stays the first one, so an older copy of the extension still connects.
+  await chrome.storage.local.set({ tokens, token: tokens[0] || '' });
+}
+
+async function sha256hex(text) {
+  const d = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+  return [...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+// The server only knows a token's SHA-256; drop the tokens it names.
+async function dropTokens(hashes) {
+  const keep = [];
+  for (const t of (await stored()).tokens) {
+    if (!hashes.includes(await sha256hex(t))) keep.push(t);
+  }
+  await saveTokens(keep);
+  return keep;
 }
 
 async function setState(state, detail = '') {
   await chrome.storage.session.set({ state, detail });
-  const { paused, token } = await stored();
-  const text = !token ? '' : paused ? '停' : state === 'connected' ? '' : '!';
+  const { paused, tokens } = await stored();
+  const text = !tokens.length ? '' : paused ? '停' : state === 'connected' ? '' : '!';
   await chrome.action.setBadgeText({ text });
   await chrome.action.setBadgeBackgroundColor({ color: paused ? '#9a6700' : '#cf222e' });
 }
@@ -75,7 +102,7 @@ function later() {
 
 async function connect() {
   const s = await stored();
-  if (!s.server || !s.token) { await setState('unpaired'); return; }
+  if (!s.server || !s.tokens.length) { await setState('unpaired'); return; }
   if (ws && ws.readyState <= WebSocket.OPEN) return;          // connecting or open
   clearTimeout(retryTimer);
   await setState('connecting');
@@ -94,12 +121,16 @@ async function connect() {
   }
   ws = sock;
   sock.onopen = () => sock.send(JSON.stringify({
-    type: 'hello', token: s.token, label: s.label || defaultLabel(), version: VERSION, paused: s.paused,
+    type: 'hello', token: s.tokens[0], tokens: s.tokens, label: s.label || defaultLabel(), version: VERSION,
+    paused: s.paused,
   }));
   sock.onmessage = (ev) => onMessage(ev.data);
   sock.onclose = async () => {
-    if (ws === sock) ws = null;
-    if ((await stored()).token) {
+    // A socket already replaced (pairing again closes the old one) says nothing:
+    // the new one may be connected by now.
+    if (ws !== sock) return;
+    ws = null;
+    if ((await stored()).tokens.length) {
       await setState('offline', '連不上 OpenTeddy，會自動重試。');
       later();
     }
@@ -111,6 +142,8 @@ async function onMessage(raw) {
   try { m = JSON.parse(raw); } catch { return; }
   if (m.type === 'welcome') {
     retry = 0;
+    if (Array.isArray(m.drop) && m.drop.length) await dropTokens(m.drop);   // unpaired while offline
+    await chrome.storage.session.set({ for: Array.isArray(m.for) ? m.for : [] });
     await setState('connected');
     // Loaded from a folder that has since been updated: pick the new files
     // up (once per version — a stale zip copy would loop otherwise).
@@ -124,8 +157,16 @@ async function onMessage(raw) {
   } else if (m.type === 'ping') {
     send({ type: 'pong' });
   } else if (m.type === 'unpaired') {
-    await chrome.storage.local.set({ token: '' });
-    await setState('unpaired', '配對已解除；需要的話請重新配對。');
+    // With "hash": one person unpaired (in Telegram or Settings) — the rest stay.
+    const left = m.hash ? await dropTokens([m.hash]) : [];
+    if (left.length) {
+      await chrome.storage.session.set({ for: Array.isArray(m.for) ? m.for : [] });
+      await setState('connected');
+    } else {
+      await saveTokens([]);
+      await chrome.storage.session.set({ for: [] });
+      await setState('unpaired', '配對已解除；需要的話請重新配對。');
+    }
   } else if (m.type === 'call') {
     let reply;
     try {
@@ -367,8 +408,12 @@ async function hideConfirm(id) {
 
 // ── Popup and page messages ──────────────────────────────────────────────────
 
+// No server given while already paired: another person's code for the same
+// OpenTeddy (Telegram and the web UI are paired separately) — added, not swapped.
 async function pair(server, code) {
-  server = normServer(server);
+  const s = await stored();
+  const adding = !String(server || '').trim() && s.tokens.length > 0 && !!s.server;
+  server = adding ? s.server : normServer(server);
   if (!server) throw new Error('請填 OpenTeddy 網址。');
   if (!/^\d{6}$/.test(String(code || '').replace(/\D/g, ''))) throw new Error('配對碼是 6 位數字。');
   const label = defaultLabel();
@@ -382,7 +427,12 @@ async function pair(server, code) {
   }
   const body = await res.json().catch(() => ({}));
   if (!res.ok || !body.token) throw new Error(body.detail || `配對失敗（${res.status}）`);
-  await chrome.storage.local.set({ server, token: body.token, label, paused: false });
+  if (adding) {
+    await saveTokens([...s.tokens, body.token].slice(-8));
+  } else {
+    await chrome.storage.local.set({ server, label, paused: false });
+    await saveTokens([body.token]);
+  }
   retry = 0;
   if (ws) { try { ws.close(); } catch { /* already closed */ } ws = null; }
   await connect();
@@ -407,15 +457,16 @@ async function onRuntimeMessage(msg, sender) {
   if (!fromPopup) return { error: 'not allowed' };
   if (msg.type === 'status') {
     const s = await stored();
-    const st = await chrome.storage.session.get({ state: 'unpaired', detail: '' });
-    return { state: st.state, detail: st.detail, server: s.server, paused: s.paused, paired: !!s.token,
-             label: s.label || defaultLabel() };
+    const st = await chrome.storage.session.get({ state: 'unpaired', detail: '', for: [] });
+    return { state: st.state, detail: st.detail, server: s.server, paused: s.paused, paired: s.tokens.length > 0,
+             label: s.label || defaultLabel(), for: st.for };
   }
   if (msg.type === 'pair') return pair(msg.server, msg.code);
   if (msg.type === 'unpair') {
     send({ type: 'forget' });
     await sleep(200);
-    await chrome.storage.local.set({ token: '' });
+    await saveTokens([]);
+    await chrome.storage.session.set({ for: [] });
     if (ws) { try { ws.close(); } catch { /* already closed */ } ws = null; }
     await setState('unpaired');
     return {};

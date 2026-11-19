@@ -28,7 +28,9 @@
                 text-decoration: underline; }
   .hint { margin: 12px 0 0; color: var(--muted); }
   .err { margin: 12px 0 0; color: var(--err); }
-  #detail { margin: 8px 0 0; color: var(--muted); }
+  #detail, #who { margin: 8px 0 0; color: var(--muted); }
+  details { margin: 12px 0 0; padding-top: 10px; border-top: 1px solid var(--line); }
+  summary { cursor: pointer; font-weight: 600; margin-bottom: 8px; }
 </style>
 </head>
 <body>
@@ -49,7 +51,14 @@
 
 <section id="paired" hidden>
   <button id="pause" type="button"></button>
+  <p id="who" hidden></p>
   <p id="detail" hidden></p>
+  <details id="more">
+    <summary>也讓 Telegram 或網頁使用</summary>
+    <label>另一組配對碼<input id="code2" inputmode="numeric" maxlength="7" placeholder="6 位數字" autocomplete="off"></label>
+    <button id="add" type="button">加入</button>
+    <p class="hint">在 Telegram 私訊 OpenTeddy 說「連接瀏覽器」，或在 OpenTeddy 網頁「設定 → Chrome 擴充功能」按「產生配對碼」，把配對碼填在這裡。原本的配對照樣能用。</p>
+  </details>
   <p class="hint">OpenTeddy 只會在你叫它做事時使用這個瀏覽器。送出、購買、刪除之前會先問你；密碼和信用卡不會幫你填。</p>
   <p class="hint"><button id="unpair" class="link" type="button">解除配對</button></p>
 </section>

@@ -17,6 +17,8 @@ the real extension (browser_ext/) loaded into Chromium, talking to the real
      from Telegram disconnects the browser
   E. who: tools only for a person who paired; commands; 好／不要 that isn't
      an answer goes on as a normal message; lane
+  G. one Chrome for Telegram and the web: a second code adds a pairing,
+     unpairing one person keeps the other, 「解除配對」 forgets them all
 
     .venv/bin/python tests/test_browser_ext.py
 """
@@ -466,6 +468,85 @@ async def test_web_pairing(base: str, port: int) -> None:
     print("  ✓ Google stays per person (never the web UI's); unpair from the page")
 
 
+async def test_shared(base: str, ws_base: str) -> None:
+    """One Chrome for the same person's Telegram and the web UI (2026-11-19:
+    paired from Settings, every Telegram request found no browser)."""
+    WEB = privacy.WEB_PERSON
+    web_tok = await B.pair(B.begin(WEB), "Mac", "chrome-extension://abc")
+    tg_tok = await B.pair(B.begin(ALICE), "Mac", "chrome-extension://abc")
+    async with websockets.connect(f"{ws_base}/browser/ws", origin="chrome-extension://abc") as w:
+        await w.send(json.dumps({"type": "hello", "token": "nope", "tokens": ["nope", web_tok, tg_tok],
+                                 "label": "Mac", "version": B.EXT_VERSION}))
+        hello = json.loads(await w.recv())
+        assert hello["type"] == "welcome" and sorted(hello["for"]) == ["telegram", "web"], hello
+        assert hello["drop"] == [B._hash("nope")], "a token nobody has is named so the extension drops it"
+        await until(lambda: B._live(WEB) and B._live(WEB) is B._live(ALICE), "one connection for both")
+        assert await B.unlink(ALICE) == 1
+        msg = json.loads(await w.recv())
+        assert msg == {"type": "unpaired", "hash": B._hash(tg_tok), "for": ["web"]}, msg
+        assert B._live(WEB) and not B._live(ALICE), "「解除瀏覽器」 in Telegram leaves the web's pairing alone"
+        await w.send(json.dumps({"type": "forget"}))
+        assert json.loads(await w.recv())["type"] == "unpaired"
+    assert await B.linked(WEB) == 0 and not B._live(WEB)
+    print("  ✓ socket: one connection serves every token it brings; unpairing one person keeps the rest; "
+          "stale tokens named back")
+
+    async with async_playwright() as pw:
+        ctx = await pw.chromium.launch_persistent_context(
+            os.path.join(TMP, "profile-shared"), channel="chromium", headless=True,
+            args=[f"--disable-extensions-except={EXT}", f"--load-extension={EXT}"])
+        try:
+            sw = ctx.service_workers[0] if ctx.service_workers else await ctx.wait_for_event("serviceworker")
+            ext_id = sw.url.split("/")[2]
+            # Paired from Settings by 0.2.4, which kept one "token": it carries over.
+            old_tok = await B.pair(B.begin(WEB), "Mac", "chrome-extension://abc")
+            await sw.evaluate("([server, token]) => chrome.storage.local.set({server, token, label: 'Mac'})"
+                              ".then(() => connect())", [base, old_tok])
+            await until(lambda: B._live(WEB), "online for the web UI with the old single token")
+            popup = await ctx.new_page()
+            popup.on("dialog", lambda d: asyncio.ensure_future(d.accept()))
+            await popup.goto(f"chrome-extension://{ext_id}/popup.html")
+            await until(lambda: _has(popup.locator("#who"), "給 OpenTeddy 網頁 使用"), "popup: for the web")
+            assert not B._live(ALICE)
+
+            await popup.click("#more summary")
+            await popup.fill("#code2", "123456")
+            await popup.click("#add")
+            await until(lambda: popup.locator("#err").is_visible(), "wrong-code error")
+            assert "配對碼不對" in await popup.locator("#err").inner_text()
+            await popup.fill("#code2", B.begin(ALICE))              # then 「連接瀏覽器」 in Telegram
+            await popup.click("#add")
+            await until(lambda: B._live(ALICE) and B._live(ALICE) is B._live(WEB), "online for both")
+            await until(lambda: _has(popup.locator("#who"), "Telegram、OpenTeddy 網頁"), "popup: for both")
+            for who, tid in ((ALICE, "t-shared-tg"), (WEB, "t-shared-web")):
+                privacy.begin(tid, who)
+                r = await T.browser_open(f"{base}/t/shop")
+                assert r["success"] and "小熊商店" in r["result"], (who, r)
+            print("  ✓ a 0.2.4 pairing carries over; a second code in the popup adds Telegram to it; both use it")
+
+            tokens = lambda: sw.evaluate("chrome.storage.local.get({tokens: []}).then(s => s.tokens.length)")
+            assert await tokens() == 2
+            await B.unlink(ALICE)
+            await until(lambda: _has(popup.locator("#who"), "給 OpenTeddy 網頁 使用"), "popup: web only")
+            assert B._live(WEB) and not B._live(ALICE) and await tokens() == 1
+            old = B._live(WEB)
+            await old.ws.close()                                       # the server restarts, say
+            await until(lambda: B._live(WEB) and B._live(WEB) is not old,
+                        "reconnected with the token that's left", secs=15)
+            assert not B._live(ALICE)
+            await until(lambda: _has(popup.locator("#state"), "已連上"), "popup connected again")
+            print("  ✓ 「解除瀏覽器」 in Telegram drops only that token; the web's stays, also after reconnecting")
+
+            await popup.reload()
+            await popup.click("#unpair")
+            await until(lambda: _has(popup.locator("#state"), "還沒配對"), "popup unpaired")
+            await until(lambda: not B._live(WEB), "hung up")
+            assert await B.linked(WEB) == 0 and await tokens() == 0
+            print("  ✓ 「解除配對」 in the extension forgets every pairing it held")
+        finally:
+            await ctx.close()
+
+
 async def test_orchestrator() -> None:
     """「連接瀏覽器」 / 「瀏覽器狀態」 / 「解除瀏覽器」 answered without a model."""
     import types
@@ -676,6 +757,7 @@ async def main() -> None:
         print("B–D. the extension in Chromium"); await test_browser(base)
         print("E. who"); await test_who(); await test_orchestrator(); await test_executor_guards()
         print("F. no Telegram: pair from Settings"); await test_web_pairing(base, port)
+        print("G. one Chrome for Telegram and the web"); await test_shared(base, f"ws://127.0.0.1:{port}")
     finally:
         server.should_exit = True
         await serving

@@ -8,6 +8,7 @@ const STATES = {
   offline: '🔴 沒有連上',
   unpaired: '⚪ 還沒配對',
 };
+const KINDS = { telegram: 'Telegram', web: 'OpenTeddy 網頁' };
 
 function host(url) {
   try { return new URL(url).host; } catch { return url; }
@@ -31,7 +32,22 @@ async function refresh() {
   $('pause').dataset.paused = s.paused ? '1' : '';
   $('detail').textContent = s.paired && s.state !== 'connected' ? s.detail : '';
   $('detail').hidden = !$('detail').textContent;
+  const who = Object.keys(KINDS).filter((k) => (s.for || []).includes(k)).map((k) => KINDS[k]);
+  $('who').textContent = s.paired && s.state === 'connected' && who.length ? `給 ${who.join('、')} 使用` : '';
+  $('who').hidden = !$('who').textContent;
 }
+
+$('add').addEventListener('click', async () => {
+  showError('');
+  $('add').disabled = true;
+  const r = await chrome.runtime.sendMessage({ type: 'pair', server: '', code: $('code2').value });
+  $('add').disabled = false;
+  if (r && r.error) showError(r.error);
+  else $('code2').value = '';
+  refresh();
+});
+
+$('code2').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('add').click(); });
 
 $('go').addEventListener('click', async () => {
   showError('');
@@ -53,7 +69,7 @@ $('pause').addEventListener('click', async () => {
 });
 
 $('unpair').addEventListener('click', async () => {
-  if (!window.confirm('解除後 OpenTeddy 就不能再使用這個瀏覽器，要重新配對才行。確定嗎？')) return;
+  if (!window.confirm('解除後 OpenTeddy（Telegram 和網頁都一樣）就不能再使用這個瀏覽器，要重新配對才行。確定嗎？')) return;
   await chrome.runtime.sendMessage({ type: 'unpair' });
   refresh();
 });
