@@ -500,9 +500,12 @@ async def test_shared(base: str, ws_base: str) -> None:
             ext_id = sw.url.split("/")[2]
             # Paired from Settings by 0.2.4, which kept one "token": it carries over.
             old_tok = await B.pair(B.begin(WEB), "Mac", "chrome-extension://abc")
+            # Two wake-ups at once (a reload fires onInstalled and the top-level call) open one socket.
             await sw.evaluate("([server, token]) => chrome.storage.local.set({server, token, label: 'Mac'})"
-                              ".then(() => connect())", [base, old_tok])
+                              ".then(() => Promise.all([connect(), connect(), connect()]))", [base, old_tok])
             await until(lambda: B._live(WEB), "online for the web UI with the old single token")
+            await asyncio.sleep(1.0)
+            assert len(B._conns.get(WEB, [])) == 1, f"{len(B._conns.get(WEB, []))} connections for one token"
             popup = await ctx.new_page()
             popup.on("dialog", lambda d: asyncio.ensure_future(d.accept()))
             await popup.goto(f"chrome-extension://{ext_id}/popup.html")
@@ -522,7 +525,7 @@ async def test_shared(base: str, ws_base: str) -> None:
                 privacy.begin(tid, who)
                 r = await T.browser_open(f"{base}/t/shop")
                 assert r["success"] and "小熊商店" in r["result"], (who, r)
-            print("  ✓ a 0.2.4 pairing carries over; a second code in the popup adds Telegram to it; both use it")
+            print("  ✓ two wake-ups at once open one socket; a 0.2.4 pairing carries over; a second code in the popup adds Telegram to it; both use it")
 
             tokens = lambda: sw.evaluate("chrome.storage.local.get({tokens: []}).then(s => s.tokens.length)")
             assert await tokens() == 2

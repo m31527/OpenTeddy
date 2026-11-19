@@ -100,10 +100,34 @@ function later() {
   retryTimer = setTimeout(connect, wait);
 }
 
+// Checked before the first await: after a reload, onInstalled and the
+// top-level connect() both got past the old check and opened two sockets
+// with the same token (seen on home, 2026-11-19).
+// A call that arrives meanwhile isn't lost: the one in progress may have
+// read the storage before a pairing was saved, so it runs once more unless
+// a socket is open or opening by then.
+let connecting = false;
+let again = false;
+
+const live = () => ws && ws.readyState <= WebSocket.OPEN;            // connecting or open
+
 async function connect() {
+  if (connecting) { again = true; return; }
+  if (live()) return;
+  connecting = true;
+  try {
+    do {
+      again = false;
+      await openSocket();
+    } while (again && !live());
+  } finally {
+    connecting = false;
+  }
+}
+
+async function openSocket() {
   const s = await stored();
   if (!s.server || !s.tokens.length) { await setState('unpaired'); return; }
-  if (ws && ws.readyState <= WebSocket.OPEN) return;          // connecting or open
   clearTimeout(retryTimer);
   await setState('connecting');
   let sock;
@@ -120,10 +144,14 @@ async function connect() {
     return;
   }
   ws = sock;
-  sock.onopen = () => sock.send(JSON.stringify({
-    type: 'hello', token: s.tokens[0], tokens: s.tokens, label: s.label || defaultLabel(), version: VERSION,
-    paused: s.paused,
-  }));
+  // The tokens as they are when the socket opens: a pairing made meanwhile is in.
+  sock.onopen = async () => {
+    const now = await stored();
+    sock.send(JSON.stringify({
+      type: 'hello', token: now.tokens[0], tokens: now.tokens, label: now.label || defaultLabel(),
+      version: VERSION, paused: now.paused,
+    }));
+  };
   sock.onmessage = (ev) => onMessage(ev.data);
   sock.onclose = async () => {
     // A socket already replaced (pairing again closes the old one) says nothing:
