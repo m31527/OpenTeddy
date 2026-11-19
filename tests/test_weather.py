@@ -155,8 +155,19 @@ async def test_orchestrator() -> None:
     assert res.status == TaskStatus.FAILED and "暫時連不上" in res.summary
     print("  ✓ 給我桃園今天的天氣 answered before planning; service down said plainly")
 
-    from tools.weather_tool import weather_forecast
+    # 11/19 on home: 「找出」 was read as the place and the task failed.
     _Client.down = False
+    W._cache.clear()
+    goal = "去 yahoo 幫我找出明天的天氣預測"
+    assert W.parse_weather_question(goal) is not None
+    try:
+        res = await Orchestrator.run(o, TaskRequest(goal=goal, session_id="s1"))
+    except RuntimeError as exc:                 # the stubbed planner: past the shortcut
+        res = exc
+    assert str(res) == "planner reached", res
+    print("  ✓ a place guess the geocoder doesn't know hands the task to the agent instead of failing it")
+
+    from tools.weather_tool import weather_forecast
     r = await weather_forecast("高雄", days=2)
     assert r["success"] and r["result"].startswith("📍 高雄")
     print("  ✓ weather_forecast tool for bigger jobs")

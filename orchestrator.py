@@ -1034,7 +1034,9 @@ class Orchestrator:
         except Exception:  # noqa: BLE001
             _wq = None
         if _wq is not None and not _again:
-            return await self._weather(req, _wq)
+            _wres = await self._weather(req, _wq)
+            if _wres is not None:
+                return _wres
 
         # ── 0b. Home: "確認 1234" and short device commands → Home Assistant ──
         # "關客廳燈" goes to HA Assist and is done in about a second; if Assist
@@ -1743,12 +1745,18 @@ class Orchestrator:
             return await self._finish_direct(req, f"❌ 自我體檢失敗：{type(exc).__name__}: {exc}", False)
         return await self._finish_direct(req, rep["text"], True)
 
-    async def _weather(self, req: TaskRequest, q: Any) -> TaskResult:
+    async def _weather(self, req: TaskRequest, q: Any) -> Optional[TaskResult]:
+        """The forecast, or None when the place can't be found: the place is
+        read out of free text by a pattern, and on 11/19 "去 yahoo 幫我找出
+        明天的天氣預測" came out as the place 「找出」 and the task failed.
+        A guess that doesn't resolve shouldn't end the task, so the normal
+        pipeline takes it (and can go to the site the person named)."""
         import weather
         try:
             return await self._finish_direct(req, await weather.forecast(q), True)
         except ValueError as exc:                       # unknown place
-            return await self._finish_direct(req, f"❌ {exc}", False)
+            logger.info("Weather shortcut steps aside (%s); the agent takes it", exc)
+            return None
         except Exception as exc:  # noqa: BLE001 — network / API trouble
             logger.warning("Weather lookup failed: %s", exc)
             msg = ("❌ 天氣服務暫時連不上（Open-Meteo），請稍後再試。" if q.zh
