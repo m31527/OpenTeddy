@@ -4229,9 +4229,13 @@ async def voice_ws(ws: WebSocket) -> None:
     import urllib.parse
     import voice_bridge
     # A WebSocket isn't held back by CORS: only OpenTeddy's own page (or a
-    # client that sends no Origin, like the CLI) may talk through it.
+    # client that sends no Origin, like the CLI) may talk through it. Behind
+    # a proxy (a Cloudflare tunnel to an https domain) the page's address is
+    # the forwarded host.
     origin = ws.headers.get("origin", "")
-    if origin and urllib.parse.urlsplit(origin).netloc.lower() != ws.headers.get("host", "").lower():
+    hosts = {ws.headers.get("host", "").lower()} | {
+        h.strip().lower() for h in ws.headers.get("x-forwarded-host", "").split(",") if h.strip()}
+    if origin and urllib.parse.urlsplit(origin).netloc.lower() not in hosts:
         await ws.close(code=4403)
         return
     await ws.accept()

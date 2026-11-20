@@ -231,6 +231,11 @@ async def test_guards() -> None:
         async with websockets.connect(f"ws://127.0.0.1:{port}/voice/ws", origin=f"http://127.0.0.1:{port}") as w:
             await w.send(json.dumps({"type": "hello"}))
             assert json.loads(await w.recv())["code"] == "not_configured"
+        # Through a tunnel to an https domain: the page is the forwarded host.
+        async with websockets.connect(f"ws://127.0.0.1:{port}/voice/ws", origin="https://teddy.example.com",
+                                      additional_headers={"X-Forwarded-Host": "teddy.example.com"}) as w:
+            await w.send(json.dumps({"type": "hello"}))
+            assert json.loads(await w.recv())["code"] == "not_configured"
     finally:
         srv.should_exit = True
         await task

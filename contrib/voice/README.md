@@ -56,15 +56,26 @@ Settings → `voice_service_url` = `http://127.0.0.1:8095`, or the 🎙 button
 asks for it.
 
 Browsers let a page use the microphone only over **https** or on
-**localhost**. To talk from another computer or a phone, start OpenTeddy
-with an https door as well:
+**localhost**. To talk from another computer or a phone, give OpenTeddy an
+https address:
 
-```bash
-OPENTEDDY_HTTPS_PORT=8443 ./run.sh --host 0.0.0.0
-```
+- **A domain of your own** (for example a Cloudflare tunnel to
+  `http://127.0.0.1:8000`) is the smooth way: a real certificate, and no
+  warning on phones. WebSockets go through. `/voice/ws` accepts the page
+  when its Origin matches the `Host` or the `X-Forwarded-Host` the tunnel
+  passes on. The audio then travels through the tunnel provider.
+- **No domain:** start OpenTeddy with an https door as well:
 
-Then open `https://<its address>:8443`. The certificate is made on that
-machine, so the browser warns once; accept it.
+  ```bash
+  OPENTEDDY_HTTPS_PORT=8443 ./run.sh --host 0.0.0.0
+  ```
+
+  Then open `https://<its address>:8443`. The certificate is made on that
+  machine, so the browser warns once; accept it.
+
+For a quick try from your own computer, an SSH tunnel to `localhost` is
+enough: `ssh -L 8000:127.0.0.1:8000 <server>`, then open
+`http://localhost:8000`.
 
 ## Environment
 
