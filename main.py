@@ -873,7 +873,11 @@ async def browser_extension_zip() -> Response:
 class _KnowledgeDatasetBody(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
-    always: Optional[bool] = None        # used in every conversation (Telegram, web UI, schedules)
+    always: Optional[bool] = None        # added to every session (off unless set)
+
+
+class _SessionKnowledgeBody(BaseModel):
+    datasets: List[str]                  # ids or names; [] = none of its own
 
 
 class _KnowledgeSearchBody(BaseModel):
@@ -903,8 +907,7 @@ async def knowledge_overview() -> dict:
 async def knowledge_create(body: _KnowledgeDatasetBody) -> dict:
     import knowledge as K
     try:
-        return await K.create_dataset(body.name or "", body.description or "",
-                                      True if body.always is None else body.always)
+        return await K.create_dataset(body.name or "", body.description or "", bool(body.always))
     except Exception as exc:  # noqa: BLE001
         raise _kb_http(exc)
 
@@ -966,6 +969,40 @@ async def knowledge_reindex(ds_id: str) -> dict:
         return await K.reindex(ds_id)
     except Exception as exc:  # noqa: BLE001
         raise _kb_http(exc)
+
+
+async def _session_knowledge(session_id: str) -> dict:
+    import knowledge as K
+    picked = await K.session_datasets(session_id)
+    every = await K.list_datasets()
+    brief = lambda d: {"id": d["id"], "name": d["name"], "items": d["items"]}  # noqa: E731
+    return {"session_id": session_id, "enabled": K.enabled(),
+            "datasets": [brief(d) for d in every if d["id"] in picked],
+            # Marked "always": in this session too, whatever it picked.
+            "always": [brief(d) for d in every if d["always"] and d["id"] not in picked]}
+
+
+@app.get("/sessions/{session_id}/knowledge")
+async def get_session_knowledge(session_id: str) -> dict:
+    """The knowledge-base datasets this session answers from."""
+    if not await tracker.get_session(session_id):
+        raise HTTPException(status_code=404, detail="Session not found")
+    return await _session_knowledge(session_id)
+
+
+@app.put("/sessions/{session_id}/knowledge")
+async def put_session_knowledge(session_id: str, body: _SessionKnowledgeBody) -> dict:
+    """Pick the datasets this session answers from (ids or names; [] =
+    none). Every task in the session uses them, unless a POST /tasks names
+    its own `datasets` for that one task."""
+    import knowledge as K
+    if not await tracker.get_session(session_id):
+        raise HTTPException(status_code=404, detail="Session not found")
+    try:
+        await K.set_session_datasets(session_id, body.datasets)
+    except Exception as exc:  # noqa: BLE001
+        raise _kb_http(exc)
+    return await _session_knowledge(session_id)
 
 
 @app.post("/knowledge/search")

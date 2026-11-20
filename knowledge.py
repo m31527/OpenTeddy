@@ -13,9 +13,11 @@ by default.
              (character pairs, BM25), plus meaning search when an
              embedding model is set (knowledge_embed_model, through
              Ollama's /api/embed); the two rankings are merged (RRF)
-  scope      a Task API call names its datasets (`datasets: [...]`);
-             every other conversation (Telegram, the web UI, schedules)
-             uses the datasets marked "always"
+  scope      each session picks its datasets (the chat box's ＋ → 知識庫,
+             PUT /sessions/{id}/knowledge); a dataset marked "always"
+             (off unless the owner ticks it) is added to every session;
+             a Task API call that names `datasets: [...]` uses exactly
+             those for that one task ([] = none)
   answers    the entries that match the person's words go into the chat
              lane's, the planner's and the executor's prompt, with the
              rule to answer from them and not to fill in what they don't
@@ -59,6 +61,11 @@ _TABLES = (
     "  ref TEXT NOT NULL DEFAULT '', title TEXT NOT NULL DEFAULT '', body TEXT NOT NULL,"
     "  embedding BLOB, embed_model TEXT NOT NULL DEFAULT '', added_at TEXT NOT NULL)",
     "CREATE INDEX IF NOT EXISTS idx_knowledge_items_ds ON knowledge_items(dataset_id, source)",
+    # Which datasets each session answers from — chosen per session (the chat
+    # box's ＋ → 知識庫, or PUT /sessions/{id}/knowledge).
+    "CREATE TABLE IF NOT EXISTS knowledge_session_datasets ("
+    "  session_id TEXT NOT NULL, dataset_id TEXT NOT NULL, added_at TEXT NOT NULL,"
+    "  PRIMARY KEY (session_id, dataset_id))",
 )
 
 _tracker: Any = None
@@ -148,7 +155,7 @@ async def resolve(refs: Iterable[str]) -> List[str]:
     return ids
 
 
-async def create_dataset(name: str, description: str = "", always: bool = True) -> Dict[str, Any]:
+async def create_dataset(name: str, description: str = "", always: bool = False) -> Dict[str, Any]:
     name = (name or "").strip()[:80]
     if not name:
         raise KnowledgeError("資料集要有名稱。")
@@ -189,6 +196,7 @@ async def update_dataset(ds_id: str, name: Optional[str] = None, description: Op
 async def delete_dataset(ds_id: str) -> bool:
     db = await _db()
     await db.execute("DELETE FROM knowledge_items WHERE dataset_id=?", (ds_id,))
+    await db.execute("DELETE FROM knowledge_session_datasets WHERE dataset_id=?", (ds_id,))
     cur = await db.execute("DELETE FROM knowledge_datasets WHERE id=?", (ds_id,))
     await db.commit()
     _changed(ds_id)
@@ -662,18 +670,44 @@ async def search(query: str, dataset_ids: Sequence[str], k: int = 5, loose: bool
 
 # ── A task's datasets, and what its prompts get ──────────────────────────────
 
-async def scope_for(context: Optional[Dict[str, Any]]) -> Tuple[str, ...]:
-    """The datasets this task may read: the ones its API call named, else
-    those marked "always". None at all while the knowledge base is off."""
+async def session_datasets(session_id: str) -> List[str]:
+    """The datasets this session picked (ids, in the order the datasets were made)."""
+    if not session_id:
+        return []
+    db = await _db()
+    async with db.execute(
+            "SELECT s.dataset_id FROM knowledge_session_datasets s JOIN knowledge_datasets d ON d.id = s.dataset_id "
+            "WHERE s.session_id=? ORDER BY d.created_at", (session_id,)) as cur:
+        return [r[0] for r in await cur.fetchall()]
+
+
+async def set_session_datasets(session_id: str, refs: Iterable[str]) -> List[str]:
+    """Replace what this session answers from; [] = none of its own."""
+    ids = await resolve(refs)
+    db = await _db()
+    await db.execute("DELETE FROM knowledge_session_datasets WHERE session_id=?", (session_id,))
+    now = _now()
+    await db.executemany("INSERT INTO knowledge_session_datasets(session_id, dataset_id, added_at) VALUES (?,?,?)",
+                         [(session_id, i, now) for i in ids])
+    await db.commit()
+    return ids
+
+
+async def scope_for(context: Optional[Dict[str, Any]], session_id: str = "") -> Tuple[str, ...]:
+    """The datasets this task may read. An API call's own `datasets` decide
+    for that task alone; otherwise the session's picks plus any dataset
+    marked "always". None at all while the knowledge base is off."""
     if not enabled():
         return ()
     ctx = context or {}
     if "knowledge_datasets" in ctx:
         return tuple(str(x) for x in (ctx.get("knowledge_datasets") or []))
     try:
-        return tuple(d["id"] for d in await list_datasets() if d["always"])
+        picked = await session_datasets(session_id)
+        always = [d["id"] for d in await list_datasets() if d["always"]]
     except RuntimeError:                              # not started (tests, CLI)
         return ()
+    return tuple(dict.fromkeys(picked + always))
 
 
 def begin(datasets: Sequence[str]) -> None:

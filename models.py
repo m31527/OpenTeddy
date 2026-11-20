@@ -354,9 +354,9 @@ class TaskCreate(BaseModel):
     )
     datasets: Optional[List[str]] = Field(
         default=None,
-        description="Knowledge-base datasets (ids or names, GET /knowledge) this task "
-                    "answers from. Omitted = the datasets marked for every conversation; "
-                    "[] = none. Needs the knowledge base turned on.",
+        description="Knowledge-base datasets (ids or names, GET /knowledge) this one task "
+                    "answers from, instead of its session's (PUT /sessions/{id}/knowledge). "
+                    "Omitted = the session's picks; [] = none. Needs the knowledge base on.",
     )
     task_id: Optional[str] = None
     priority: int = Field(default=1, ge=1, le=10)

@@ -10,7 +10,8 @@ The knowledge base (knowledge.py): datasets of FAQs / notes answers come from.
      replaces its rows; deleting a file / an entry / a dataset; meaning
      search (a fake embedder) finds a differently worded entry, and a
      failing embedder leaves keyword search working
-  C. scope: off = nothing; an API task's own datasets; else the "always" ones
+  C. scope: each session its own picks; a task's own datasets replace them;
+     "always" = every session; off = nothing
   D. prompts: the chat lane, the gate and the executor get the matching
      entries with the rule; nothing when nothing matches; the search tool
      only for a task with datasets
@@ -184,17 +185,35 @@ async def test_search() -> None:
 
 async def test_scope() -> None:
     faq = await K.get_dataset("客服 FAQ")
-    internal = await K.create_dataset("內部規定", always=False)
+    internal = await K.create_dataset("內部規定")
+    assert not faq["always"] and not internal["always"], "a new dataset is no session's until picked"
+    assert await K.scope_for({}, "s-shop") == () and await K.scope_for({}, "s-other") == ()
+    assert await K.set_session_datasets("s-shop", ["客服 FAQ"]) == [faq["id"]]
+    assert await K.scope_for({}, "s-shop") == (faq["id"],)
+    assert await K.scope_for({}, "s-other") == (), "another session isn't affected"
     config.knowledge_enabled = False
-    assert await K.scope_for({}) == () and await K.scope_for({"knowledge_datasets": [faq["id"]]}) == ()
+    assert await K.scope_for({}, "s-shop") == () and await K.scope_for({"knowledge_datasets": [faq["id"]]}) == ()
     config.knowledge_enabled = True
-    assert await K.scope_for({}) == (faq["id"],), "every conversation: the datasets marked always"
-    assert await K.scope_for({"knowledge_datasets": [internal["id"]]}) == (internal["id"],)
-    assert await K.scope_for({"knowledge_datasets": []}) == (), "an API call's [] means none"
-    await K.update_dataset(faq["id"], always=False)
-    assert await K.scope_for({}) == ()
-    await K.update_dataset(faq["id"], always=True)
-    print("  ✓ off = nothing; an API task's own datasets ([] = none); else the ones marked always")
+    assert await K.scope_for({"knowledge_datasets": [internal["id"]]}, "s-shop") == (internal["id"],), \
+        "a task's own datasets replace the session's for that task"
+    assert await K.scope_for({"knowledge_datasets": []}, "s-shop") == (), "an API call's [] means none"
+    await K.update_dataset(internal["id"], always=True)
+    assert await K.scope_for({}, "s-other") == (internal["id"],), "marked always: every session"
+    assert await K.scope_for({}, "s-shop") == (faq["id"], internal["id"])
+    await K.update_dataset(internal["id"], always=False)
+    assert await K.set_session_datasets("s-shop", []) == [] and await K.scope_for({}, "s-shop") == ()
+    tmp = await K.create_dataset("暫時")
+    await K.set_session_datasets("s-tmp", [tmp["id"]])
+    await K.delete_dataset(tmp["id"])
+    assert await K.session_datasets("s-tmp") == [], "a deleted dataset leaves the sessions that used it"
+    try:
+        await K.set_session_datasets("s-shop", ["沒有這個"])
+        raise AssertionError("unknown accepted")
+    except K.KnowledgeError:
+        pass
+    await K.set_session_datasets("s-shop", ["客服 FAQ"])
+    print("  ✓ per session: picked datasets only there; a task's own replace them ([] = none); always = every "
+          "session; off = nothing")
 
 
 # ── D ────────────────────────────────────────────────────────────────────────
@@ -306,10 +325,11 @@ async def test_api() -> None:
     from fastapi import FastAPI, HTTPException
     import main as M
     app = FastAPI()
-    app.router.routes.extend(r for r in M.app.routes if getattr(r, "path", "").startswith("/knowledge"))
+    app.router.routes.extend(r for r in M.app.routes if getattr(r, "path", "").startswith("/knowledge")
+                             or getattr(r, "path", "").endswith("/knowledge"))
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as c:
         d = (await c.post("/knowledge/datasets", json={"name": "產品"})).json()
-        assert d["id"].startswith("kb-") and d["always"] is True and d["items"] == 0, d
+        assert d["id"].startswith("kb-") and d["always"] is False and d["items"] == 0, d
         r = await c.post(f"/knowledge/datasets/{d['id']}/files",
                          files={"file": ("products.csv", "品名,價格\n電風扇,990\n".encode("cp950"), "text/csv")})
         assert r.status_code == 200 and r.json()["added"] == 1, r.text
@@ -322,12 +342,26 @@ async def test_api() -> None:
         assert (await c.post("/knowledge/search", json={"query": "x", "datasets": ["nope"]})).status_code == 400
         items = (await c.get(f"/knowledge/datasets/{d['id']}/items")).json()
         assert items["total"] == 1 and items["items"][0]["title"] == "電風扇"
-        r = await c.patch(f"/knowledge/datasets/{d['id']}", json={"always": False, "description": "價格表"})
-        assert r.json()["always"] is False and r.json()["description"] == "價格表"
+        r = await c.patch(f"/knowledge/datasets/{d['id']}", json={"always": True, "description": "價格表"})
+        assert r.json()["always"] is True and r.json()["description"] == "價格表"
+
+        # A session picks its datasets.
+        sid = "sess-kb-api"
+        await M.tracker.create_session(sid, "KB API", mode="code")
+        assert (await c.get("/sessions/nope/knowledge")).status_code == 404
+        g = (await c.get(f"/sessions/{sid}/knowledge")).json()
+        assert g["datasets"] == [] and [x["name"] for x in g["always"]] == ["產品"], g
+        r = await c.put(f"/sessions/{sid}/knowledge", json={"datasets": ["客服 FAQ"]})
+        assert r.status_code == 200 and [x["name"] for x in r.json()["datasets"]] == ["客服 FAQ"], r.text
+        assert await K.scope_for({}, sid) == ((await K.get_dataset("客服 FAQ"))["id"], d["id"])
+        assert (await c.put(f"/sessions/{sid}/knowledge", json={"datasets": ["沒有這個"]})).status_code == 400
+        assert (await c.put(f"/sessions/{sid}/knowledge", json={"datasets": []})).json()["datasets"] == []
+        await c.patch(f"/knowledge/datasets/{d['id']}", json={"always": False})
         assert (await c.delete(f"/knowledge/datasets/{d['id']}/files/products.csv")).json()["deleted"] == 1
         assert (await c.delete(f"/knowledge/datasets/{d['id']}")).json()["deleted"] == d["id"]
         assert (await c.delete(f"/knowledge/datasets/{d['id']}")).status_code == 404
-    print("  ✓ /knowledge: create, upload (Big5 CSV), refuse other types, list, search, browse, edit, delete")
+    print("  ✓ /knowledge: create (no session's yet), upload (Big5 CSV), refuse other types, list, search, "
+          "browse, edit, delete; /sessions/{id}/knowledge picks a session's datasets")
 
     from models import TaskCreate
     assert TaskCreate(intent="x", datasets=["客服 FAQ"]).datasets == ["客服 FAQ"] and TaskCreate(intent="x").datasets is None
@@ -348,6 +382,8 @@ async def main() -> None:
     tracker = Tracker(config.db_path)
     await tracker.open()
     await K.start(tracker)
+    import main as M
+    M.tracker = tracker
     config.knowledge_enabled = True
     config.knowledge_embed_model = ""
     try:

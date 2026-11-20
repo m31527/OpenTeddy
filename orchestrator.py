@@ -924,10 +924,10 @@ class Orchestrator:
             _person = None
         _privacy.begin(req.id, _person)
         # The knowledge-base datasets this task answers from (knowledge.py):
-        # the API call's own, else the ones marked for every conversation.
+        # the API call's own, else the session's picks (+ any marked always).
         try:
             import knowledge as _kb
-            _kb.begin(await _kb.scope_for(req.context))
+            _kb.begin(await _kb.scope_for(req.context, req.session_id or ""))
         except Exception:  # noqa: BLE001
             pass
 

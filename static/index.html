@@ -2041,6 +2041,14 @@
                                   font-size: 0.74rem; }
     .kb-item-meta button { margin-left: auto; }
     .kb-weaker { margin-top: 0.6rem; color: var(--text-muted); font-size: 0.78rem; }
+    .kb-chip { margin-left: 0.4rem; }
+    .kb-session-list { display: flex; flex-direction: column; gap: 0.4rem; max-height: 46vh; overflow-y: auto; }
+    .kb-session-row { display: flex; align-items: flex-start; gap: 0.6rem; padding: 0.55rem 0.7rem; border: 1px solid var(--border);
+                      border-radius: 8px; cursor: pointer; font-size: 0.85rem; }
+    .kb-session-row:hover { background: var(--bg-secondary); }
+    .kb-session-row input { margin-top: 0.2rem; accent-color: var(--text-primary); }
+    .kb-session-row .kb-meta { display: block; color: var(--text-muted); font-size: 0.75rem; margin-top: 0.1rem; }
+    .kb-session-row.locked { cursor: default; opacity: 0.8; }
     .memory-item {
       background: var(--bg-primary);
       border: 1px solid var(--border);
@@ -4170,6 +4178,18 @@
                         data-i18n-title="db_chip_disconnect_title"
                         title="Disconnect database">✕</button>
               </span>
+              <!-- Knowledge-base datasets this session answers from
+                   (knowledge.py). Shown by syncKbChip() when the session
+                   uses any; click → pick again; ✕ → stop using its own. -->
+              <span class="db-chip kb-chip" id="kbChip" hidden
+                    onclick="openKbSessionModal()"
+                    data-i18n-title="kb_chip_title" title="Knowledge base used in this session — click to change">
+                <span class="db-chip-icon">📚</span>
+                <span class="db-chip-label" id="kbChipLabel">—</span>
+                <button class="db-chip-disconnect" type="button" id="kbChipClear"
+                        onclick="event.stopPropagation(); clearKbSession()"
+                        data-i18n-title="kb_chip_clear_title" title="Stop using the knowledge base here">✕</button>
+              </span>
             </div>
 
             <!-- Attachment chips — populated as the user adds files via
@@ -4231,6 +4251,14 @@
                     <span class="attach-menu-text">
                       <span class="attach-menu-label" data-i18n="attach_db_label">Connect database</span>
                       <span class="attach-menu-hint"  data-i18n="attach_db_hint">Postgres · MySQL · SQLite · MSSQL</span>
+                    </span>
+                  </button>
+                  <button class="attach-menu-item" type="button"
+                          onclick="closeAttachMenu(); openKbSessionModal()">
+                    <span class="attach-menu-icon">📚</span>
+                    <span class="attach-menu-text">
+                      <span class="attach-menu-label" data-i18n="attach_kb_label">Knowledge base</span>
+                      <span class="attach-menu-hint"  data-i18n="attach_kb_hint">Answer from your FAQ in this session</span>
                     </span>
                   </button>
                 </div>
@@ -5664,6 +5692,25 @@
 
        Closes on backdrop click + ✕ + Esc + after a successful Connect.
        Persisted state cleared on next open(). -->
+  <!-- Which knowledge-base datasets this session answers from. -->
+  <div class="db-connect-overlay" id="kbSessionOverlay" hidden onclick="if (event.target === this) closeKbSessionModal()">
+    <div class="db-connect-dialog">
+      <button class="db-connect-dialog-close" type="button" onclick="closeKbSessionModal()" aria-label="Close" title="Close">✕</button>
+      <div class="db-connect-dialog-icon">📚</div>
+      <h2 class="db-connect-dialog-title" data-i18n="kb_session_title">Knowledge base for this session</h2>
+      <p class="db-connect-dialog-body" data-i18n="kb_session_body">Pick the datasets this session answers from. Other sessions aren't affected.</p>
+      <div id="kbSessionNote" class="kb-note" hidden></div>
+      <div id="kbSessionList" class="kb-session-list"></div>
+      <div style="display:flex; gap:0.5rem; justify-content:space-between; align-items:center; margin-top:1rem;">
+        <button class="btn-ghost" type="button" onclick="closeKbSessionModal(); switchTab('knowledge')" data-i18n="kb_manage">Manage datasets</button>
+        <div style="display:flex; gap:0.5rem;">
+          <button class="btn-ghost" type="button" onclick="closeKbSessionModal()" data-i18n="btn_cancel">Cancel</button>
+          <button class="btn-primary" type="button" id="kbSessionSave" onclick="saveKbSession()" data-i18n="btn_save">Save</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <div class="db-connect-overlay" id="dbConnectOverlay" hidden onclick="maybeCloseDbConnectModal(event)">
     <div class="db-connect-dialog">
       <button class="db-connect-dialog-close" type="button"
@@ -6329,6 +6376,7 @@
           _currentSessionId = sessions[0].id;
           localStorage.setItem('teddy.session_id', _currentSessionId);
         }
+        syncKbChip();   // startup, a new session, a deleted one: the chip follows
 
         const list = document.getElementById('sessionList');
         list.innerHTML = '';
@@ -6968,6 +7016,7 @@
       // a closure dance.
       window._currentSessionId = id;
       syncDbChip();
+      syncKbChip();
       await loadChatHistory();
       closeSidebar();
     }
@@ -10355,7 +10404,8 @@
           <input type="file" hidden multiple accept=".csv,.tsv,.txt,.md" data-kb-file="${id}" />
           <div class="kb-note" id="kbNote-${id}" hidden></div>
           <div class="kb-items" id="kbItems-${id}" hidden></div>
-          <div class="kb-api">API: <code>POST /tasks {"intent": "…", "datasets": ["${id}"]}</code></div>
+          <div class="kb-api">${escHtml(t('kb_api_session'))} <code>PUT /sessions/{session_id}/knowledge {"datasets": ["${id}"]}</code><br>
+            ${escHtml(t('kb_api_task'))} <code>POST /tasks {"intent": "…", "datasets": ["${id}"]}</code></div>
         </div>`;
     }
 
@@ -10540,6 +10590,101 @@
           ? `<p class="kb-hint">${escHtml(t('kb_try_matches'))}</p>` + d.matches.map(hit).join('')
           : `<p class="kb-hint">${escHtml(t('kb_try_none'))}</p>`)
         + (d.weaker.length ? `<div class="kb-weaker">${escHtml(t('kb_try_weaker'))}</div>` + d.weaker.map(hit).join('') : '');
+    }
+
+    // ── This session's knowledge base (PUT /sessions/{id}/knowledge) ─────
+    async function syncKbChip() {
+      const chip = document.getElementById('kbChip');
+      const label = document.getElementById('kbChipLabel');
+      if (!chip || !label) return;
+      const sid = currentSessionId();
+      if (!sid) { chip.hidden = true; return; }
+      try {
+        const r = await fetch(`${API}/sessions/${encodeURIComponent(sid)}/knowledge`);
+        if (!r.ok) { chip.hidden = true; return; }
+        const d = await r.json();
+        if (sid !== currentSessionId()) return;          // switched meanwhile
+        const names = [...d.datasets, ...d.always].map(x => x.name);
+        chip.hidden = !names.length;
+        label.textContent = names.length > 1 ? `${names[0]} +${names.length - 1}` : (names[0] || '');
+        chip.title = (d.enabled ? '' : t('kb_chip_off') + ' · ') + names.join('、');
+        chip.style.opacity = d.enabled ? '' : '0.55';
+        document.getElementById('kbChipClear').hidden = !d.datasets.length;
+      } catch (e) {
+        console.warn('[kb-chip] sync failed:', e);
+      }
+    }
+
+    async function openKbSessionModal() {
+      const overlay = document.getElementById('kbSessionOverlay');
+      const list = document.getElementById('kbSessionList');
+      const note = document.getElementById('kbSessionNote');
+      const save = document.getElementById('kbSessionSave');
+      const sid = currentSessionId();
+      overlay.hidden = false;
+      note.hidden = true;
+      list.innerHTML = `<p class="kb-hint">${escHtml(t('kb_searching'))}</p>`;
+      if (!sid) {
+        list.innerHTML = '';
+        note.hidden = false; note.classList.add('err'); note.textContent = t('db_connect_no_session') || 'Open or create a session first.';
+        save.disabled = true;
+        return;
+      }
+      let all, mine;
+      try {
+        [all, mine] = await Promise.all([_kbJson('/knowledge'), _kbJson(`/sessions/${encodeURIComponent(sid)}/knowledge`)]);
+      } catch (e) {
+        list.innerHTML = '';
+        note.hidden = false; note.classList.add('err'); note.textContent = e.message;
+        save.disabled = true;
+        return;
+      }
+      save.disabled = !all.datasets.length;
+      if (!all.enabled) {
+        note.hidden = false; note.classList.remove('err'); note.textContent = t('kb_session_off');
+      }
+      if (!all.datasets.length) {
+        list.innerHTML = `<p class="kb-hint">${escHtml(t('kb_session_none'))}</p>`;
+        return;
+      }
+      const picked = new Set(mine.datasets.map(x => x.id));
+      list.innerHTML = all.datasets.map(ds => {
+        const locked = ds.always;
+        const meta = t('kb_count', { n: ds.items }) + (locked ? ' · ' + t('kb_session_always') : '')
+                   + (ds.description ? ' · ' + ds.description : '');
+        return `<label class="kb-session-row${locked ? ' locked' : ''}">
+            <input type="checkbox" value="${escHtml(ds.id)}" ${picked.has(ds.id) || locked ? 'checked' : ''} ${locked ? 'disabled' : ''} />
+            <span><b>${escHtml(ds.name)}</b><span class="kb-meta">${escHtml(meta)}</span></span>
+          </label>`;
+      }).join('');
+    }
+
+    function closeKbSessionModal() {
+      document.getElementById('kbSessionOverlay').hidden = true;
+    }
+
+    async function saveKbSession() {
+      const sid = currentSessionId();
+      if (!sid) return;
+      const ids = [...document.querySelectorAll('#kbSessionList input[type=checkbox]:checked:not(:disabled)')].map(x => x.value);
+      try {
+        await _kbJson(`/sessions/${encodeURIComponent(sid)}/knowledge`, {
+          method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ datasets: ids }) });
+        closeKbSessionModal();
+        await syncKbChip();
+        toast(ids.length ? t('kb_session_saved', { n: ids.length }) : t('kb_session_cleared'));
+      } catch (e) { toast(e.message, true); }
+    }
+
+    async function clearKbSession() {
+      const sid = currentSessionId();
+      if (!sid) return;
+      try {
+        await _kbJson(`/sessions/${encodeURIComponent(sid)}/knowledge`, {
+          method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ datasets: [] }) });
+        await syncKbChip();
+        toast(t('kb_session_cleared'));
+      } catch (e) { toast(e.message, true); }
     }
 
     async function confirmClearMemory() {
