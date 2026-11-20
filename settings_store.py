@@ -248,6 +248,18 @@ SETTINGS_META: dict[str, dict[str, Any]] = {
                        "press 「重建語意索引」 on each dataset.",
         "type":        "model_select",
     },
+    "voice_service_url": {
+        "label":       "Voice service (optional)",
+        "description": "Address of the voice service from contrib/voice (speech recognition + "
+                       "synthesis), e.g. http://127.0.0.1:8095. Empty = no 🎙 voice mode.",
+        "type":        "text",
+    },
+    "voice_name": {
+        "label":       "Voice",
+        "description": "Which reference voice the voice service speaks with (its GET /voices). "
+                       "Empty = its first one.",
+        "type":        "text",
+    },
     "escalation_threshold": {
         "label":       "Escalation Confidence Threshold",
         "description": "Escalate to Claude when executor confidence is below this value",
@@ -619,6 +631,8 @@ def _defaults_from_config() -> dict[str, str]:
         "vllm_models":              getattr(config, "vllm_models", ""),
         "knowledge_enabled":        "true" if getattr(config, "knowledge_enabled", False) else "false",
         "knowledge_embed_model":    getattr(config, "knowledge_embed_model", ""),
+        "voice_service_url":        getattr(config, "voice_service_url", ""),
+        "voice_name":               getattr(config, "voice_name", ""),
         "escalation_threshold":     str(config.escalation_confidence_threshold),
         "escalation_failure_limit": str(config.escalation_failure_limit),
         "gemma_max_tokens":         str(config.gemma_max_tokens),
@@ -962,6 +976,10 @@ class SettingsStore:
             config.knowledge_enabled = str(settings["knowledge_enabled"]).strip().lower() in {"1", "true", "yes", "on"}
         if "knowledge_embed_model" in settings:
             config.knowledge_embed_model = (settings["knowledge_embed_model"] or "").strip()
+        if "voice_service_url" in settings:
+            config.voice_service_url = (settings["voice_service_url"] or "").strip()
+        if "voice_name" in settings:
+            config.voice_name = (settings["voice_name"] or "").strip()
         if "ollama_keep_alive" in settings and settings["ollama_keep_alive"]:
             # Non-empty only — clearing the field via the UI keeps the
             # 24h default rather than disabling keep_alive entirely
