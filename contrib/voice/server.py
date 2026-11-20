@@ -58,6 +58,11 @@ _tts_lock = threading.Lock()
 _asr_lock = threading.Lock()
 _voices: Dict[str, str] = {}            # name → CosyVoice speaker id, prepared once
 _cc: Any = None
+# CosyVoice2/3 double their stream chunk after each chunk (25 → 50 → 100
+# speech tokens) and never set it back, so from the second sentence on the
+# first sound waited for 100 tokens (~4 s of audio). Set back before each one.
+_STREAM_HOP = [25]
+_EMOJI = re.compile("[\U0001F000-\U0001FAFF☀-➿️]")   # SenseVoice marks emotions with them
 
 
 # ── Loading ──────────────────────────────────────────────────────────────────
@@ -110,6 +115,7 @@ def load() -> None:
     llm = getattr(getattr(_tts, "model", None), "llm", None)
     if llm is not None:
         llm.float()
+    _STREAM_HOP[0] = int(getattr(_tts.model, "token_hop_len", 25) or 25)
     log.info("TTS %s ready in %.1fs (rate %d)", TTS_MODEL, time.time() - t0, _tts.sample_rate)
     from funasr import AutoModel as AsrModel
     t0 = time.time()
@@ -120,6 +126,13 @@ def load() -> None:
         from opencc import OpenCC
         _cc = OpenCC("s2twp")
     _prepare_voices()
+    # The first synthesis after loading took 3 s (demo2, 11/20), later ones
+    # 1.5 s: pay it now, not in the person's first sentence.
+    if _voices:
+        t0 = time.time()
+        for _ in _speak("你好。", "", 1.0):
+            pass
+        log.info("TTS warmed up in %.1fs", time.time() - t0)
 
 
 def _voice_files() -> Dict[str, tuple]:
@@ -183,7 +196,7 @@ async def asr(request: Request) -> JSONResponse:
     raw = (res[0].get("text") if res else "") or ""
     tags = [t.lower() for t in _TAG.findall(raw)]
     from funasr.utils.postprocess_utils import rich_transcription_postprocess
-    text = rich_transcription_postprocess(raw).strip()
+    text = _EMOJI.sub("", rich_transcription_postprocess(raw)).strip()
     lang = next((t for t in tags if t in {"zh", "en", "yue", "ja", "ko", "nospeech"}), "")
     emotion = next((t for t in tags if t in {"happy", "sad", "angry", "neutral", "fearful", "disgusted", "surprised"}), "")
     if _cc is not None and lang in {"zh", "yue", ""}:
@@ -203,6 +216,7 @@ def _speak(text: str, voice: str, speed: float) -> Iterator[bytes]:
     def work() -> None:
         try:
             with _tts_lock:
+                _tts.model.token_hop_len = _STREAM_HOP[0]          # see _STREAM_HOP
                 for out in _tts.inference_zero_shot(text, "", "", zero_shot_spk_id=spk, stream=True, speed=speed):
                     wav = out["tts_speech"].squeeze(0).float().cpu().numpy()
                     q.put((np.clip(wav, -1.0, 1.0) * 32767.0).astype("<i2").tobytes())

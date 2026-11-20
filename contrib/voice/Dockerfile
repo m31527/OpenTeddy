@@ -1,10 +1,14 @@
 # OpenTeddy voice service (server.py): SenseVoice + Fun-CosyVoice3.
 #
-# Built on the vLLM image because on a DGX Spark (GB10, aarch64) its torch,
-# torchaudio and transformers are a matched set built for the GPU — pip has
-# no aarch64 CUDA wheels to mix in. Everything installed below is pinned to
-# the image's own torch / torchaudio / transformers / numpy (constraints), so
-# a dependency can't swap them out.
+# Built on the vLLM image because on a DGX Spark (GB10, aarch64) its torch
+# and torchaudio are built for the GPU — pip has no aarch64 CUDA wheels to
+# mix in. Everything installed below is held to the image's own torch /
+# torchaudio / numpy (constraints), so a dependency can't swap them out.
+#
+# transformers is NOT the image's: the vLLM base has 5.x, and CosyVoice's
+# Qwen2 on it babbled — speech-shaped sound with no words in it (demo2,
+# 11/20). CosyVoice is written against 4.51.3; diffusers 0.29 and
+# huggingface_hub < 1.0 go with it. (This image doesn't run vLLM.)
 FROM vllm/vllm-openai:v0.33.0-aarch64
 
 ENTRYPOINT []
@@ -15,14 +19,14 @@ ARG COSYVOICE_REF=main
 RUN git clone --recursive https://github.com/FunAudioLLM/CosyVoice.git /opt/CosyVoice \
  && cd /opt/CosyVoice && git checkout "$COSYVOICE_REF" && git submodule update --init --recursive
 
-RUN pip freeze | grep -iE '^(torch|torchaudio|transformers|numpy|triton|tokenizers)==' > /tmp/keep.txt && cat /tmp/keep.txt
+RUN pip freeze | grep -iE '^(torch|torchaudio|numpy|triton)==' > /tmp/keep.txt && cat /tmp/keep.txt
 # CosyVoice's inference needs (its requirements.txt also lists training —
 # deepspeed, pyworld —, the gradio demo and x86-only onnxruntime-gpu /
 # tensorrt wheels; a probe of every module found only those missing).
 RUN pip install -c /tmp/keep.txt \
-      conformer==0.3.2 "diffusers>=0.29" hydra-core==1.3.2 HyperPyYAML==1.2.3 inflect librosa \
+      conformer==0.3.2 diffusers==0.29.0 transformers==4.51.3 "huggingface_hub<1.0" hydra-core==1.3.2 HyperPyYAML==1.2.3 inflect librosa \
       "modelscope>=1.20" omegaconf onnx onnxruntime pyarrow soundfile x-transformers wetext \
-      huggingface_hub fastapi uvicorn opencc-python-reimplemented lightning gdown wget matplotlib rich \
+      fastapi uvicorn opencc-python-reimplemented lightning gdown wget matplotlib rich \
  && pip install -c /tmp/keep.txt --no-deps openai-whisper \
  && pip install -c /tmp/keep.txt tiktoken more-itertools numba
 # SenseVoice through FunASR.
