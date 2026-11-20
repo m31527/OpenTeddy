@@ -2009,6 +2009,38 @@
     }
 
     .memory-list { list-style: none; }
+
+    /* ── Knowledge tab ── */
+    .kb-hint { color: var(--text-muted); font-size: 0.8rem; line-height: 1.55; margin: 0 0 0.85rem; }
+    .kb-ds-head { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; margin-bottom: 0.5rem; }
+    .kb-ds-head h2 { margin: 0; }
+    .kb-ds-head code { font-size: 0.75rem; color: var(--text-muted); cursor: copy; }
+    .kb-ds-head .kb-count { color: var(--text-muted); font-size: 0.78rem; }
+    .kb-ds-actions { margin-left: auto; display: flex; gap: 0.4rem; flex-wrap: wrap; }
+    .kb-inline { display: flex; align-items: center; gap: 0.45rem; font-size: 0.82rem; color: var(--text-secondary);
+                 margin: 0.35rem 0 0.75rem; cursor: pointer; }
+    .kb-inline input { accent-color: var(--text-primary); }
+    .kb-files { list-style: none; margin: 0 0 0.75rem; padding: 0; }
+    .kb-files li { display: flex; align-items: center; gap: 0.6rem; padding: 0.4rem 0; border-top: 1px solid var(--border);
+                   font-size: 0.84rem; }
+    .kb-files li .kb-meta { color: var(--text-muted); font-size: 0.76rem; }
+    .kb-files li button { margin-left: auto; }
+    .kb-drop { border: 1px dashed var(--border-strong); border-radius: 10px; padding: 0.9rem; text-align: center;
+               color: var(--text-muted); font-size: 0.82rem; cursor: pointer; }
+    .kb-drop.over { background: var(--bg-secondary); color: var(--text-primary); }
+    .kb-note { margin-top: 0.6rem; font-size: 0.8rem; color: var(--text-secondary); }
+    .kb-note.err { color: var(--error); }
+    .kb-api { margin-top: 0.75rem; font-size: 0.75rem; color: var(--text-muted); }
+    .kb-api code { font-size: 0.74rem; }
+    .kb-items { margin-top: 0.75rem; }
+    .kb-item, .kb-hit { padding: 0.55rem 0.65rem; border: 1px solid var(--border); border-radius: 8px; margin-bottom: 0.45rem;
+                        font-size: 0.83rem; }
+    .kb-item-title, .kb-hit-title { font-weight: 600; color: var(--text-primary); margin-bottom: 0.2rem; }
+    .kb-item-body, .kb-hit-body { white-space: pre-wrap; color: var(--text-secondary); line-height: 1.5; }
+    .kb-item-meta, .kb-hit-meta { display: flex; gap: 0.6rem; align-items: center; margin-top: 0.3rem; color: var(--text-muted);
+                                  font-size: 0.74rem; }
+    .kb-item-meta button { margin-left: auto; }
+    .kb-weaker { margin-top: 0.6rem; color: var(--text-muted); font-size: 0.78rem; }
     .memory-item {
       background: var(--bg-primary);
       border: 1px solid var(--border);
@@ -3843,6 +3875,7 @@
                deep-links / history entries still resolve cleanly. -->
           <button class="sidebar-nav-btn" data-tab="tools"    onclick="switchTab('tools')"    data-i18n-title="nav_tools"    title="Tools"><span class="nav-icon"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21.75 6.75a4.5 4.5 0 01-4.884 4.484c-1.076-.091-2.264.071-2.95.904l-7.152 8.684a2.548 2.548 0 11-3.586-3.586l8.684-7.152c.833-.686.995-1.874.904-2.95a4.5 4.5 0 016.336-4.486l-3.276 3.276a3.004 3.004 0 002.25 2.25l3.276-3.276c.256.565.398 1.192.398 1.852z"/><path d="M4.867 19.125h.008v.008h-.008v-.008z"/></svg></span><span class="nav-label" data-i18n="nav_tools">Tools</span></button>
           <button class="sidebar-nav-btn" data-tab="memory"   onclick="switchTab('memory')"   data-i18n-title="nav_memory"   title="Memory"><span class="nav-icon"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.25 6.375c0 2.278-3.694 4.125-8.25 4.125S3.75 8.653 3.75 6.375m16.5 0c0-2.278-3.694-4.125-8.25-4.125S3.75 4.097 3.75 6.375m16.5 0v11.25c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125V6.375m16.5 0v3.75m-16.5-3.75v3.75m16.5 0v3.75C20.25 16.153 16.556 18 12 18s-8.25-1.847-8.25-4.125v-3.75m16.5 0c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125"/></svg></span><span class="nav-label" data-i18n="nav_memory">Memory</span></button>
+          <button class="sidebar-nav-btn" data-tab="knowledge" onclick="switchTab('knowledge')" data-i18n-title="nav_knowledge" title="Knowledge"><span class="nav-icon"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 6.042A8.967 8.967 0 006 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 016 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 016-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0018 18a8.967 8.967 0 00-6 2.292m0-14.25v14.25"/></svg></span><span class="nav-label" data-i18n="nav_knowledge">Knowledge</span></button>
           <!-- User-defined Agents: reusable role templates (persona +
                bound DB / workspace / privacy) you can spawn sessions from. -->
           <button class="sidebar-nav-btn" data-tab="agents"   onclick="switchTab('agents')"   data-i18n-title="nav_agents"   title="Agents"><span class="nav-icon"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 18.72a9.094 9.094 0 003.741-.479 3 3 0 00-4.682-2.72m.94 3.198l.001.031c0 .225-.012.447-.037.666A11.944 11.944 0 0112 21c-2.17 0-4.207-.576-5.963-1.584A6.062 6.062 0 016 18.719m12 0a5.971 5.971 0 00-.941-3.197m0 0A5.995 5.995 0 0012 12.75a5.995 5.995 0 00-5.058 2.772m0 0a3 3 0 00-4.681 2.72 8.986 8.986 0 003.74.477m.94-3.197a5.971 5.971 0 00-.94 3.197M15 6.75a3 3 0 11-6 0 3 3 0 016 0zm6 3a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0zm-13.5 0a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0z"/></svg></span><span class="nav-label" data-i18n="nav_agents">Agents</span></button>
@@ -4440,6 +4473,64 @@
               <span class="page-info" id="memPageInfo"></span>
               <button id="memNextBtn" class="btn-ghost btn-sm" onclick="memPage(1)">Next →</button>
             </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── KNOWLEDGE TAB (knowledge.py) ─────────────────────────────────
+           Datasets of FAQs / notes that answers come from. Upload CSV or
+           TXT, browse and delete entries, try a question. The switch and
+           the meaning-search model are settings (POST /settings). -->
+      <div id="tab-knowledge" class="tab-panel">
+        <div class="panel-header"><h1 data-i18n="panel_knowledge">Knowledge</h1></div>
+        <div class="container">
+          <div class="card">
+            <h2 data-i18n="kb_heading">Knowledge base</h2>
+            <p class="kb-hint" data-i18n="kb_desc">OpenTeddy answers from these datasets (FAQ, product notes, policies) instead of guessing. They are shared by everyone who uses this OpenTeddy — no personal data here.</p>
+            <label class="escalation-toggle">
+              <input type="checkbox" id="kbEnabled" onchange="kbSetEnabled(this.checked)" />
+              <span class="escalation-toggle-text">
+                <span class="escalation-toggle-title" data-i18n="kb_enabled_label">Use the knowledge base</span>
+                <span class="escalation-toggle-hint" data-i18n="kb_enabled_hint">Off: datasets are kept but never used. On: entries that match a question go into the answer.</span>
+              </span>
+            </label>
+            <div class="row">
+              <div class="field">
+                <label data-i18n="kb_embed_label">Meaning-search model (optional)</label>
+                <input type="text" id="kbEmbedModel" list="kbModelList" placeholder="bge-m3" autocomplete="off" spellcheck="false" />
+                <datalist id="kbModelList"></datalist>
+              </div>
+              <button class="btn-ghost" onclick="kbSaveEmbed()" data-i18n="btn_save">Save</button>
+            </div>
+            <p class="kb-hint" data-i18n="kb_embed_hint">Empty = keyword search only (works for Chinese). An Ollama embedding model such as bge-m3 also finds entries worded differently (退錢 ↔ 退款); after changing it, press "Rebuild meaning index" on each dataset.</p>
+          </div>
+
+          <div class="card">
+            <h2 data-i18n="kb_new_heading">New dataset</h2>
+            <div class="row">
+              <div class="field">
+                <label data-i18n="kb_name_label">Name</label>
+                <input type="text" id="kbNewName" data-i18n-placeholder="kb_name_placeholder" placeholder="Customer FAQ" onkeydown="if(event.key==='Enter')kbCreate()" />
+              </div>
+              <div class="field" style="flex:2">
+                <label data-i18n="kb_desc_label">Description (optional)</label>
+                <input type="text" id="kbNewDesc" onkeydown="if(event.key==='Enter')kbCreate()" />
+              </div>
+              <button class="btn-primary" onclick="kbCreate()" data-i18n="kb_create">Create</button>
+            </div>
+          </div>
+
+          <div id="kbList"></div>
+
+          <div class="card">
+            <h2 data-i18n="kb_try_heading">Try a question</h2>
+            <div class="row">
+              <div class="field" style="flex:3">
+                <input type="text" id="kbQuery" data-i18n-placeholder="kb_try_placeholder" placeholder="How many days do I have to return an item?" onkeydown="if(event.key==='Enter')kbTry()" />
+              </div>
+              <button class="btn-ghost" onclick="kbTry()" data-i18n="kb_try">Search</button>
+            </div>
+            <div id="kbTryResult"></div>
           </div>
         </div>
       </div>
@@ -8202,6 +8293,7 @@
 
       if (name === 'tools')    loadTools();   // also covers ex-'skills'
       if (name === 'memory')   loadMemory();
+      if (name === 'knowledge') loadKnowledge();
       if (name === 'agents')   loadAgents();
       if (name === 'usage')    { loadUsageSummary(); loadUsageRecords(1); loadPerfStats(); }
       if (name === 'settings') loadSettings();
@@ -10178,6 +10270,276 @@
         if (el) { el.style.opacity = '0.3'; setTimeout(() => loadMemory(_memCurrentPage), 400); }
         toast(t('memory_deleted'));
       } catch (e) { toast(e.message, true); }
+    }
+
+    // ── Knowledge base (knowledge.py) ──────────────────────────────────────
+    // Datasets of FAQ / notes; upload CSV or TXT, browse, delete, try a
+    // question. Buttons carry data-kb-act and go through one listener, so a
+    // file or dataset name is never pasted into inline JavaScript.
+    const KB_PAGE = 20;
+    const _kbOpen = {};               // dataset id → {offset, q} while its entries are shown
+    let _kbEmbed = '';
+
+    async function _kbJson(url, opts = {}) {
+      const r = await fetch(`${API}${url}`, opts);
+      let d = {};
+      try { d = await r.json(); } catch {}
+      if (!r.ok) throw new Error(d.detail || `HTTP ${r.status}`);
+      return d;
+    }
+
+    async function loadKnowledge() {
+      const list = document.getElementById('kbList');
+      if (!list) return;
+      if (!list.dataset.wired) {
+        list.dataset.wired = '1';
+        list.addEventListener('click', kbOnClick);
+        list.addEventListener('change', kbOnChange);
+        list.addEventListener('dragover', (e) => { const z = e.target.closest('.kb-drop'); if (z) { e.preventDefault(); z.classList.add('over'); } });
+        list.addEventListener('dragleave', (e) => { const z = e.target.closest('.kb-drop'); if (z) z.classList.remove('over'); });
+        list.addEventListener('drop', (e) => {
+          const z = e.target.closest('.kb-drop');
+          if (!z) return;
+          e.preventDefault();
+          z.classList.remove('over');
+          kbUpload(z.dataset.ds, e.dataTransfer.files);
+        });
+      }
+      let d;
+      try { d = await _kbJson('/knowledge'); }
+      catch (e) { list.innerHTML = `<div class="card"><div class="kb-note err">${escHtml(e.message)}</div></div>`; return; }
+      document.getElementById('kbEnabled').checked = !!d.enabled;
+      _kbEmbed = d.embed_model || '';
+      const em = document.getElementById('kbEmbedModel');
+      if (document.activeElement !== em) em.value = _kbEmbed;
+      kbLoadModels();
+      if (!d.datasets.length) {
+        list.innerHTML = `<div class="card"><p class="kb-hint" style="margin:0">${escHtml(t('kb_none'))}</p></div>`;
+        return;
+      }
+      list.innerHTML = d.datasets.map(kbCard).join('');
+      d.datasets.forEach(ds => { if (_kbOpen[ds.id]) kbItems(ds.id); });
+    }
+
+    function _kbTime(iso) {             // stored in UTC; shown in the viewer's own time
+      const d = new Date(iso || '');
+      if (isNaN(d)) return '';
+      const p = (n) => String(n).padStart(2, '0');
+      return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+    }
+
+    function kbCard(ds) {
+      const id = escHtml(ds.id);
+      const files = (ds.sources || []).map(s => `
+        <li><span>📄 ${escHtml(s.name)}</span>
+          <span class="kb-meta">${escHtml(t('kb_count', { n: s.items }))}${s.semantic ? ' · ' + escHtml(t('kb_semantic_count', { n: s.semantic })) : ''} · ${escHtml(_kbTime(s.uploaded_at))}</span>
+          <button class="btn-ghost btn-sm" data-kb-act="delete-file" data-ds="${id}" data-src="${escHtml(s.name)}">${escHtml(t('kb_delete'))}</button></li>`).join('');
+      const count = t('kb_count', { n: ds.items }) + (ds.semantic ? ' · ' + t('kb_semantic_count', { n: ds.semantic }) : '');
+      return `
+        <div class="card kb-ds">
+          <div class="kb-ds-head">
+            <h2>${escHtml(ds.name)}</h2>
+            <code data-kb-act="copy" data-val="${id}" title="${escHtml(t('kb_copy_id'))}">${id}</code>
+            <span class="kb-count">${escHtml(count)}</span>
+            <div class="kb-ds-actions">
+              <button class="btn-ghost btn-sm" data-kb-act="pick" data-ds="${id}">${escHtml(t('kb_upload'))}</button>
+              <button class="btn-ghost btn-sm" data-kb-act="browse" data-ds="${id}">${escHtml(t(_kbOpen[ds.id] ? 'kb_hide' : 'kb_browse'))}</button>
+              ${_kbEmbed && ds.items ? `<button class="btn-ghost btn-sm" data-kb-act="reindex" data-ds="${id}">${escHtml(t('kb_reindex'))}</button>` : ''}
+              <button class="btn-danger btn-sm" data-kb-act="delete-ds" data-ds="${id}" data-name="${escHtml(ds.name)}">${escHtml(t('kb_delete'))}</button>
+            </div>
+          </div>
+          ${ds.description ? `<p class="kb-hint">${escHtml(ds.description)}</p>` : ''}
+          <label class="kb-inline"><input type="checkbox" data-kb-act="always" data-ds="${id}" ${ds.always ? 'checked' : ''} /> ${escHtml(t('kb_always'))}</label>
+          ${files ? `<ul class="kb-files">${files}</ul>` : ''}
+          <div class="kb-drop" data-kb-act="pick" data-ds="${id}">${escHtml(t('kb_drop'))}</div>
+          <input type="file" hidden multiple accept=".csv,.tsv,.txt,.md" data-kb-file="${id}" />
+          <div class="kb-note" id="kbNote-${id}" hidden></div>
+          <div class="kb-items" id="kbItems-${id}" hidden></div>
+          <div class="kb-api">API: <code>POST /tasks {"intent": "…", "datasets": ["${id}"]}</code></div>
+        </div>`;
+    }
+
+    function kbNote(id, text, isErr = false) {
+      const el = document.getElementById(`kbNote-${id}`);
+      if (!el) { toast(text, isErr); return; }
+      el.hidden = !text;
+      el.textContent = text || '';
+      el.classList.toggle('err', !!isErr);
+    }
+
+    async function kbOnClick(e) {
+      const b = e.target.closest('[data-kb-act]');
+      if (!b || b.tagName === 'INPUT') return;
+      const id = b.dataset.ds;
+      const act = b.dataset.kbAct;
+      if (act === 'copy') {
+        try { await navigator.clipboard.writeText(b.dataset.val); toast(t('kb_copied')); } catch {}
+      } else if (act === 'pick') {
+        document.querySelector(`input[data-kb-file="${CSS.escape(id)}"]`)?.click();
+      } else if (act === 'browse') {
+        if (_kbOpen[id]) { delete _kbOpen[id]; loadKnowledge(); }
+        else { _kbOpen[id] = { offset: 0, q: '' }; b.textContent = t('kb_hide'); kbItems(id); }
+      } else if (act === 'reindex') {
+        b.disabled = true;
+        kbNote(id, t('kb_reindexing'));
+        try {
+          const r = await _kbJson(`/knowledge/datasets/${encodeURIComponent(id)}/reindex`, { method: 'POST' });
+          kbNote(id, t('kb_reindexed', { n: r.updated }));
+          loadKnowledge();
+        } catch (err) { kbNote(id, err.message, true); b.disabled = false; }
+      } else if (act === 'delete-ds') {
+        const ok = await showConfirm({ title: t('kb_confirm_delete_ds', { name: b.dataset.name }), body: t('kb_confirm_delete_body'),
+                                       okLabel: t('kb_delete'), cancelLabel: t('btn_cancel'), danger: true });
+        if (!ok) return;
+        try { await _kbJson(`/knowledge/datasets/${encodeURIComponent(id)}`, { method: 'DELETE' }); delete _kbOpen[id]; loadKnowledge(); }
+        catch (err) { toast(err.message, true); }
+      } else if (act === 'delete-file') {
+        const ok = await showConfirm({ title: t('kb_confirm_delete_file', { name: b.dataset.src }), body: '',
+                                       okLabel: t('kb_delete'), cancelLabel: t('btn_cancel'), danger: true });
+        if (!ok) return;
+        try {
+          await _kbJson(`/knowledge/datasets/${encodeURIComponent(id)}/files/${encodeURIComponent(b.dataset.src)}`, { method: 'DELETE' });
+          loadKnowledge();
+        } catch (err) { toast(err.message, true); }
+      } else if (act === 'delete-item') {
+        try {
+          await _kbJson(`/knowledge/items/${encodeURIComponent(b.dataset.item)}`, { method: 'DELETE' });
+          b.closest('.kb-item')?.remove();
+          loadKnowledge();
+        } catch (err) { toast(err.message, true); }
+      } else if (act === 'page') {
+        _kbOpen[id].offset = Math.max(0, _kbOpen[id].offset + Number(b.dataset.step) * KB_PAGE);
+        kbItems(id);
+      }
+    }
+
+    async function kbOnChange(e) {
+      const el = e.target;
+      if (el.dataset.kbFile) {
+        await kbUpload(el.dataset.kbFile, el.files);
+        el.value = '';
+      } else if (el.dataset.kbAct === 'always') {
+        try {
+          await _kbJson(`/knowledge/datasets/${encodeURIComponent(el.dataset.ds)}`, {
+            method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ always: el.checked }) });
+          toast(t(el.checked ? 'kb_always_on' : 'kb_always_off'));
+        } catch (err) { toast(err.message, true); el.checked = !el.checked; }
+      } else if (el.dataset.kbAct === 'item-search') {
+        _kbOpen[el.dataset.ds] = { offset: 0, q: el.value.trim() };
+        kbItems(el.dataset.ds);
+      }
+    }
+
+    async function kbUpload(id, files) {
+      const notes = [];
+      let failed = false;
+      for (const f of Array.from(files || [])) {
+        kbNote(id, t('kb_uploading', { name: f.name }));
+        const fd = new FormData();
+        fd.append('file', f, f.name);
+        try {
+          const r = await _kbJson(`/knowledge/datasets/${encodeURIComponent(id)}/files`, { method: 'POST', body: fd });
+          notes.push(t(r.replaced ? 'kb_uploaded_replaced' : 'kb_uploaded', { name: r.source, n: r.added, m: r.replaced })
+                     + (r.note ? ' ' + r.note : ''));
+        } catch (err) { failed = true; notes.push(`${f.name}：${err.message}`); }
+      }
+      await loadKnowledge();
+      kbNote(id, notes.join('\n'), failed);
+    }
+
+    async function kbItems(id) {
+      const box = document.getElementById(`kbItems-${id}`);
+      const st = _kbOpen[id];
+      if (!box || !st) return;
+      box.hidden = false;
+      let d;
+      try { d = await _kbJson(`/knowledge/datasets/${encodeURIComponent(id)}/items?offset=${st.offset}&limit=${KB_PAGE}&q=${encodeURIComponent(st.q)}`); }
+      catch (err) { box.innerHTML = `<div class="kb-note err">${escHtml(err.message)}</div>`; return; }
+      const items = d.items.map(it => `
+        <div class="kb-item">
+          ${it.title ? `<div class="kb-item-title">${escHtml(it.title)}</div>` : ''}
+          <div class="kb-item-body">${escHtml(it.body)}</div>
+          <div class="kb-item-meta"><span>${escHtml(it.source)} · ${escHtml(it.ref)}</span>
+            <button class="btn-ghost btn-sm" data-kb-act="delete-item" data-item="${Number(it.id)}">${escHtml(t('kb_delete'))}</button></div>
+        </div>`).join('');
+      const from = d.total ? st.offset + 1 : 0, to = Math.min(st.offset + KB_PAGE, d.total);
+      const focused = document.activeElement && document.activeElement.dataset.kbAct === 'item-search';
+      box.innerHTML = `
+        <div class="row" style="margin-bottom:0.6rem">
+          <div class="field" style="flex:3"><input type="text" data-kb-act="item-search" data-ds="${escHtml(id)}"
+               value="${escHtml(st.q)}" placeholder="${escHtml(t('kb_filter_placeholder'))}" /></div>
+        </div>
+        ${items || `<p class="kb-hint">${escHtml(t('kb_no_items'))}</p>`}
+        ${d.total > KB_PAGE ? `<div class="pagination">
+          <button class="btn-ghost btn-sm" data-kb-act="page" data-ds="${escHtml(id)}" data-step="-1" ${st.offset ? '' : 'disabled'}>← ${escHtml(t('kb_prev'))}</button>
+          <span class="page-info">${from}–${to} / ${d.total}</span>
+          <button class="btn-ghost btn-sm" data-kb-act="page" data-ds="${escHtml(id)}" data-step="1" ${to < d.total ? '' : 'disabled'}>${escHtml(t('kb_next'))} →</button>
+        </div>` : ''}`;
+      if (focused) box.querySelector('input[data-kb-act="item-search"]')?.focus();
+    }
+
+    async function kbCreate() {
+      const name = document.getElementById('kbNewName').value.trim();
+      const description = document.getElementById('kbNewDesc').value.trim();
+      if (!name) { toast(t('kb_name_needed'), true); return; }
+      try {
+        await _kbJson('/knowledge/datasets', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                               body: JSON.stringify({ name, description }) });
+        document.getElementById('kbNewName').value = '';
+        document.getElementById('kbNewDesc').value = '';
+        loadKnowledge();
+      } catch (err) { toast(err.message, true); }
+    }
+
+    async function _kbSetting(body) {
+      const r = await fetch(`${API}/settings`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      const d = await r.json();
+      if (!d.success) throw new Error(d.error || 'settings');
+    }
+
+    async function kbSetEnabled(on) {
+      try { await _kbSetting({ knowledge_enabled: on ? 'true' : 'false' }); toast(t(on ? 'kb_enabled_on' : 'kb_enabled_off')); }
+      catch (err) { toast(err.message, true); document.getElementById('kbEnabled').checked = !on; }
+    }
+
+    async function kbSaveEmbed() {
+      const v = document.getElementById('kbEmbedModel').value.trim();
+      try { await _kbSetting({ knowledge_embed_model: v }); toast(t('kb_embed_saved')); loadKnowledge(); }
+      catch (err) { toast(err.message, true); }
+    }
+
+    async function kbLoadModels() {
+      const dl = document.getElementById('kbModelList');
+      if (!dl || dl.dataset.loaded) return;
+      try {
+        const d = await (await fetch(`${API}/settings/ollama/models`)).json();
+        const names = (d.data?.models ?? []).map(m => m.name || m).filter(Boolean);
+        dl.innerHTML = ['bge-m3', 'qwen3-embedding:0.6b', ...names.filter(n => /embed|bge|e5|minilm|gte/i.test(n))]
+          .filter((v, i, a) => a.indexOf(v) === i).map(n => `<option value="${escHtml(n)}"></option>`).join('');
+        dl.dataset.loaded = '1';
+      } catch {}
+    }
+
+    async function kbTry() {
+      const q = document.getElementById('kbQuery').value.trim();
+      const out = document.getElementById('kbTryResult');
+      if (!q) return;
+      out.innerHTML = `<p class="kb-hint">${escHtml(t('kb_searching'))}</p>`;
+      let d;
+      try { d = await _kbJson('/knowledge/search', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                                       body: JSON.stringify({ query: q, k: 5 }) }); }
+      catch (err) { out.innerHTML = `<div class="kb-note err">${escHtml(err.message)}</div>`; return; }
+      const hit = (h) => `
+        <div class="kb-hit">
+          ${h.title ? `<div class="kb-hit-title">${escHtml(h.title)}</div>` : ''}
+          <div class="kb-hit-body">${escHtml(h.body)}</div>
+          <div class="kb-hit-meta"><span>${escHtml(h.dataset)} · ${escHtml(h.source)} ${escHtml(h.ref)}</span>
+            <span>${escHtml(t('kb_match', { k: Math.round(h.keyword_match * 100), m: Math.round(h.meaning_match * 100) }))}</span></div>
+        </div>`;
+      out.innerHTML = (d.matches.length
+          ? `<p class="kb-hint">${escHtml(t('kb_try_matches'))}</p>` + d.matches.map(hit).join('')
+          : `<p class="kb-hint">${escHtml(t('kb_try_none'))}</p>`)
+        + (d.weaker.length ? `<div class="kb-weaker">${escHtml(t('kb_try_weaker'))}</div>` + d.weaker.map(hit).join('') : '');
     }
 
     async function confirmClearMemory() {

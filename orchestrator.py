@@ -923,6 +923,13 @@ class Orchestrator:
         except Exception:  # noqa: BLE001
             _person = None
         _privacy.begin(req.id, _person)
+        # The knowledge-base datasets this task answers from (knowledge.py):
+        # the API call's own, else the ones marked for every conversation.
+        try:
+            import knowledge as _kb
+            _kb.begin(await _kb.scope_for(req.context))
+        except Exception:  # noqa: BLE001
+            pass
 
         # ── 0⁰. Google account: "連結我的 Google", the pasted-back address, "解除 Google" ──
         try:
@@ -2184,9 +2191,11 @@ class Orchestrator:
                        "請換個方法或工具回答，不要重複上一個回答。）")
         # What changes per task (time, memory, recent turns) goes here, not
         # in the system prompt, so the system prefix is reused across plans.
+        import knowledge as _kb
         prompt = (
             _clock_note()
             + (memory_ctx + "\n\n" if memory_ctx else "")
+            + await _kb.block_for(req.goal)
             + (recent + "\n\n" if recent else "")
             + f"Goal: {req.goal}\n\n"
             f"Available skills: {json.dumps(skill_names)}\n\n"
@@ -3140,7 +3149,9 @@ class Orchestrator:
         # Stream so the user gets tokens as they generate — same UX as
         # the full-loop chat-mode finalize step.
         recent = await self._recent_turns_block(req)
-        prompt = (_clock_note() + mem_block
+        import knowledge as _kb
+        kb_block = await _kb.block_for(req.goal)
+        prompt = (_clock_note() + mem_block + kb_block
                   + ((recent + "\n\n使用者現在說：" + req.goal) if recent else req.goal))
         if gated:
             # Nobody picked a lane for this message: the model answers it,

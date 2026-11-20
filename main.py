@@ -16,7 +16,7 @@ import uuid
 import httpx
 from contextlib import asynccontextmanager
 from datetime import datetime
-from typing import Any, AsyncGenerator, Optional
+from typing import Any, AsyncGenerator, List, Optional
 
 from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
@@ -587,6 +587,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:  # type: ignore[type-arg]
         await _start_browser(tracker)
     except Exception as exc:  # noqa: BLE001
         logger.warning("Browser pairing startup failed (non-fatal): %s", exc)
+    # Knowledge base datasets (knowledge.py) — the tables exist even while it's off.
+    try:
+        from knowledge import start as _start_knowledge
+        await _start_knowledge(tracker)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Knowledge base startup failed (non-fatal): %s", exc)
     # Event triggers: typhoon, upcoming meeting, device offline, important mail.
     try:
         from watchers import start as _start_watchers
@@ -857,6 +863,126 @@ async def browser_extension_zip() -> Response:
                 zf.write(full, os.path.join("openteddy-extension", os.path.relpath(full, root)))
     return Response(buf.getvalue(), media_type="application/zip",
                     headers={"Content-Disposition": 'attachment; filename="openteddy-extension.zip"'})
+
+
+# ── Knowledge base (knowledge.py): datasets of FAQs / notes answers come from ──
+# Managed from the web UI's 知識庫 tab or these endpoints, also while the
+# knowledge base is off (it's then kept but never used). A task names its
+# datasets with POST /tasks {"datasets": [...]}.
+
+class _KnowledgeDatasetBody(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    always: Optional[bool] = None        # used in every conversation (Telegram, web UI, schedules)
+
+
+class _KnowledgeSearchBody(BaseModel):
+    query: str
+    datasets: Optional[List[str]] = None  # ids or names; default every dataset
+    k: int = 5
+
+
+def _kb_http(exc: Exception) -> HTTPException:
+    import knowledge as K
+    if isinstance(exc, K.KnowledgeError):
+        return HTTPException(status_code=400, detail=str(exc))
+    logger.exception("knowledge endpoint failed")
+    return HTTPException(status_code=500, detail=f"{type(exc).__name__}: {exc}")
+
+
+@app.get("/knowledge")
+async def knowledge_overview() -> dict:
+    """On or off, the meaning-search model, and every dataset with its files."""
+    import knowledge as K
+    return {"enabled": K.enabled(), "embed_model": K.embed_model(), "datasets": await K.list_datasets(),
+            "file_types": list(K.EXTENSIONS), "max_file_mb": K.MAX_FILE_BYTES // (1024 * 1024),
+            "max_items": K.MAX_ITEMS_PER_DATASET}
+
+
+@app.post("/knowledge/datasets", status_code=201)
+async def knowledge_create(body: _KnowledgeDatasetBody) -> dict:
+    import knowledge as K
+    try:
+        return await K.create_dataset(body.name or "", body.description or "",
+                                      True if body.always is None else body.always)
+    except Exception as exc:  # noqa: BLE001
+        raise _kb_http(exc)
+
+
+@app.patch("/knowledge/datasets/{ds_id}")
+async def knowledge_update(ds_id: str, body: _KnowledgeDatasetBody) -> dict:
+    import knowledge as K
+    try:
+        return await K.update_dataset(ds_id, body.name, body.description, body.always)
+    except Exception as exc:  # noqa: BLE001
+        raise _kb_http(exc)
+
+
+@app.delete("/knowledge/datasets/{ds_id}")
+async def knowledge_delete(ds_id: str) -> dict:
+    import knowledge as K
+    if not await K.delete_dataset(ds_id):
+        raise HTTPException(status_code=404, detail="dataset not found")
+    return {"deleted": ds_id}
+
+
+@app.post("/knowledge/datasets/{ds_id}/files")
+async def knowledge_upload(ds_id: str, file: UploadFile = File(...)) -> dict:
+    """A .csv / .tsv / .txt / .md file into the dataset. The same file name
+    again replaces that file's rows."""
+    import knowledge as K
+    try:
+        data = await file.read(K.MAX_FILE_BYTES + 1)
+        return await K.add_file(ds_id, file.filename or "upload.txt", data)
+    except Exception as exc:  # noqa: BLE001
+        raise _kb_http(exc)
+
+
+@app.delete("/knowledge/datasets/{ds_id}/files/{source:path}")
+async def knowledge_delete_file(ds_id: str, source: str) -> dict:
+    import knowledge as K
+    return {"deleted": await K.delete_source(ds_id, source)}
+
+
+@app.get("/knowledge/datasets/{ds_id}/items")
+async def knowledge_items(ds_id: str, offset: int = 0, limit: int = 50, q: str = "") -> dict:
+    import knowledge as K
+    return await K.list_items(ds_id, offset=offset, limit=limit, q=q)
+
+
+@app.delete("/knowledge/items/{item_id}")
+async def knowledge_delete_item(item_id: int) -> dict:
+    import knowledge as K
+    if not await K.delete_item(item_id):
+        raise HTTPException(status_code=404, detail="entry not found")
+    return {"deleted": item_id}
+
+
+@app.post("/knowledge/datasets/{ds_id}/reindex")
+async def knowledge_reindex(ds_id: str) -> dict:
+    """Meaning-search vectors for the entries that lack them (after the model changed)."""
+    import knowledge as K
+    try:
+        return await K.reindex(ds_id)
+    except Exception as exc:  # noqa: BLE001
+        raise _kb_http(exc)
+
+
+@app.post("/knowledge/search")
+async def knowledge_search_endpoint(body: _KnowledgeSearchBody) -> dict:
+    """What a question finds — the entries a task's prompt would get
+    ("matches") and the weaker ones the agent's search tool would also see."""
+    import knowledge as K
+    try:
+        ids = (await K.resolve(body.datasets) if body.datasets
+               else [d["id"] for d in await K.list_datasets()])
+        strong = await K.search(body.query, ids, k=body.k)
+        loose = await K.search(body.query, ids, k=body.k, loose=True)
+    except Exception as exc:  # noqa: BLE001
+        raise _kb_http(exc)
+    seen = {h.id for h in strong}
+    return {"matches": [h.as_dict() for h in strong],
+            "weaker": [h.as_dict() for h in loose if h.id not in seen]}
 
 
 _NO_CACHE_HEADERS = {
@@ -2074,6 +2200,7 @@ async def _start_task(
     require_approval: Optional[bool] = None,
     auto_lane: bool = False,
     workspace_dir: Optional[str] = None,
+    datasets: Optional[list] = None,
 ) -> tuple[str, Optional[str], Optional["asyncio.Task"], Optional[str]]:
     """Validate, bind, and launch a task WITHOUT waiting for it.
 
@@ -2096,6 +2223,19 @@ async def _start_task(
     if block_msg:
         raise HTTPException(status_code=400, detail=block_msg)
     task_id = task_id or str(uuid.uuid4())
+
+    # ── Knowledge-base datasets the caller named (knowledge.py) ──────────
+    kb_ids: Optional[list] = None
+    if datasets is not None:
+        import knowledge as _kb
+        if not _kb.enabled():
+            raise HTTPException(status_code=400,
+                                detail="The knowledge base is off (POST /settings {\"knowledge_enabled\": true}, "
+                                       "or the 知識庫 tab).")
+        try:
+            kb_ids = await _kb.resolve(datasets)
+        except _kb.KnowledgeError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
 
     # ── Project directory: run inside an existing checkout ───────────────
     # `openteddy run "…" --dir .` — the session's workspace is pinned to
@@ -2188,6 +2328,8 @@ async def _start_task(
     ctx = dict(context or {})
     if privacy:
         ctx["privacy"] = privacy
+    if kb_ids is not None:
+        ctx["knowledge_datasets"] = kb_ids
     # The delivery eval's own browser person (browser_bridge.py). The key is
     # checked and dropped here, so it is never stored with the task; a
     # caller reusing an eval task's id without the key doesn't inherit it.
@@ -2354,6 +2496,7 @@ async def create_task(body: _TaskCreate) -> _TaskAccepted:
         require_approval=body.require_approval,
         auto_lane=body.auto_lane,
         workspace_dir=body.workspace_dir,
+        datasets=body.datasets,
     )
     if shortcut is not None:
         return _TaskAccepted(task_id=task_id, session_id=session_id,

@@ -876,7 +876,7 @@ class Executor:
         self._exit_reason.pop(subtask_id, None)
         _internal_ctx_keys = (
             "agent_persona", "db_context", "db_schema", "prior_results",
-            "previous_attempt_failed", "skill_guides", "skills",
+            "previous_attempt_failed", "skill_guides", "skills", "knowledge_datasets",
         )
         prior_block = ""
         # A retry says what went wrong last time. Without it every retry
@@ -908,6 +908,9 @@ class Executor:
                 "a detail the person gave — a file name, an argument, a "
                 "number, a format, a rule — follow the person's words.\n\n"
             )
+        # Knowledge-base entries that match the person's words (knowledge.py).
+        import knowledge as _kb
+        kb_block = await _kb.block_for(_request or description)
         from orchestrator import _clock_note
         messages: List[Dict[str, Any]] = [
             {
@@ -916,9 +919,11 @@ class Executor:
                     _clock_note()
                     + workspace_block
                     + request_block
+                    + kb_block
                     + prior_block
                     + f"Task: {description}\n\n"
                     f"Context: {json.dumps(_public_ctx, ensure_ascii=False)[:2000]}"
+                    + (_kb.REMINDER if _kb.current() else "")
                 ),
             }
         ]
@@ -937,7 +942,8 @@ class Executor:
         # model planning around tools it will never be allowed to run.
         _scope = [str(x) for x in ((context or {}).get("allowed_tools") or [])] or None
         if mode == "chat":
-            tools = self.registry.get_schemas_by_names(["web_search"])
+            import knowledge as _kb
+            tools = self.registry.get_schemas_by_names(["web_search"] + (list(_kb.TOOL_NAMES) if _kb.current() else []))
         elif _scope:
             tools = self.registry.get_schemas_by_names(_scope)
         else:
@@ -958,6 +964,13 @@ class Executor:
             _hide = await _b_unusable()
             if _hide and tools:
                 tools = [t for t in tools if (t.get("function") or {}).get("name") not in _hide]
+        except Exception:  # noqa: BLE001
+            pass
+        # The knowledge base's search only for a task that has datasets.
+        try:
+            import knowledge as _kb
+            if tools and not _kb.current():
+                tools = [t for t in tools if (t.get("function") or {}).get("name") not in _kb.TOOL_NAMES]
         except Exception:  # noqa: BLE001
             pass
         objective_failure_seen = False

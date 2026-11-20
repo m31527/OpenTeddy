@@ -301,6 +301,14 @@ class Config:
     # is how a planner and an executor split across engines or servers.
     vllm_models: str = field(default_factory=lambda: os.getenv("VLLM_MODELS", ""))
 
+    # Knowledge base (knowledge.py): off until the owner turns it on. The
+    # embedding model (an Ollama one, e.g. bge-m3) adds meaning search;
+    # empty = keyword search only.
+    knowledge_enabled: bool = field(
+        default_factory=lambda: os.getenv("KNOWLEDGE_ENABLED", "false").strip().lower()
+        in {"1", "true", "yes", "on"})
+    knowledge_embed_model: str = field(default_factory=lambda: os.getenv("KNOWLEDGE_EMBED_MODEL", "").strip())
+
     # Claude upgrade / escalation
     anthropic_api_key: str = field(
         default_factory=lambda: os.getenv("ANTHROPIC_API_KEY", "")
@@ -857,6 +865,10 @@ class Config:
             self.vllm_base_url = settings["vllm_base_url"]
         if "vllm_models" in settings:     # empty is a value: everything back on Ollama
             self.vllm_models = (settings["vllm_models"] or "").strip()
+        if "knowledge_enabled" in settings:
+            self.knowledge_enabled = str(settings["knowledge_enabled"]).strip().lower() in {"1", "true", "yes", "on"}
+        if "knowledge_embed_model" in settings:
+            self.knowledge_embed_model = (settings["knowledge_embed_model"] or "").strip()
 
         # Claude API key — only overwrite when the user actually saved one
         # in the UI. Empty string keeps the env-var fallback.

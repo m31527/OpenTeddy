@@ -235,6 +235,19 @@ SETTINGS_META: dict[str, dict[str, Any]] = {
                        "the others stay on Ollama. Empty = none.",
         "type":        "text",
     },
+    "knowledge_enabled": {
+        "label":       "Knowledge base",
+        "description": "Answer from the datasets in the 知識庫 tab (FAQ, product notes, policies). "
+                       "Off = they are kept but never used.",
+        "type":        "bool",
+    },
+    "knowledge_embed_model": {
+        "label":       "Knowledge meaning-search model (optional)",
+        "description": "An Ollama embedding model, e.g. bge-m3, so a question finds entries worded "
+                       "differently (退錢 ↔ 退款). Empty = keyword search only. After changing it, "
+                       "press 「重建語意索引」 on each dataset.",
+        "type":        "model_select",
+    },
     "escalation_threshold": {
         "label":       "Escalation Confidence Threshold",
         "description": "Escalate to Claude when executor confidence is below this value",
@@ -604,6 +617,8 @@ def _defaults_from_config() -> dict[str, str]:
         "local_engine":             getattr(config, "local_engine", "ollama"),
         "vllm_base_url":            getattr(config, "vllm_base_url", "http://127.0.0.1:8001"),
         "vllm_models":              getattr(config, "vllm_models", ""),
+        "knowledge_enabled":        "true" if getattr(config, "knowledge_enabled", False) else "false",
+        "knowledge_embed_model":    getattr(config, "knowledge_embed_model", ""),
         "escalation_threshold":     str(config.escalation_confidence_threshold),
         "escalation_failure_limit": str(config.escalation_failure_limit),
         "gemma_max_tokens":         str(config.gemma_max_tokens),
@@ -943,6 +958,10 @@ class SettingsStore:
             config.vllm_base_url = settings["vllm_base_url"].strip()
         if "vllm_models" in settings:
             config.vllm_models = (settings["vllm_models"] or "").strip()
+        if "knowledge_enabled" in settings:
+            config.knowledge_enabled = str(settings["knowledge_enabled"]).strip().lower() in {"1", "true", "yes", "on"}
+        if "knowledge_embed_model" in settings:
+            config.knowledge_embed_model = (settings["knowledge_embed_model"] or "").strip()
         if "ollama_keep_alive" in settings and settings["ollama_keep_alive"]:
             # Non-empty only — clearing the field via the UI keeps the
             # 24h default rather than disabling keep_alive entirely

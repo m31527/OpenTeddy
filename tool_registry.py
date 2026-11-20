@@ -569,6 +569,9 @@ class ToolRegistry:
         # (agent_skills/) mid-task.
         from tools.page_look_tool import PAGE_LOOK_TOOLS
         from tools.read_guide_tool import READ_GUIDE_TOOLS
+        # The owner's knowledge base (knowledge.py) — only for a task that has
+        # datasets, so it goes with the hidden-for-some tools at the end.
+        from tools.knowledge_tool import KNOWLEDGE_TOOLS
 
         for fn, schema, risk in (
             SHELL_TOOLS + FILE_TOOLS + HTTP_TOOLS
@@ -581,7 +584,7 @@ class ToolRegistry:
             + PAGE_LOOK_TOOLS + READ_GUIDE_TOOLS
             # Hidden for people without Google / a paired browser — last, so
             # leaving them out keeps the cached prompt prefix.
-            + PERSONAL_TOOLS + BROWSER_EXT_TOOLS
+            + PERSONAL_TOOLS + BROWSER_EXT_TOOLS + KNOWLEDGE_TOOLS
         ):
             self.register(fn, schema, risk)
 

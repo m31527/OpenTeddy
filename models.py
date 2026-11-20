@@ -352,6 +352,12 @@ class TaskCreate(BaseModel):
                     "call) even in a code/analytic session. Ignored when "
                     "`mode` is given.",
     )
+    datasets: Optional[List[str]] = Field(
+        default=None,
+        description="Knowledge-base datasets (ids or names, GET /knowledge) this task "
+                    "answers from. Omitted = the datasets marked for every conversation; "
+                    "[] = none. Needs the knowledge base turned on.",
+    )
     task_id: Optional[str] = None
     priority: int = Field(default=1, ge=1, le=10)
 
