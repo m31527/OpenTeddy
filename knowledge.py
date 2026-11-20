@@ -565,7 +565,12 @@ class Hit:
 
 
 COVERAGE_MIN = 0.25          # share of the question's (weighted) words an entry must contain
-SIMILARITY_MIN = 0.62        # cosine for a meaning match to count on its own
+# Cosine for a meaning match to count on its own, calibrated on bge-m3 (home,
+# 11/20, an 8-row FAQ): 11 paraphrases scored 0.535–0.814 on their entry
+# (退錢 ↔ 退款 0.81, 能刷卡嗎 ↔ 付款方式 0.65), 10 unrelated questions 0.33–0.52
+# (「你好」 0.52). Another embedding model would need its own numbers.
+SIMILARITY_MIN = 0.58
+SIMILARITY_LOOSE = 0.50      # what the agent's search tool also gets
 
 
 async def search(query: str, dataset_ids: Sequence[str], k: int = 5, loose: bool = False) -> List[Hit]:
@@ -638,7 +643,7 @@ async def search(query: str, dataset_ids: Sequence[str], k: int = 5, loose: bool
             logger.info("Knowledge: meaning search skipped: %s", exc)
 
     cov_min = 0.18 if loose else COVERAGE_MIN
-    sim_min = 0.45 if loose else SIMILARITY_MIN
+    sim_min = SIMILARITY_LOOSE if loose else SIMILARITY_MIN
     keep = ({i for i, (_, c) in kw.items() if c >= cov_min and (loose or i in strong_kw)}
             | {i for i, s in sim.items() if s >= sim_min})
     if not keep:
