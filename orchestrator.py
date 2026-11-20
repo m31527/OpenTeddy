@@ -3151,7 +3151,10 @@ class Orchestrator:
         recent = await self._recent_turns_block(req)
         import knowledge as _kb
         kb_block = await _kb.block_for(req.goal)
-        prompt = (_clock_note() + mem_block + kb_block
+        # The 🎙 voice mode reads the answer aloud (voice_bridge.py).
+        voice_note = ("（這是語音對話，你的回答會被念出來：用口語，一到三句話，不要條列、表格、"
+                      "markdown、emoji 或網址。）\n" if (req.context or {}).get("voice") else "")
+        prompt = (_clock_note() + mem_block + kb_block + voice_note
                   + ((recent + "\n\n使用者現在說：" + req.goal) if recent else req.goal))
         if gated:
             # Nobody picked a lane for this message: the model answers it,

@@ -309,6 +309,11 @@ class Config:
         in {"1", "true", "yes", "on"})
     knowledge_embed_model: str = field(default_factory=lambda: os.getenv("KNOWLEDGE_EMBED_MODEL", "").strip())
 
+    # Voice mode (voice_bridge.py): the voice service (contrib/voice — speech
+    # recognition + synthesis) on a machine of its own. Empty = no voice mode.
+    voice_service_url: str = field(default_factory=lambda: os.getenv("VOICE_SERVICE_URL", "").strip())
+    voice_name: str = field(default_factory=lambda: os.getenv("VOICE_NAME", "").strip())
+
     # Claude upgrade / escalation
     anthropic_api_key: str = field(
         default_factory=lambda: os.getenv("ANTHROPIC_API_KEY", "")
@@ -869,6 +874,10 @@ class Config:
             self.knowledge_enabled = str(settings["knowledge_enabled"]).strip().lower() in {"1", "true", "yes", "on"}
         if "knowledge_embed_model" in settings:
             self.knowledge_embed_model = (settings["knowledge_embed_model"] or "").strip()
+        if "voice_service_url" in settings:
+            self.voice_service_url = (settings["voice_service_url"] or "").strip()
+        if "voice_name" in settings:
+            self.voice_name = (settings["voice_name"] or "").strip()
 
         # Claude API key — only overwrite when the user actually saved one
         # in the UI. Empty string keeps the env-var fallback.

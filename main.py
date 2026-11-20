@@ -660,7 +660,22 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:  # type: ignore[type-arg]
         # misconfigured fleet node still serves its local UI / API.
         logger.warning("Fleet startup skipped/failed (core unaffected): %s", exc)
 
+    # An https:// door too when OPENTEDDY_HTTPS_PORT is set (https_listener.py):
+    # the browser lets a page use the microphone (🎙 voice mode) only on a
+    # secure one when it's opened from another machine or a phone.
+    try:
+        import https_listener
+        await https_listener.start(app)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("https listener not started: %s", exc)
+
     yield
+
+    try:
+        import https_listener
+        await https_listener.stop()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("https listener shutdown saw: %s", exc)
 
     # Fleet shutdown — only does anything if a node was actually started.
     try:
@@ -4191,6 +4206,40 @@ async def decision_outcome(decision_id: str, body: _DecisionOutcomeBody) -> dict
     if not ok:
         raise HTTPException(status_code=404, detail="decision not found")
     return {"id": decision_id, "outcome": body.outcome}
+
+
+@app.get("/voice/status")
+async def voice_status() -> dict:
+    """Is the 🎙 voice mode usable: the voice service set and answering."""
+    import voice_bridge
+    if not voice_bridge.configured():
+        return {"configured": False, "ok": False}
+    try:
+        h = await voice_bridge.health(timeout=3.0)
+        return {"configured": True, "ok": bool(h.get("ok")), "asr": h.get("asr"), "tts": h.get("tts"),
+                "voices": h.get("voices") or [], "device": h.get("device")}
+    except Exception as exc:  # noqa: BLE001
+        return {"configured": True, "ok": False, "error": f"{type(exc).__name__}: {exc}"}
+
+
+@app.websocket("/voice/ws")
+async def voice_ws(ws: WebSocket) -> None:
+    """The 🎙 voice mode's conversation (voice_bridge.py): utterances in,
+    spoken answers out, through the same task path as POST /tasks."""
+    import urllib.parse
+    import voice_bridge
+    # A WebSocket isn't held back by CORS: only OpenTeddy's own page (or a
+    # client that sends no Origin, like the CLI) may talk through it.
+    origin = ws.headers.get("origin", "")
+    if origin and urllib.parse.urlsplit(origin).netloc.lower() != ws.headers.get("host", "").lower():
+        await ws.close(code=4403)
+        return
+    await ws.accept()
+    await voice_bridge.Conversation(ws, start_task=_start_task, await_task=_await_task).run()
+    try:
+        await ws.close()
+    except Exception:  # noqa: BLE001
+        pass
 
 
 @app.post("/voice/ask")
