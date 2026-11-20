@@ -138,7 +138,16 @@ def spoken(text: str, limit: int = 0) -> str:
 
 def sentences(text: str, max_chars: int = 120) -> List[str]:
     """Pieces to synthesise one after another: sentence ends, then commas
-    for long ones; a short piece rides with the next."""
+    for long ones; a short piece rides with the next.
+
+    Not split smaller for a quicker first sound: CosyVoice streams its first
+    chunk after a fixed number of speech tokens however long the piece is,
+    and every call pays that wait again — cutting the first clause off made
+    the first sound later (4.1 s vs 2.9 s, demo2 11/20)."""
+    return [p for p in _pieces(text, max_chars) if p]
+
+
+def _pieces(text: str, max_chars: int) -> List[str]:
     parts = [p.strip() for p in re.split(r"(?<=[。！？!?；;])", text or "") if p.strip()]
     out: List[str] = []
     for p in parts:

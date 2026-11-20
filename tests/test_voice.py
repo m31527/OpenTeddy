@@ -128,6 +128,8 @@ def test_spoken() -> None:
     cut = V.spoken(long, V.SPOKEN_MAX_CHARS)
     assert cut.startswith("第一句話說明了重點。") and cut.endswith(V.DONE_MORE) and len(cut) <= V.SPOKEN_MAX_CHARS + 20
     assert V.sentences("你好。今天要做什麼？好的！") == ["你好。今天要做什麼？", "好的！"], V.sentences("你好。今天要做什麼？好的！")
+    assert V.sentences("收到商品後七天內可以申請退貨，商品須保持全新。") == ["收到商品後七天內可以申請退貨，商品須保持全新。"], \
+        "one call for a sentence: each call waits for its first chunk again"
     parts = V.sentences("這是一句很長很長的話，" * 20)
     assert all(len(p) <= 120 for p in parts) and "".join(parts) == "這是一句很長很長的話，" * 20
     print("  ✓ read aloud: no markdown, tables, links, emoji or citations; long results cut to the gist; sentences")
@@ -202,7 +204,8 @@ async def test_conversation() -> None:
             assert "report.html" in done["text"]
             while sum(d["type"] == "audio_end" for d in seen) < 2:     # the "on it", then the result
                 await recv_until(w, "audio_end", audio, seen)
-            assert V.ACK in SPOKEN and SPOKEN[-1].startswith("報告已經做好了"), SPOKEN[-3:]
+            said = "".join(SPOKEN)
+            assert V.ACK in said and said.endswith("報告已經做好了，放在 report.html。"), SPOKEN[-4:]
             print("  ✓ slow work: \"I'm on it\" at once, the result spoken when it's done")
     finally:
         for s, t in ((ot, ot_task), (svc, svc_task)):
