@@ -10606,7 +10606,8 @@
         if (sid !== currentSessionId()) return;          // switched meanwhile
         const names = [...d.datasets, ...d.always].map(x => x.name);
         chip.hidden = !names.length;
-        label.textContent = names.length > 1 ? `${names[0]} +${names.length - 1}` : (names[0] || '');
+        label.textContent = (names.length > 1 ? `${names[0]} +${names.length - 1}` : (names[0] || ''))
+                          + (d.enabled ? '' : ' ' + t('kb_chip_off_suffix'));
         chip.title = (d.enabled ? '' : t('kb_chip_off') + ' · ') + names.join('、');
         chip.style.opacity = d.enabled ? '' : '0.55';
         document.getElementById('kbChipClear').hidden = !d.datasets.length;
@@ -10640,7 +10641,11 @@
         return;
       }
       save.disabled = !all.datasets.length;
+      overlay.dataset.enabled = all.enabled ? '1' : '';
       if (!all.enabled) {
+        // 11/20: a session picked its FAQ, the switch was off, and nothing
+        // happened. Saving a pick turns the switch on — only sessions that
+        // picked a dataset (or one marked always) use it.
         note.hidden = false; note.classList.remove('err'); note.textContent = t('kb_session_off');
       }
       if (!all.datasets.length) {
@@ -10670,6 +10675,11 @@
       try {
         await _kbJson(`/sessions/${encodeURIComponent(sid)}/knowledge`, {
           method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ datasets: ids }) });
+        if (ids.length && !document.getElementById('kbSessionOverlay').dataset.enabled) {
+          await _kbSetting({ knowledge_enabled: 'true' });
+          const box = document.getElementById('kbEnabled');
+          if (box) box.checked = true;
+        }
         closeKbSessionModal();
         await syncKbChip();
         toast(ids.length ? t('kb_session_saved', { n: ids.length }) : t('kb_session_cleared'));

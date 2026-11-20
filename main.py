@@ -977,6 +977,8 @@ async def _session_knowledge(session_id: str) -> dict:
     every = await K.list_datasets()
     brief = lambda d: {"id": d["id"], "name": d["name"], "items": d["items"]}  # noqa: E731
     return {"session_id": session_id, "enabled": K.enabled(),
+            "note": "" if K.enabled() else ("The knowledge base is off, so these datasets aren't used yet: "
+                                            "POST /settings {\"knowledge_enabled\": \"true\"}."),
             "datasets": [brief(d) for d in every if d["id"] in picked],
             # Marked "always": in this session too, whatever it picked.
             "always": [brief(d) for d in every if d["always"] and d["id"] not in picked]}

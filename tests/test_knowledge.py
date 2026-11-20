@@ -71,7 +71,14 @@ def test_files() -> None:
     table = K.parse_file("products.csv", "品名,價格,顏色\n電風扇,990,白\n除濕機,4990,\n".encode())
     assert table[0] == {"ref": "第 2 列", "title": "電風扇", "body": "品名：電風扇\n價格：990\n顏色：白"}, table
     assert table[1]["body"] == "品名：除濕機\n價格：4990", "empty cells are left out"
-    print("  ✓ CSV: a question/answer pair per row (UTF-8, BOM, Big5, TSV); other tables as column: value")
+    # The first real FAQ (home, 11/20) named its columns 「客戶常見問題」 / 「回答內容」.
+    ycm = K.parse_csv("編號,主題分類,客戶常見問題,回答內容\nM-005,公司與品牌,什麼是 YCM Inside？,YCM Inside 是合作方向。\n")
+    assert ycm[0] == {"ref": "第 2 列", "title": "什麼是 YCM Inside？",
+                      "body": "YCM Inside 是合作方向。\n編號：M-005\n主題分類：公司與品牌"}, ycm
+    other = K.parse_csv("問題分類,問題內容,答覆\n售後,退貨幾天？,7 天\n")[0]
+    assert other["title"] == "退貨幾天？" and other["body"] == "7 天\n問題分類：售後", "a category column isn't the question"
+    print("  ✓ CSV: a question/answer pair per row (UTF-8, BOM, Big5, TSV; 客戶常見問題 / 回答內容 too); "
+          "other tables as column: value")
 
     text = ("公司簡介\n\n我們成立於 2015 年，總部在台北。" + "這是一段很長的說明。" * 160
             + "\n\n聯絡方式\n電話 02-1234-5678\n\n" + "Short English note. " * 3)

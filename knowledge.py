@@ -256,10 +256,26 @@ _Q_NAMES = {"question", "questions", "q", "問題", "問", "題目", "提問", "
 _A_NAMES = {"answer", "answers", "a", "答案", "答", "回答", "解答", "回覆", "說明", "內容", "content", "reply", "response"}
 
 
-def _col(headers: List[str], names: set) -> int:
-    for i, h in enumerate(headers):
-        if re.sub(r"[\s_\-:：()（）]", "", h).lower() in names:
+# A column whose name contains one of these words, when none is named exactly
+# (「客戶常見問題」 / 「回答內容」 in the first real FAQ, 11/20); a category or id
+# column (「問題分類」, 「主題分類」, 「編號」) is never the question.
+_Q_PARTS = ("問題", "提問", "題目", "question", "faq")
+_A_PARTS = ("回答", "答案", "解答", "回覆", "答覆", "answer", "reply")
+_A_WEAK = ("說明", "內容", "content", "description")
+_NOT_TEXT = re.compile(r"(分類|類別|類型|編號|代號|序號|category|type|\bid\b|no\.?$)", re.I)
+
+
+def _col(headers: List[str], names: set, parts: Sequence[str] = (), weak: Sequence[str] = (),
+         skip: int = -1) -> int:
+    norm = [re.sub(r"[\s_\-:：()（）]", "", h).lower() for h in headers]
+    for i, h in enumerate(norm):
+        if h in names and i != skip:
             return i
+    for words in (parts, weak):
+        for i, h in enumerate(norm):
+            if (i != skip and words and any(w in h for w in words)
+                    and not _NOT_TEXT.search(headers[i].strip())):
+                return i
     return -1
 
 
@@ -278,7 +294,8 @@ def parse_csv(text: str, delimiter: Optional[str] = None) -> List[Dict[str, str]
     body_rows = rows[1:]
     if not body_rows:
         raise KnowledgeError("這個 CSV 只有標題列，沒有內容。")
-    qi, ai = _col(headers, _Q_NAMES), _col(headers, _A_NAMES)
+    qi = _col(headers, _Q_NAMES, _Q_PARTS)
+    ai = _col(headers, _A_NAMES, _A_PARTS, _A_WEAK, skip=qi)
     if qi == ai:
         ai = -1
     out: List[Dict[str, str]] = []
