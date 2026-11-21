@@ -350,7 +350,15 @@ async def test_guards() -> None:
         except RuntimeError:
             pass
         assert ("念出來" in seen["p"]) == has, seen["p"]
-    print("  ✓ the chat lane is told when its answer is read aloud")
+    # Asked in English, the note is English and asks for English: a Chinese
+    # note made the answer Chinese (demo2, 11/21).
+    try:
+        await Orchestrator._fast_chat_response(
+            o, TaskRequest(goal="What can you help me with today?", session_id="s", context={"voice": True}), "chat", {})
+    except RuntimeError:
+        pass
+    assert "reply in English" in seen["p"] and "念出來" not in seen["p"], seen["p"]
+    print("  ✓ the chat lane is told when its answer is read aloud, in the language the person spoke")
 
 
 async def main() -> None:
