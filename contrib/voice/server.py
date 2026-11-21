@@ -47,7 +47,7 @@ ASR_MODEL = os.environ.get("ASR_MODEL", "FunAudioLLM/SenseVoiceSmall")
 ZH_VARIANT = os.environ.get("ZH_VARIANT", "tw")          # tw → Traditional (Taiwan phrasing), cn → as is
 # The flow's ODE steps (CosyVoice: 10). First sound on demo2 (11/21): 10 steps
 # 1.21 s, 6 steps 0.91 s, 4 steps 0.84 s — speech recognised right at all of them.
-FLOW_STEPS = int(os.environ.get("FLOW_STEPS", "6") or 0)
+FLOW_STEPS = int(os.environ.get("FLOW_STEPS", "4") or 0)        # the owner chose 4 by ear (11/21)
 ASR_RATE = 16000
 CV3_PREFIX = "You are a helpful assistant.<|endofprompt|>"   # Fun-CosyVoice3's prompt text starts with this
 

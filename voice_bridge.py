@@ -52,6 +52,19 @@ SPOKEN_MAX_CHARS = 220                            # a work result read aloud: th
 ACK = "好，我正在處理，完成後告訴你。"
 DONE_MORE = "詳細內容我放在對話裡了。"
 NOT_UNDERSTOOD = "抱歉，我沒聽清楚，可以再說一次嗎？"
+# What OpenTeddy says by itself follows the language the person spoke.
+EN = {ACK: "Okay, I'm working on it. I'll tell you when it's done.",
+      DONE_MORE: "The details are in the chat.",
+      NOT_UNDERSTOOD: "Sorry, I didn't catch that. Could you say it again?"}
+
+
+def english(text: str) -> bool:
+    """Said in English: Latin words and no Chinese."""
+    return not _CJK.search(text or "") and len(re.findall(r"[A-Za-z]{2,}", text or "")) >= 1
+
+
+def phrase(zh: str, in_english: bool) -> str:
+    return EN.get(zh, zh) if in_english else zh
 
 
 def configured() -> bool:
@@ -101,6 +114,7 @@ async def speak(text: str, client: httpx.AsyncClient) -> AsyncIterator[bytes]:
 
 # ── Text that is read aloud ──────────────────────────────────────────────────
 
+_CJK = re.compile(r"[㐀-鿿豈-﫿　-〿＀-￯]")
 _CITE = re.compile(r"[（(](?:[^（）()]*?(?:知識庫|來源|參考|資料來源|source)[^（）()]*?)[）)]", re.I)
 _URL = re.compile(r"https?://\S+")
 _EMOJI = re.compile("[\U0001F000-\U0001FAFF☀-➿️‍]")
@@ -122,17 +136,21 @@ def spoken(text: str, limit: int = 0) -> str:
             lines.append(line)
     t = ""
     for line in lines:                         # lines become one flow: a comma only where nothing ends them
-        t += ("" if not t or re.search(r"[。！？!?；;：:，,、]$", t) else "，") + line
+        if t and not re.search(r"[。！？!?；;：:，,、.]$", t):
+            t += "，" if _CJK.search(t[-1]) or _CJK.search(line[0]) else ","
+        t = _join(t, line)
     t = _CITE.sub("", t)
-    t = _URL.sub("連結", t)
+    t = _URL.sub("連結" if _CJK.search(t) else "a link", t)
     t = re.sub(r"[*_`#~]+", "", t)
     t = _EMOJI.sub("", t)
     t = re.sub(r"\s+", " ", t)
     t = re.sub(r"\s+([，。！？、；：])", r"\1", t)
     t = re.sub(r"，+([。！？!?，])", r"\1", t).strip(" ，")
     if limit and len(t) > limit:
-        cut = [m.end() for m in re.finditer(r"[。！？!?]", t) if m.end() <= limit]
-        t = (t[:cut[-1]] if cut else t[:limit].rstrip("，、 ") + "。") + DONE_MORE
+        en = english(t)
+        ends = r"[。！？!?]|\.(?=\s|$)" if en else r"[。！？!?]"
+        cut = [m.end() for m in re.finditer(ends, t) if m.end() <= limit]
+        t = _join(t[:cut[-1]] if cut else t[:limit].rstrip("，、, ") + ("." if en else "。"), phrase(DONE_MORE, en))
     return t
 
 
@@ -147,18 +165,29 @@ def sentences(text: str, max_chars: int = 120) -> List[str]:
     return [p for p in _pieces(text, max_chars) if p]
 
 
+def _join(a: str, b: str) -> str:
+    """Two pieces of speech side by side: nothing between Chinese, a space in English."""
+    if not a or not b:
+        return a + b
+    return a + ("" if _CJK.search(a[-1]) or _CJK.search(b[0]) else " ") + b
+
+
 def _pieces(text: str, max_chars: int) -> List[str]:
-    parts = [p.strip() for p in re.split(r"(?<=[。！？!?；;])", text or "") if p.strip()]
+    # Sentence ends: Chinese marks, and an English ". " before the next sentence
+    # (not "3.5" or "e.g." inside one).
+    parts = [p.strip() for p in re.split(r"(?<=[。！？!?；;])|(?<=\.)\s+(?=[A-Z0-9\"'(])", text or "") if p and p.strip()]
     out: List[str] = []
     for p in parts:
         while len(p) > max_chars:
             cut = max(p.rfind("，", 0, max_chars), p.rfind(",", 0, max_chars), p.rfind("、", 0, max_chars))
+            if cut <= 10:
+                cut = p.rfind(" ", 0, max_chars)               # English without a comma: a word boundary
             cut = cut + 1 if cut > 10 else max_chars
             out.append(p[:cut].strip())
             p = p[cut:].strip()
         if p:
             if out and len(out[-1]) < 8:
-                out[-1] += p
+                out[-1] = _join(out[-1], p)
             else:
                 out.append(p)
     return out
@@ -179,6 +208,7 @@ class Conversation:
         self.session_id = ""
         self.sample_rate = 24000
         self.turn = 0                              # the latest thing the person said
+        self.en = False                            # ... and whether they said it in English
         self.speaking: Optional[asyncio.Task] = None
         self.turn_task: Optional[asyncio.Task] = None
         self.background: List[asyncio.Task] = []
@@ -267,6 +297,7 @@ class Conversation:
         await self.new_turn(text, heard={**heard, "ms_total": int((time.monotonic() - t0) * 1000)})
 
     async def new_turn(self, text: str, heard: Optional[Dict[str, Any]]) -> None:
+        self.en = english(text)                    # OpenTeddy's own phrases follow the person's language
         self.turn += 1
         turn = self.turn
         await self.send({"type": "transcript", "text": text, **({"ms": heard.get("ms")} if heard else {})})
@@ -300,8 +331,9 @@ class Conversation:
             await self.reply(message, task_id, turn)
             return
         # Real work: say so, keep listening, speak the result when it's in.
-        await self.send({"type": "working", "task_id": task_id, "text": ACK})
-        await self.say(ACK, turn)
+        ack = phrase(ACK, self.en)
+        await self.send({"type": "working", "task_id": task_id, "text": ack})
+        await self.say(ack, turn)
         self.background.append(asyncio.create_task(self.when_done(waiter, task_id)))
 
     async def when_done(self, waiter: "asyncio.Future", task_id: str, quiet_if_quick: bool = False) -> None:
@@ -323,7 +355,7 @@ class Conversation:
         if turn != self.turn:                      # the person has moved on
             return
         await self.send({"type": "reply", "text": message or "", "task_id": task_id})
-        await self.say(spoken(message or NOT_UNDERSTOOD, SPOKEN_MAX_CHARS), turn)
+        await self.say(spoken(message or phrase(NOT_UNDERSTOOD, self.en), SPOKEN_MAX_CHARS), turn)
 
     async def say(self, text: str, turn: int) -> None:
         if not text or turn != self.turn:
