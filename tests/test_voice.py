@@ -132,7 +132,18 @@ def test_spoken() -> None:
         "one call for a sentence: each call waits for its first chunk again"
     parts = V.sentences("這是一句很長很長的話，" * 20)
     assert all(len(p) <= 120 for p in parts) and "".join(parts) == "這是一句很長很長的話，" * 20
-    print("  ✓ read aloud: no markdown, tables, links, emoji or citations; long results cut to the gist; sentences")
+    # English: ". " ends a sentence (not "3.5"), lines join with ", ", a long result
+    # ends in English, and OpenTeddy's own phrases follow the person's language.
+    assert V.sentences("Hello there. How are you? Version 3.5 is out.") == \
+        ["Hello there.", "How are you?", "Version 3.5 is out."], V.sentences("Hello there. How are you? Version 3.5 is out.")
+    assert V.spoken("## Returns\n- **Deadline**: 7 days (source: faq.csv row 2)\n- Shipping: free over $30") == \
+        "Returns, Deadline: 7 days, Shipping: free over $30", V.spoken("## Returns\n- **Deadline**: 7 days (source: faq.csv row 2)\n- Shipping: free over $30")
+    long_en = V.spoken("The key point is first. " + "More detail follows here. " * 20, V.SPOKEN_MAX_CHARS)
+    assert long_en.startswith("The key point is first.") and long_en.endswith(V.EN[V.DONE_MORE]), long_en
+    assert V.english("What can you do for me?") and not V.english("退貨幾天？") and not V.english("OpenTeddy 是什麼")
+    assert V.phrase(V.ACK, True) == V.EN[V.ACK] and V.phrase(V.ACK, False) == V.ACK
+    print("  ✓ read aloud: no markdown, tables, links, emoji or citations; long results cut to the gist; sentences "
+          "(Chinese and English); OpenTeddy's own phrases in the person's language")
 
 
 # ── B ────────────────────────────────────────────────────────────────────────
