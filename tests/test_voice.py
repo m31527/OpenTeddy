@@ -288,6 +288,40 @@ async def test_guards() -> None:
             os.environ.pop(k, None)
     print("  ✓ https door: same app over https and wss, a certificate for this machine's names, made once")
 
+    # The start-up warm-up loads each model at the context size its calls use;
+    # at Ollama's default the first real call loaded it again (5.7 s, demo2 11/21).
+    sent: list = []
+
+    class _Client:
+        def __init__(self, *a, **k): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        async def post(self, url, json=None, **k):
+            sent.append(json)
+            return types.SimpleNamespace(status_code=200, text="")
+    import httpx as _httpx
+    real_client, saved = _httpx.AsyncClient, (config.gemma_model, config.qwen_model, config.vllm_models)
+    try:
+        _httpx.AsyncClient = _Client
+        config.gemma_model, config.qwen_model, config.vllm_models = "gemma-x", "qwen-x", ""
+        await M._warmup_ollama_models()
+        ctx = {p["model"]: p["options"]["num_ctx"] for p in sent}
+        assert ctx == {"gemma-x": int(config.gemma_num_ctx), "qwen-x": int(config.qwen_num_ctx)}, ctx
+        sent.clear()
+        config.vllm_models = "qwen-x=http://127.0.0.1:8001"
+        import local_engine
+        real_system = local_engine.platform.system
+        local_engine.platform.system = lambda: "Linux"          # routes are off on macOS by design
+        try:
+            await M._warmup_ollama_models()
+        finally:
+            local_engine.platform.system = real_system
+        assert [p["model"] for p in sent] == ["gemma-x"], "a model on vLLM isn't loaded into Ollama"
+    finally:
+        _httpx.AsyncClient = real_client
+        config.gemma_model, config.qwen_model, config.vllm_models = saved
+    print("  ✓ start-up warm-up at the context size the real calls use (no second load)")
+
     from orchestrator import Orchestrator
     from models import TaskRequest
     seen: dict = {}

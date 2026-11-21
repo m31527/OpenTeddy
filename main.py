@@ -386,6 +386,15 @@ async def _warmup_ollama_models() -> None:
         ", ".join(name for _, name in models_to_warm),
     )
 
+    # Warm each model with the context size its real calls use: Ollama loads
+    # a model again when num_ctx changes, so a warm-up at the default size
+    # was thrown away and the first real request paid a 5.7 s load (demo2,
+    # 11/21 — every restart, on home too).
+    num_ctx = {
+        "orchestrator": int(getattr(config, "gemma_num_ctx", 16384)),
+        "executor": int(getattr(config, "qwen_num_ctx", 16384)),
+        "voice": 4096,                                  # voice_fastpath._NUM_CTX for its own model
+    }
     for role, model in models_to_warm:
         try:
             async with _httpx.AsyncClient(timeout=120.0) as client:
@@ -401,7 +410,7 @@ async def _warmup_ollama_models() -> None:
                         # to a minimum-greater-than guard; we set 2 as
                         # a defensive floor that still completes in
                         # ~50 ms once the model is hot.
-                        "options":  {"num_predict": 2},
+                        "options":  {"num_predict": 2, "num_ctx": num_ctx[role]},
                         # Pin keep_alive on the warmup call too — point
                         # of warmup is to leave the model resident; if
                         # we passed nothing and Ollama's default was
