@@ -10651,7 +10651,8 @@
                     rate: 24000, playing: [], playHead: 0, state: 'idle', inSpeech: false,
                     frames: [], pre: [], speechRun: 0, silenceRun: 0, floor: 0.004, buf: new Float32Array(0) };
     const V_FRAME = 320;                       // 20 ms at 16 kHz
-    const V_START = 4, V_BARGE = 12, V_END = 35, V_PRE = 12, V_MIN = 15, V_MAX = 1500;   // in frames
+    // A sentence ends after 0.5 s of quiet (was 0.7 s: 0.2 s more of the wait).
+    const V_START = 4, V_BARGE = 12, V_END = 25, V_PRE = 12, V_MIN = 15, V_MAX = 1500;   // in frames
     const VOICE_WORKLET = `
       class OtDown16k extends AudioWorkletProcessor {
         constructor() { super(); this.ratio = sampleRate / 16000; this.acc = []; this.pos = 0; }

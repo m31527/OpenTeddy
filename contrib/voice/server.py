@@ -45,6 +45,9 @@ VOICES_DIR = os.environ.get("VOICES_DIR", "/voices")
 TTS_MODEL = os.environ.get("TTS_MODEL", "FunAudioLLM/Fun-CosyVoice3-0.5B-2512")
 ASR_MODEL = os.environ.get("ASR_MODEL", "FunAudioLLM/SenseVoiceSmall")
 ZH_VARIANT = os.environ.get("ZH_VARIANT", "tw")          # tw → Traditional (Taiwan phrasing), cn → as is
+# The flow's ODE steps (CosyVoice: 10). First sound on demo2 (11/21): 10 steps
+# 1.21 s, 6 steps 0.91 s, 4 steps 0.84 s — speech recognised right at all of them.
+FLOW_STEPS = int(os.environ.get("FLOW_STEPS", "6") or 0)
 ASR_RATE = 16000
 CV3_PREFIX = "You are a helpful assistant.<|endofprompt|>"   # Fun-CosyVoice3's prompt text starts with this
 
@@ -116,7 +119,9 @@ def load() -> None:
     if llm is not None:
         llm.float()
     _STREAM_HOP[0] = int(getattr(_tts.model, "token_hop_len", 25) or 25)
-    log.info("TTS %s ready in %.1fs (rate %d)", TTS_MODEL, time.time() - t0, _tts.sample_rate)
+    _quicker()
+    log.info("TTS %s ready in %.1fs (rate %d, flow steps %s)", TTS_MODEL, time.time() - t0, _tts.sample_rate,
+             FLOW_STEPS or "default")
     from funasr import AutoModel as AsrModel
     t0 = time.time()
     _asr = AsrModel(model=_local(ASR_MODEL), trust_remote_code=False, disable_update=True,
@@ -133,6 +138,53 @@ def load() -> None:
         for _ in _speak("你好。", "", 1.0):
             pass
         log.info("TTS warmed up in %.1fs", time.time() - t0)
+
+
+class _QuickPoll:
+    """What cosyvoice.cli.model sees as `time`: its stream loop checks for new
+    speech tokens every 0.1 s; every 0.02 s gets each chunk out sooner."""
+
+    def sleep(self, s: float) -> None:
+        time.sleep(min(s, 0.02))
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(time, name)
+
+
+def _quicker() -> None:
+    import cosyvoice.cli.model as cosy_model
+    cosy_model.time = _QuickPoll()
+    if FLOW_STEPS:
+        dec = _tts.model.flow.decoder
+        forward = dec.forward
+
+        def fewer_steps(*a: Any, **k: Any) -> Any:
+            if "n_timesteps" in k:
+                k["n_timesteps"] = FLOW_STEPS
+            return forward(*a, **k)
+        dec.forward = fewer_steps
+
+
+def _align_prompt(spk: str) -> None:
+    """The first streamed chunk waits for enough speech tokens to line the
+    reference voice's own tokens up with the chunk size (25): with the
+    sample's 87 that was 13 more. Starting the flow's copy of the reference
+    a few tokens in (the speech model keeps all of it) makes the first sound
+    come ~0.25 s sooner (demo2, 11/21)."""
+    import torch
+    info = _tts.frontend.spk2info[spk]
+    hop = _STREAM_HOP[0]
+    tok = info["flow_prompt_speech_token"]
+    n = tok.shape[1]
+    k = n % hop
+    ratio = int(getattr(_tts.model.flow, "token_mel_ratio", 2) or 2)
+    if not k or n - k < hop or info["prompt_speech_feat"].shape[1] < ratio * n:
+        return
+    info["flow_prompt_speech_token"] = tok[:, k:]
+    info["flow_prompt_speech_token_len"] = torch.tensor([n - k], dtype=torch.int32)
+    feat = info["prompt_speech_feat"][:, ratio * k:]
+    info["prompt_speech_feat"] = feat
+    info["prompt_speech_feat_len"] = torch.tensor([feat.shape[1]], dtype=torch.int32)
 
 
 def _voice_files() -> Dict[str, tuple]:
@@ -157,6 +209,7 @@ def _prepare_voices() -> None:
         spk = f"ot_{name}"
         with _tts_lock:
             if _tts.add_zero_shot_spk(prompt, wav, spk):
+                _align_prompt(spk)
                 _voices[name] = spk
     log.info("voices: %s", ", ".join(_voices) or "(none)")
 
