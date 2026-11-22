@@ -10998,6 +10998,15 @@
         <div class="vs-url"><input type="text" id="vsUrlInput" value="${escHtml(url || '')}" placeholder="http://192.168.1.20:8095" autocomplete="off" spellcheck="false" /></div>`;
     }
 
+    // A service answering but off: just turn it on — unless it is this
+    // machine's own and older than contrib/voice, then turning it on
+    // updates it (demo2's pre-installer container ran without the noise
+    // filter, 11/22).
+    function _vsJustTurnOn(st) {
+      const s = st.setup || {};
+      return st.ok && !st.enabled && !(st.managed && s.outdated && s.installable);
+    }
+
     function _vsRender(st) {
       const title = document.getElementById('vsTitle');
       const body = document.getElementById('vsBody');
@@ -11041,7 +11050,7 @@
         act.innerHTML = cancel + (s.installable ? btn(t('voice_setup_retry'), 'startVoiceSetup()') : '');
         return;
       }
-      if (st.ok && !st.enabled) {
+      if (_vsJustTurnOn(st)) {
         title.textContent = t('voice_setup_title');
         body.innerHTML = p(t('voice_setup_running_body', { url: st.url })) + https;
         act.innerHTML = cancel + btn(t('voice_setup_turn_on'), 'enableVoiceService()');
@@ -11161,7 +11170,7 @@
       if (on) {
         let st;
         try { st = await _voiceStatusFetch(); } catch (e) { toast(e.message, true); return; }
-        if (st.ok && !st.enabled) { await enableVoiceService(); return; }
+        if (_vsJustTurnOn(st)) { await enableVoiceService(); return; }
         openVoiceSetup(st);
         return;
       }
