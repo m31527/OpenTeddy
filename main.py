@@ -4218,17 +4218,80 @@ async def decision_outcome(decision_id: str, body: _DecisionOutcomeBody) -> dict
 
 
 @app.get("/voice/status")
-async def voice_status() -> dict:
-    """Is the 🎙 voice mode usable: the voice service set and answering."""
+async def voice_status(setup: bool = False) -> dict:
+    """Is the 🎙 voice mode usable: turned on, the voice service set and
+    answering. When it isn't (or ?setup=1), also what 下載並啟用 would do on
+    this machine and how far a running install is (voice_setup.py)."""
     import voice_bridge
+    import voice_setup
+    url = (getattr(config, "voice_service_url", "") or "").strip()
+    out: dict = {"enabled": voice_bridge.enabled(), "configured": bool(url), "url": url,
+                 "managed": voice_setup.managed(url), "ok": False}
+    if url:
+        try:
+            h = await voice_bridge.health(timeout=3.0)
+            out.update(ok=bool(h.get("ok")), stage=h.get("stage") or ("ready" if h.get("ok") else ""),
+                       asr=h.get("asr"), tts=h.get("tts"), voices=h.get("voices") or [], device=h.get("device"))
+        except Exception as exc:  # noqa: BLE001
+            out["error"] = f"{type(exc).__name__}: {exc}"
+    if setup or not (out["enabled"] and out["ok"]) or voice_setup.running():
+        out["setup"] = {**await voice_setup.check(), "job": voice_setup.job()}
+    return out
+
+
+async def _voice_turn_on(url: str) -> None:
+    await settings_store.update_many({"voice_enabled": "true", "voice_service_url": url})
+    await config.reload_from_store(settings_store)
+
+
+@app.post("/voice/setup")
+async def voice_setup_start() -> dict:
+    """下載並啟用: build and start the voice service on this machine, then
+    turn voice mode on. Runs in the background — GET /voice/status?setup=1
+    shows how far it is. Only ever started by the person pressing it."""
+    import voice_setup
+    return {"job": voice_setup.begin(_voice_turn_on)}
+
+
+class _VoiceEnableBody(BaseModel):
+    url: Optional[str] = None      # a voice service elsewhere; empty = the one already set
+
+
+@app.post("/voice/enable")
+async def voice_enable(body: _VoiceEnableBody) -> dict:
+    """Turn voice mode on with a voice service that is already running
+    (another machine, or this one's, started before)."""
+    import voice_bridge
+    if body.url is not None:
+        url = body.url.strip().rstrip("/")
+        if url and not re.match(r"^https?://[^\s/]+", url):
+            raise HTTPException(status_code=400, detail="voice service address must start with http:// or https://")
+        await settings_store.update_many({"voice_service_url": url})
+        await config.reload_from_store(settings_store)
     if not voice_bridge.configured():
-        return {"configured": False, "ok": False}
+        return {"ok": False, "error": "no voice service address"}
     try:
-        h = await voice_bridge.health(timeout=3.0)
-        return {"configured": True, "ok": bool(h.get("ok")), "asr": h.get("asr"), "tts": h.get("tts"),
-                "voices": h.get("voices") or [], "device": h.get("device")}
+        h = await voice_bridge.health(timeout=5.0)
     except Exception as exc:  # noqa: BLE001
-        return {"configured": True, "ok": False, "error": f"{type(exc).__name__}: {exc}"}
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+    if not h.get("ok"):
+        return {"ok": False, "error": f"the voice service is not ready yet ({h.get('stage') or 'starting'})"}
+    await settings_store.update_many({"voice_enabled": "true"})
+    await config.reload_from_store(settings_store)
+    return {"ok": True}
+
+
+@app.post("/voice/disable")
+async def voice_disable() -> dict:
+    """Turn voice mode off. The voice service this machine runs for it is
+    stopped too — its GPU memory back; the models stay for next time."""
+    import voice_setup
+    await settings_store.update_many({"voice_enabled": "false"})
+    await config.reload_from_store(settings_store)
+    stopped = False
+    if voice_setup.managed(getattr(config, "voice_service_url", "") or "") or voice_setup.running():
+        stopped = await voice_setup.stop()
+    return {"ok": True, "stopped": stopped}
 
 
 @app.websocket("/voice/ws")

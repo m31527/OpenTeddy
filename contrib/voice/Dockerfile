@@ -9,7 +9,12 @@
 # Qwen2 on it babbled — speech-shaped sound with no words in it (demo2,
 # 11/20). CosyVoice is written against 4.51.3; diffusers 0.29 and
 # huggingface_hub < 1.0 go with it. (This image doesn't run vLLM.)
-FROM vllm/vllm-openai:v0.33.0-aarch64
+#
+# BASE: the aarch64 build for a DGX Spark; on an x86-64 machine with an
+# NVIDIA GPU, vllm/vllm-openai:v0.33.0 (not tried yet). A machine whose
+# local model already runs on vLLM has this image, so nothing is pulled.
+ARG BASE=vllm/vllm-openai:v0.33.0-aarch64
+FROM ${BASE}
 
 ENTRYPOINT []
 ENV PIP_NO_CACHE_DIR=1 PYTHONUNBUFFERED=1 COSYVOICE_DIR=/opt/CosyVoice MODELS_DIR=/models VOICES_DIR=/voices

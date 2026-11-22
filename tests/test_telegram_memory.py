@@ -54,6 +54,18 @@ async def test_recent_turns() -> None:
     assert "助理：營收 120 萬" in block and block.startswith("【最近的對話")
     print("  ✓ same session, oldest first, current/unfinished excluded, attachment path kept")
 
+    assert "小時前" not in block and "天前" not in block, "no created_at → no age"
+
+    from datetime import datetime, timedelta
+    ago = lambda **k: (datetime.utcnow() - timedelta(**k)).isoformat()
+    rows[2]["created_at"], rows[3]["created_at"] = ago(minutes=5), ago(hours=18, minutes=10)
+    block = await Orchestrator._recent_turns_block(fake, req())
+    assert "（18 小時前）使用者：今天星期幾" in block, block
+    assert "\n使用者：[附件" in block, "a turn from minutes ago has no label"
+    rows[3]["created_at"] = ago(days=3, hours=2)
+    assert "（3 天前）使用者：今天星期幾" in await Orchestrator._recent_turns_block(fake, req())
+    print("  ✓ turns an hour or more old say how old")
+
     assert await Orchestrator._recent_turns_block(fake, req(context={"triggered_by": "schedule"})) == ""
     assert await Orchestrator._recent_turns_block(fake, req(session_id=None)) == ""
     print("  ✓ skipped for scheduled runs and session-less tasks")
