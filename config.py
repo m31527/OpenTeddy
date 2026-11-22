@@ -310,7 +310,11 @@ class Config:
     knowledge_embed_model: str = field(default_factory=lambda: os.getenv("KNOWLEDGE_EMBED_MODEL", "").strip())
 
     # Voice mode (voice_bridge.py): the voice service (contrib/voice — speech
-    # recognition + synthesis) on a machine of its own. Empty = no voice mode.
+    # recognition + synthesis). Off until the person turns it on — the 🎙
+    # button asks, and can install the service on this machine (voice_setup.py).
+    voice_enabled: bool = field(
+        default_factory=lambda: os.getenv("VOICE_ENABLED", "false").strip().lower()
+        in {"1", "true", "yes", "on"})
     voice_service_url: str = field(default_factory=lambda: os.getenv("VOICE_SERVICE_URL", "").strip())
     voice_name: str = field(default_factory=lambda: os.getenv("VOICE_NAME", "").strip())
 
@@ -874,6 +878,8 @@ class Config:
             self.knowledge_enabled = str(settings["knowledge_enabled"]).strip().lower() in {"1", "true", "yes", "on"}
         if "knowledge_embed_model" in settings:
             self.knowledge_embed_model = (settings["knowledge_embed_model"] or "").strip()
+        if "voice_enabled" in settings:
+            self.voice_enabled = str(settings["voice_enabled"]).strip().lower() in {"1", "true", "yes", "on"}
         if "voice_service_url" in settings:
             self.voice_service_url = (settings["voice_service_url"] or "").strip()
         if "voice_name" in settings:

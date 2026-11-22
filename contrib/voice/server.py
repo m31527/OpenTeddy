@@ -3,18 +3,21 @@ OpenTeddy voice service — speech in, speech out, on a machine of its own.
 
   POST /asr     PCM16 mono 16 kHz (or a WAV) → {"text", "language", "emotion", "ms"}
                 SenseVoiceSmall (FunASR); Chinese comes back in Traditional
-                characters (OpenCC s2twp) unless ZH_VARIANT=cn
+                characters (OpenCC s2twp) unless ZH_VARIANT=cn. A sound with
+                no speech in it (fsmn-vad) → empty text and "speech": false
   POST /tts     {"text", "voice"} → raw PCM16 mono at the model's rate,
                 streamed as it is generated (Fun-CosyVoice3-0.5B by default)
   GET  /voices  the reference voices in VOICES_DIR (name.wav + name.txt)
-  GET  /health  models, device, sample rates
+  GET  /health  models, device, sample rates; while it is still getting
+                ready, "stage" says what it is doing (downloading a model,
+                loading, warming up) — it answers from the first second
 
 OpenTeddy (voice_bridge.py) calls this from its /voice/ws; nothing here
 knows about sessions, tools or the knowledge base. It serves one person's
 conversation at a time: one lock per model.
 
 Licences: CosyVoice code and the Fun-CosyVoice3 / CosyVoice2 weights are
-Apache-2.0 (model cards); SenseVoiceSmall is under the FunASR Model
+Apache-2.0 (model cards), as is fsmn-vad; SenseVoiceSmall is under the FunASR Model
 License (use, modify, share with attribution — read it before a commercial
 product). A reference voice is someone's voice: use your own, or one you
 have the rights to. See README.md.
@@ -44,6 +47,11 @@ MODELS_DIR = os.environ.get("MODELS_DIR", "/models")
 VOICES_DIR = os.environ.get("VOICES_DIR", "/voices")
 TTS_MODEL = os.environ.get("TTS_MODEL", "FunAudioLLM/Fun-CosyVoice3-0.5B-2512")
 ASR_MODEL = os.environ.get("ASR_MODEL", "FunAudioLLM/SenseVoiceSmall")
+# SenseVoice writes words for any sound: a breath came back "Yeah.", a tap
+# ".", a squeal 「在。」 (demo2, 11/22: a child nearby started conversations).
+# FunASR's speech detector (3.9 MB, Apache-2.0) found no speech in any of
+# those and still caught 0.3 s of real speech. VAD_MODEL= (empty) turns it off.
+VAD_MODEL = os.environ.get("VAD_MODEL", "funasr/fsmn-vad")
 ZH_VARIANT = os.environ.get("ZH_VARIANT", "tw")          # tw → Traditional (Taiwan phrasing), cn → as is
 # The flow's ODE steps (CosyVoice: 10). First sound on demo2 (11/21): 10 steps
 # 1.21 s, 6 steps 0.91 s, 4 steps 0.84 s — speech recognised right at all of them.
@@ -57,6 +65,7 @@ app = FastAPI(title="OpenTeddy voice service")
 
 _tts: Any = None
 _asr: Any = None
+_vad: Any = None
 _tts_lock = threading.Lock()
 _asr_lock = threading.Lock()
 _voices: Dict[str, str] = {}            # name → CosyVoice speaker id, prepared once
@@ -66,6 +75,13 @@ _cc: Any = None
 # first sound waited for 100 tokens (~4 s of audio). Set back before each one.
 _STREAM_HOP = [25]
 _EMOJI = re.compile("[\U0001F000-\U0001FAFF☀-➿️]")   # SenseVoice marks emotions with them
+# What it is doing before it can serve: OpenTeddy's installer (voice_setup.py)
+# shows this while the models download the first time (~10 GB).
+_stage: Dict[str, str] = {"stage": "starting", "detail": ""}
+
+
+def _at(stage: str, detail: str = "") -> None:
+    _stage.update(stage=stage, detail=detail)
 
 
 # ── Loading ──────────────────────────────────────────────────────────────────
@@ -73,10 +89,20 @@ _EMOJI = re.compile("[\U0001F000-\U0001FAFF☀-➿️]")   # SenseVoice marks em
 def _local(repo: str) -> str:
     """The model's folder under MODELS_DIR, downloaded from Hugging Face the first time."""
     path = os.path.join(MODELS_DIR, repo.split("/")[-1])
-    if not os.path.isdir(path) or not os.listdir(path):
+    if not os.path.isfile(os.path.join(path, ".complete")):
         from huggingface_hub import snapshot_download
+        _at("downloading", repo)
         log.info("downloading %s → %s", repo, path)
-        snapshot_download(repo, local_dir=path)
+        had = os.path.isdir(path) and bool(os.listdir(path))
+        try:
+            snapshot_download(repo, local_dir=path)    # picks up where a broken download stopped
+            open(os.path.join(path, ".complete"), "w").close()
+        except Exception as exc:  # noqa: BLE001
+            if not had:
+                raise
+            # Folders from before the marker existed, on a machine offline now.
+            log.warning("could not check %s (%s); using what is in %s", repo, exc, path)
+    _at("loading", repo)
     return path
 
 
@@ -104,7 +130,7 @@ def _stub_training_only() -> None:
 
 
 def load() -> None:
-    global _tts, _asr, _cc
+    global _tts, _asr, _vad, _cc
     import torch
     import torchaudio
     torchaudio.load = _soundfile_load                     # see _soundfile_load
@@ -127,6 +153,12 @@ def load() -> None:
     _asr = AsrModel(model=_local(ASR_MODEL), trust_remote_code=False, disable_update=True,
                     device="cuda:0" if torch.cuda.is_available() else "cpu")
     log.info("ASR %s ready in %.1fs", ASR_MODEL, time.time() - t0)
+    if VAD_MODEL:
+        try:                                  # ~8 ms a sentence on the CPU
+            _vad = AsrModel(model=_local(VAD_MODEL), disable_update=True, device="cpu")
+            log.info("VAD %s ready", VAD_MODEL)
+        except Exception as exc:  # noqa: BLE001 — without it, every sound is transcribed as before
+            log.warning("VAD %s unavailable (%s): every sound goes to ASR", VAD_MODEL, exc)
     if ZH_VARIANT == "tw":
         from opencc import OpenCC
         _cc = OpenCC("s2twp")
@@ -134,10 +166,25 @@ def load() -> None:
     # The first synthesis after loading took 3 s (demo2, 11/20), later ones
     # 1.5 s: pay it now, not in the person's first sentence.
     if _voices:
+        _at("warming", TTS_MODEL)
         t0 = time.time()
         for _ in _speak("你好。", "", 1.0):
             pass
         log.info("TTS warmed up in %.1fs", time.time() - t0)
+    _at("ready")
+
+
+def _load_in_background() -> None:
+    try:
+        load()
+    except Exception as exc:  # noqa: BLE001
+        log.exception("loading failed")
+        _at("error", f"{type(exc).__name__}: {exc}"[:500])
+
+
+def _ready() -> None:
+    if _stage["stage"] != "ready":
+        raise HTTPException(503, f"not ready: {_stage['stage']} {_stage['detail']}".strip())
 
 
 class _QuickPoll:
@@ -233,6 +280,7 @@ def _pcm(request_body: bytes, content_type: str) -> np.ndarray:
 
 @app.post("/asr")
 async def asr(request: Request) -> JSONResponse:
+    _ready()
     body = await request.body()
     if not body:
         raise HTTPException(400, "no audio")
@@ -241,11 +289,16 @@ async def asr(request: Request) -> JSONResponse:
         return JSONResponse({"text": "", "language": "", "emotion": "", "ms": 0})
     t0 = time.time()
 
-    def run() -> list:
+    def run() -> Optional[list]:
         with _asr_lock:
+            if _vad is not None and not (_vad.generate(input=audio, cache={}) or [{}])[0].get("value"):
+                return None                   # no one spoke: a breath, a tap, a squeal
             return _asr.generate(input=audio, cache={}, language="auto", use_itn=True, batch_size_s=60)
     import asyncio
     res = await asyncio.get_running_loop().run_in_executor(None, run)
+    if res is None:
+        return JSONResponse({"text": "", "language": "", "emotion": "", "speech": False,
+                             "ms": int((time.time() - t0) * 1000)})
     raw = (res[0].get("text") if res else "") or ""
     tags = [t.lower() for t in _TAG.findall(raw)]
     from funasr.utils.postprocess_utils import rich_transcription_postprocess
@@ -287,6 +340,7 @@ def _speak(text: str, voice: str, speed: float) -> Iterator[bytes]:
 
 @app.post("/tts")
 async def tts(request: Request) -> StreamingResponse:
+    _ready()
     body = await request.json()
     text = str(body.get("text") or "").strip()
     if not text:
@@ -306,7 +360,8 @@ async def voices() -> Dict[str, Any]:
 @app.get("/health")
 async def health() -> Dict[str, Any]:
     import torch
-    return {"ok": _tts is not None and _asr is not None, "tts": TTS_MODEL, "asr": ASR_MODEL,
+    return {"ok": _stage["stage"] == "ready", "stage": _stage["stage"], "detail": _stage["detail"],
+            "tts": TTS_MODEL, "asr": ASR_MODEL, "vad": VAD_MODEL if _vad is not None else "",
             "tts_sample_rate": int(_tts.sample_rate) if _tts else 0, "asr_sample_rate": ASR_RATE,
             "device": torch.cuda.get_device_name(0) if torch.cuda.is_available() else "cpu",
             "voices": list(_voices), "zh_variant": ZH_VARIANT}
@@ -314,5 +369,5 @@ async def health() -> Dict[str, Any]:
 
 if __name__ == "__main__":
     import uvicorn
-    load()
+    threading.Thread(target=_load_in_background, name="load", daemon=True).start()
     uvicorn.run(app, host=os.environ.get("VOICE_HOST", "127.0.0.1"), port=int(os.environ.get("VOICE_PORT", "8095")))

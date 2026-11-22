@@ -1580,7 +1580,10 @@ class Orchestrator:
             return False
         norm = lambda s: re.sub(r"[\s\W_]+", "", (s or "").lower())
         me = norm(req.goal)
-        if len(me) < 2:
+        # A word or two is a reply, not a question asked again: "Yeah." twice
+        # in voice mode went to the planner, which looked up the date
+        # (demo2, 11/22); 「謝謝」 twice would too.
+        if len(re.findall(r"[㐀-鿿぀-ヿ가-힯]|[^\W\d_]+|\d+", req.goal or "")) < 3:
             return False
         for r in rows:
             if r.get("id") == req.id or r.get("status") not in ("completed", "failed"):
@@ -1885,13 +1888,26 @@ class Orchestrator:
         if not turns:
             return ""
         blocks: List[str] = []
+        from datetime import datetime as _dt
+        now = _dt.utcnow()
         for r in reversed(turns):                 # oldest first
             from print_intent import split_manifest
             paths, goal = split_manifest(r.get("goal") or "")
             if paths:                               # keep the paths: "that file" must stay findable
                 goal = f"[附件: {', '.join(paths)}] " + goal
             summ = re.sub(r"\s+", " ", (r.get("summary") or "").strip())
-            blocks.append(f"使用者：{goal[:300]}\n助理：{summ[:500]}")
+            # An older turn says how old it is, so the model can tell
+            # yesterday's talk from this one: a voice session opened in the
+            # morning read the previous afternoon's 「今天幾月幾號？」 as the
+            # question (demo2, 11/22).
+            age = ""
+            try:
+                hours = (now - _dt.fromisoformat(str(r.get("created_at")))).total_seconds() / 3600
+                if hours >= 1:
+                    age = f"（{int(hours)} 小時前）" if hours < 48 else f"（{int(hours // 24)} 天前）"
+            except (TypeError, ValueError):
+                pass
+            blocks.append(f"{age}使用者：{goal[:300]}\n助理：{summ[:500]}")
         text = "\n\n".join(blocks)
         if len(text) > max_chars:
             text = "…" + text[-max_chars:]
@@ -3157,11 +3173,17 @@ class Orchestrator:
         voice_note = ""
         if (req.context or {}).get("voice"):
             import voice_bridge as _vb
+            # Talk like a person in the room: a morning session greeted 「早安」
+            # in three answers and asked "family or friend?" twice, and a
+            # misheard 「我只亂調我要。」 got a polite guess (demo2, 11/22).
             voice_note = ("(This is a voice conversation and your answer will be read aloud: reply in English, "
                           "in plain spoken language, one to three sentences, with no lists, tables, markdown, "
-                          "emoji or links.)\n" if _vb.english(req.goal) else
+                          "emoji or links. Talk naturally, as in person: once you've greeted, don't greet again, and "
+                          "don't repeat a question you already asked. The words come from speech recognition; if they don't make sense, "
+                          "say briefly that you didn't catch it.)\n" if _vb.english(req.goal) else
                           "（這是語音對話，你的回答會被念出來：用使用者說的語言、口語，一到三句話，不要條列、"
-                          "表格、markdown、emoji 或網址。）\n")
+                          "表格、markdown、emoji 或網址。像面對面聊天一樣自然：打過招呼就不用再打，也不要重複問已經"
+                          "問過的問題。這句話是語音辨識出來的，如果不通順、聽不懂，就簡短說沒聽清楚，請對方再說一次。）\n")
         prompt = (_clock_note() + mem_block + kb_block + voice_note
                   + ((recent + "\n\n使用者現在說：" + req.goal) if recent else req.goal))
         if gated:

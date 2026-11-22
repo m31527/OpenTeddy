@@ -248,6 +248,12 @@ SETTINGS_META: dict[str, dict[str, Any]] = {
                        "press 「重建語意索引」 on each dataset.",
         "type":        "model_select",
     },
+    "voice_enabled": {
+        "label":       "Voice mode",
+        "description": "Talk with OpenTeddy (🎙). Off = the 🎙 button asks first, and can download "
+                       "the voice models and start the voice service on this machine.",
+        "type":        "bool",
+    },
     "voice_service_url": {
         "label":       "Voice service (optional)",
         "description": "Address of the voice service from contrib/voice (speech recognition + "
@@ -631,6 +637,7 @@ def _defaults_from_config() -> dict[str, str]:
         "vllm_models":              getattr(config, "vllm_models", ""),
         "knowledge_enabled":        "true" if getattr(config, "knowledge_enabled", False) else "false",
         "knowledge_embed_model":    getattr(config, "knowledge_embed_model", ""),
+        "voice_enabled":            "true" if getattr(config, "voice_enabled", False) else "false",
         "voice_service_url":        getattr(config, "voice_service_url", ""),
         "voice_name":               getattr(config, "voice_name", ""),
         "escalation_threshold":     str(config.escalation_confidence_threshold),
@@ -976,6 +983,8 @@ class SettingsStore:
             config.knowledge_enabled = str(settings["knowledge_enabled"]).strip().lower() in {"1", "true", "yes", "on"}
         if "knowledge_embed_model" in settings:
             config.knowledge_embed_model = (settings["knowledge_embed_model"] or "").strip()
+        if "voice_enabled" in settings:
+            config.voice_enabled = str(settings["voice_enabled"]).strip().lower() in {"1", "true", "yes", "on"}
         if "voice_service_url" in settings:
             config.voice_service_url = (settings["voice_service_url"] or "").strip()
         if "voice_name" in settings:

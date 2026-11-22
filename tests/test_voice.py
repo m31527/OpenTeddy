@@ -11,6 +11,10 @@ The 🎙 voice mode (voice_bridge.py) against a fake voice service.
      the audio; slow work → "I'm on it" now and the result when it's done
   C. only OpenTeddy's own page may open /voice/ws; the chat lane is told
      the answer is read aloud
+  D. turning it on (voice_setup.py): what this machine can do, and the
+     install — build when missing or older than contrib/voice, start or
+     replace the container, follow the download, turn voice mode on at the
+     end; failures said with their reason; turning it off stops the service
 
     .venv/bin/python tests/test_voice.py
 """
@@ -38,6 +42,7 @@ import voice_bridge as V
 RATE = 22050
 HEARD: list = []
 SPOKEN: list = []
+HEALTH: dict = {"ok": True}
 
 
 def fake_voice_service() -> FastAPI:
@@ -45,14 +50,15 @@ def fake_voice_service() -> FastAPI:
 
     @app.get("/health")
     async def health():
-        return {"ok": True, "tts": "fake-tts", "asr": "fake-asr", "tts_sample_rate": RATE, "voices": ["me"]}
+        return {"tts": "fake-tts", "asr": "fake-asr", "tts_sample_rate": RATE, "voices": ["me"], **HEALTH}
 
     @app.post("/asr")
     async def asr(request: Request):
         body = await request.body()
         HEARD.append(len(body))
-        # 1 s of audio → a question; anything shorter is silence
-        return JSONResponse({"text": "退貨期限是幾天？" if len(body) >= 32000 else "", "ms": 12})
+        # 1 s of audio → a question; 0.75 s → a noise heard as 「。」; shorter → silence
+        n = len(body)
+        return JSONResponse({"text": "退貨期限是幾天？" if n >= 32000 else "。" if n >= 24000 else "", "ms": 12})
 
     @app.post("/tts")
     async def tts(request: Request):
@@ -154,14 +160,28 @@ async def test_conversation() -> None:
     ot, ot_task, ot_port = await serve(openteddy(slow))
     url = f"ws://127.0.0.1:{ot_port}/voice/ws"
     try:
+        config.voice_enabled = False
+        config.voice_service_url = f"http://127.0.0.1:{svc_port}"
+        async with websockets.connect(url) as w:
+            await w.send(json.dumps({"type": "hello", "session_id": "s1"}))
+            m = json.loads(await w.recv())
+            assert m["type"] == "error" and m["code"] == "not_enabled", m
+        config.voice_enabled = True
         config.voice_service_url = ""
         async with websockets.connect(url) as w:
             await w.send(json.dumps({"type": "hello", "session_id": "s1"}))
             m = json.loads(await w.recv())
             assert m["type"] == "error" and m["code"] == "not_configured", m
-        print("  ✓ no voice service set: said so")
-
         config.voice_service_url = f"http://127.0.0.1:{svc_port}"
+        HEALTH.update(ok=False, stage="downloading")
+        async with websockets.connect(url) as w:
+            await w.send(json.dumps({"type": "hello", "session_id": "s1"}))
+            m = json.loads(await w.recv())
+            assert m["type"] == "error" and m["code"] == "loading", m
+        HEALTH.clear()
+        HEALTH["ok"] = True
+        print("  ✓ voice mode off, no voice service set, or the service still downloading: said so")
+
         V.WORK_ACK_S = 1.0
         async with websockets.connect(url) as w:
             audio: list = []
@@ -175,6 +195,13 @@ async def test_conversation() -> None:
                 await recv_until(w, "state", audio, seen)
             await asyncio.sleep(0.2)
             assert not STARTED, "silence starts nothing"
+
+            seen.clear()
+            await w.send(b"\x00\x00" * 12000)       # a tap or a breath, heard as 「。」
+            while not (seen[-1:] and seen[-1].get("value") == "listening" and len(seen) > 1):
+                await recv_until(w, "state", audio, seen)
+            await asyncio.sleep(0.2)
+            assert not STARTED and not any(d["type"] == "transcript" for d in seen), "punctuation alone starts nothing"
 
             seen.clear()
             await w.send(b"\x00\x00" * 16000)       # a sentence
@@ -232,6 +259,7 @@ async def test_guards() -> None:
     app.router.routes.extend(r for r in M.app.routes if getattr(r, "path", "") == "/voice/ws")
     srv, task, port = await serve(app)
     config.voice_service_url = ""
+    config.voice_enabled = True
     try:
         try:
             async with websockets.connect(f"ws://127.0.0.1:{port}/voice/ws", origin="https://evil.example") as w:
@@ -360,11 +388,234 @@ async def test_guards() -> None:
     assert "reply in English" in seen["p"] and "念出來" not in seen["p"], seen["p"]
     print("  ✓ the chat lane is told when its answer is read aloud, in the language the person spoke")
 
+    # "Yeah." twice is not a question asked again (it sent a noise to the
+    # planner, which looked up the date: demo2, 11/22); a real question is.
+    from datetime import datetime
+    past: list = []
+
+    async def list_tasks(limit=4, session_id=None):
+        return [{"id": "old", "status": "completed", "goal": past[0], "created_at": datetime.utcnow().isoformat()}]
+    o = types.SimpleNamespace(tracker=types.SimpleNamespace(list_tasks=list_tasks))
+    for said, again in (("Yeah.", False), ("謝謝", False), ("好。", False), ("Thank you", False),
+                        ("今天幾月幾號？", True), ("幾點了", True), ("what time is it", True)):
+        past[:] = [said]
+        got = await Orchestrator._asked_again(o, TaskRequest(goal=said, session_id="s"))
+        assert got is again, (said, got)
+    print("  ✓ a word or two said twice isn't a question asked again; a question is")
+
+
+# ── D ────────────────────────────────────────────────────────────────────────
+
+class FakeDocker:
+    """docker as voice_setup sees it: an image, a container, a base."""
+
+    def __init__(self, image_rev=None, container=None, base=True, build_rc=0, crash=False):
+        self.image_rev, self.container, self.base = image_rev, container, base
+        self.build_rc, self.crash, self.calls = build_rc, crash, []
+
+    async def __call__(self, *args, timeout=30.0):
+        import voice_setup as S
+        self.calls.append(args)
+        a = list(args)
+        if a[:1] == ["version"]:
+            return 0, "28.0.1"
+        if a[:2] == ["image", "inspect"]:
+            if a[2] == S.IMAGE:
+                return (0, self.image_rev or "<no value>") if self.image_rev is not None else (1, "No such image")
+            return (0, "sha256:x") if self.base else (1, "No such image")
+        if a[:2] == ["container", "inspect"]:
+            if not self.container:
+                return 1, "No such container"
+            status, rev = self.container
+            if "{{.RestartCount}}" in a[-1]:
+                return 0, f"{'exited' if self.crash else status}|0"
+            if "|" in a[-1]:
+                return 0, f"{status}|{rev or '<no value>'}"
+            return 0, status
+        if a[0] == "run":
+            self.container = ("running", self.image_rev)
+            return 0, "abc123"
+        if a[0] == "start":
+            self.container = ("running", self.container[1])
+            return 0, S.NAME
+        if a[:2] == ["rm", "-f"]:
+            self.container = None
+            return 0, S.NAME
+        if a[0] == "stop":
+            self.container = ("exited", self.container[1])
+            return 0, S.NAME
+        if a[0] == "logs":
+            return 0, "Traceback: CUDA out of memory"
+        return 0, ""
+
+
+async def test_setup() -> None:
+    import shutil
+    import tempfile
+    import voice_setup as S
+    real = (S.platform.system, S.platform.machine, S.shutil.which, S._docker, S._build, S.URL, S.MODELS, S.VOICES,
+            S.asyncio.sleep, S.shutil.disk_usage)
+    tmp = tempfile.mkdtemp()
+    try:
+        S.platform.system = lambda: "Darwin"
+        c = await S.check()
+        assert not c["installable"] and c["reason"] == "not_linux", c
+        S.platform.system, S.platform.machine = (lambda: "Linux"), (lambda: "aarch64")
+        S.shutil.which = lambda name: None if name == "nvidia-smi" else f"/usr/bin/{name}"
+        S._docker = FakeDocker()
+        assert (await S.check())["reason"] == "no_gpu"
+        S.shutil.which = lambda name: f"/usr/bin/{name}"
+        S.MODELS, S.VOICES = __import__("pathlib").Path(tmp, "models"), __import__("pathlib").Path(tmp, "voices")
+        S.shutil.disk_usage = lambda p: types.SimpleNamespace(free=500e9)
+        assert S.base_image() == "vllm/vllm-openai:v0.33.0-aarch64"
+        c = await S.check()
+        assert c["installable"] and not c["image"] and not c["container"] and c["download_gb"] == S.MODEL_GB, c
+        S._docker = FakeDocker(base=False)
+        c = await S.check()
+        assert c["download_gb"] == S.MODEL_GB + S.BASE_GB, "no vLLM image here: the runtime is downloaded too"
+        S.shutil.disk_usage = lambda p: types.SimpleNamespace(free=20e9)
+        c = await S.check()
+        assert not c["installable"] and c["reason"] == "low_disk", c
+        S.shutil.disk_usage = lambda p: types.SimpleNamespace(free=500e9)
+        rev = S.source_rev()
+        S._docker = FakeDocker(image_rev=rev, container=("exited", rev))
+        c = await S.check()
+        assert c["installable"] and c["container"] == "exited" and not c["outdated"], c
+        S._docker = FakeDocker(image_rev="", container=("running", ""))
+        assert (await S.check())["outdated"], "built before the rev label (demo2's first one): an update"
+        print("  ✓ what this machine can do: not Linux / no GPU / not enough disk said; the runtime counted only "
+              "when missing; an older build is an update")
+
+        # A fake voice service whose health walks through the stages.
+        stages = iter([{"stage": "starting"}, {"stage": "downloading", "detail": "FunAudioLLM/SenseVoiceSmall"},
+                       {"stage": "loading"}, {"ok": True, "stage": "ready"}])
+        app = FastAPI()
+        latest: dict = {}
+
+        @app.get("/health")
+        async def health():
+            latest.clear()
+            latest.update(next(stages, {"ok": True, "stage": "ready"}))
+            return latest
+        srv, task, port = await serve(app)
+        S.URL = f"http://127.0.0.1:{port}"
+
+        built: list = []
+        phases: list = []
+
+        async def quick(_s):                       # each wait while it gets ready: what it said it was doing
+            phases.append(S.JOB.phase)
+            await real[8](0)
+        S.asyncio.sleep = quick
+
+        async def build():
+            built.append(rev)
+            S._docker.image_rev = rev
+            S._on_build_line("#7 [3/6] RUN pip install funasr")
+            return 0, ""
+        S._build = build
+        turned_on: list = []
+
+        async def on_ready(url):
+            turned_on.append(url)
+
+        async def run(docker):
+            S._docker = docker
+            S.begin(on_ready)
+            while S.running():
+                await real[8](0.005)
+            return S.job()
+
+        try:
+            d = FakeDocker()
+            j = await run(d)
+            assert j["state"] == "ready" and turned_on == [S.URL] and built == [rev], j
+            runs = [c for c in d.calls if c[0] == "run"]
+            assert len(runs) == 1 and "--gpus" in runs[0] and f"127.0.0.1:{S.PORT}:{S.PORT}" in runs[0] \
+                and f"{S.MODELS}:/models" in runs[0] and "--restart" in runs[0], runs
+            assert "download" in phases and "load" in phases, phases
+            print("  ✓ nothing installed: built, started (GPU, this machine only, models mounted), download "
+                  "followed, voice mode turned on")
+
+            built.clear(); turned_on.clear()
+            stages = iter([{"ok": True, "stage": "ready"}])
+            d = FakeDocker(image_rev=rev, container=("exited", rev))
+            j = await run(d)
+            assert j["state"] == "ready" and not built and [c[0] for c in d.calls if c[0] in ("run", "start", "rm")] == ["start"]
+            built.clear(); turned_on.clear()
+            stages = iter([{"ok": True, "stage": "ready"}])
+            d = FakeDocker(image_rev="", container=("running", ""))
+            j = await run(d)
+            assert j["state"] == "ready" and built == [rev] and \
+                [c[0] for c in d.calls if c[0] in ("run", "start", "rm")] == ["rm", "run"], d.calls
+            print("  ✓ already installed: just started; an older build: rebuilt and replaced (models kept)")
+
+            async def bad_build():
+                S._on_build_line("#9 ERROR: pip failed")
+                return 1, "#9 ERROR: pip failed"
+            S._build = bad_build
+            turned_on.clear()
+            j = await run(FakeDocker())
+            assert j["state"] == "error" and j["error"] == "build_failed" and "pip failed" in j["detail"] and not turned_on, j
+            S._build = build
+            stages = iter([{"stage": "loading"}] * 50)
+            j = await run(FakeDocker(crash=True))
+            assert j["state"] == "error" and j["error"] == "crashed" and "out of memory" in j["detail"], j
+            stages = iter([{"stage": "error", "detail": "OSError: download failed"}])
+            j = await run(FakeDocker())
+            assert j["state"] == "error" and j["error"] == "load_failed" and "download failed" in j["detail"], j
+            assert not turned_on
+            print("  ✓ a failed build, a crash, a failed download: said, with the reason; voice mode stays off")
+
+            d = FakeDocker(image_rev=rev, container=("running", rev))
+            S._docker = d
+            assert await S.stop() and d.container[0] == "exited"
+            assert not await S.stop(), "already stopped"
+            print("  ✓ turning it off stops the service (models stay)")
+
+            # The endpoints, on a settings store of their own.
+            import main as M
+            M.settings_store._db_path = os.path.join(tmp, "settings.db")
+            await M.settings_store.init()
+            S._docker = FakeDocker()
+            config.voice_enabled, config.voice_service_url = False, ""
+            st = await M.voice_status()
+            assert st["enabled"] is False and st["setup"]["installable"] and st["setup"]["job"]["state"] in ("ready", "error")
+            svc, svc_task, svc_port = await serve(fake_voice_service())
+            try:
+                r = await M.voice_enable(M._VoiceEnableBody(url=f"http://127.0.0.1:{svc_port}"))
+                assert r["ok"] and config.voice_enabled and config.voice_service_url.endswith(str(svc_port)), r
+                st = await M.voice_status()
+                assert st["enabled"] and st["ok"] and "setup" not in st, st
+                d = FakeDocker(image_rev=rev, container=("running", rev))
+                S._docker = d
+                r = await M.voice_disable()
+                assert r == {"ok": True, "stopped": False} and not config.voice_enabled, \
+                    "a service on another machine isn't ours to stop"
+                S.URL = f"http://127.0.0.1:{S.PORT}"
+                await M.settings_store.update_many({"voice_service_url": S.URL})
+                r = await M.voice_disable()
+                assert r["stopped"] and d.container[0] == "exited", r
+                r = await M.voice_enable(M._VoiceEnableBody(url="http://127.0.0.1:1"))
+                assert not r["ok"] and not config.voice_enabled
+            finally:
+                svc.should_exit = True
+                await svc_task
+            print("  ✓ /voice/status, /voice/enable (a service elsewhere), /voice/disable (stops only its own)")
+        finally:
+            srv.should_exit = True
+            await task
+    finally:
+        (S.platform.system, S.platform.machine, S.shutil.which, S._docker, S._build, S.URL, S.MODELS, S.VOICES,
+         S.asyncio.sleep, S.shutil.disk_usage) = real
+        shutil.rmtree(tmp, ignore_errors=True)
+
 
 async def main() -> None:
     print("A. read aloud"); test_spoken()
     print("B. a conversation"); await test_conversation()
     print("C. guards"); await test_guards()
+    print("D. turning it on"); await test_setup()
     print("\nALL VOICE TESTS PASS")
 
 

@@ -71,6 +71,11 @@ def configured() -> bool:
     return bool((getattr(config, "voice_service_url", "") or "").strip())
 
 
+def enabled() -> bool:
+    """Turned on by the person (Settings, or the 🎙 prompt) — off by default."""
+    return bool(getattr(config, "voice_enabled", False))
+
+
 def _base() -> str:
     return (getattr(config, "voice_service_url", "") or "").strip().rstrip("/")
 
@@ -232,6 +237,10 @@ class Conversation:
         except Exception:  # noqa: BLE001
             hello = {}
         self.session_id = str(hello.get("session_id") or "")
+        if not enabled():
+            await self.send({"type": "error", "code": "not_enabled",
+                             "text": "語音對話還沒開啟（設定 → 語音對話）。"})
+            return
         if not configured():
             await self.send({"type": "error", "code": "not_configured",
                              "text": "語音服務還沒設定（設定 → 語音服務網址）。"})
@@ -241,6 +250,10 @@ class Conversation:
             self.sample_rate = int(h.get("tts_sample_rate") or self.sample_rate)
         except Exception as exc:  # noqa: BLE001
             await self.send({"type": "error", "code": "unreachable", "text": f"連不到語音服務（{_base()}）：{exc}"})
+            return
+        if not h.get("ok", True):
+            await self.send({"type": "error", "code": "loading",
+                             "text": f"語音服務還在準備（{h.get('stage') or '啟動中'}）。"})
             return
         await self.send({"type": "ready", "sample_rate": self.sample_rate, "asr_rate": ASR_RATE,
                          "voice": getattr(config, "voice_name", "") or (h.get("voices") or [""])[0],
@@ -291,7 +304,7 @@ class Conversation:
             await self.state("listening")
             return
         text = (heard.get("text") or "").strip()
-        if not text:
+        if not re.search(r"\w", text):             # nothing, or a noise heard as 「。」 / "."
             await self.state("listening")
             return
         await self.new_turn(text, heard={**heard, "ms_total": int((time.monotonic() - t0) * 1000)})
