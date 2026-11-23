@@ -136,9 +136,8 @@ def judge(role: Dict[str, Any], server: Optional[Dict[str, Any]]) -> Dict[str, A
         if name in server["loaded"]:
             m = server["loaded"][name]
             r["state"] = "loaded"
-            # `size`, not `size_vram`: on GB10's shared memory Ollama counts
-            # only a sliver as VRAM (0.6 GB for a 6.6 GB gemma4:e4b).
-            r["vram_gb"] = round((m.get("size") or m.get("size_vram") or 0) / 1e9, 1)
+            # No memory figure: on GB10's shared memory Ollama's /api/ps
+            # says 0.6 GB (size and size_vram alike) for a 6.6 GB gemma4:e4b.
             r["context"] = m.get("context_length")
         elif name in server["installed"]:
             r["state"] = "installed"

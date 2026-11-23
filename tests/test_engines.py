@@ -73,10 +73,10 @@ def test_judge():
     ollama = {"ok": True, "installed": {"gemma4:e4b", "bge-m3:latest", "qwen3-vl:8b-instruct"},
               "loaded": {"gemma4:e4b": {"size": 7_200_000_000, "size_vram": 559_000_000, "context_length": 16384}}}
     j = engines.judge({"role": "planner", "model": "gemma4:e4b", "engine": "ollama", "url": "u"}, ollama)
-    assert j["state"] == "loaded" and j["vram_gb"] == 7.2 and j["context"] == 16384
+    assert j["state"] == "loaded" and j["context"] == 16384 and "vram_gb" not in j
     assert engines.judge({"role": "embed", "model": "bge-m3", "engine": "ollama", "url": "u"}, ollama)["state"] == "installed"
     assert engines.judge({"role": "x", "model": "llama9", "engine": "ollama", "url": "u"}, ollama)["state"] == "missing"
-    print("  ✓ Ollama: loaded (VRAM, context) / installed (bge-m3 = bge-m3:latest) / missing")
+    print("  ✓ Ollama: loaded (context; no memory figure) / installed (bge-m3 = bge-m3:latest) / missing")
 
     vllm = {"ok": True, "served": {"qwen3.6:35b": {"max_model_len": 65536, "root": "nvidia/Qwen3.6-35B-A3B-NVFP4"}}}
     j = engines.judge({"role": "executor", "model": "qwen3.6:35b", "engine": "vllm", "url": "u"}, vllm)

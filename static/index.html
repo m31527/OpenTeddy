@@ -12418,7 +12418,6 @@
           const engine = { ollama: 'Ollama', vllm: 'vLLM', cloud: t('eng_cloud'), voice: t('eng_voice_service') }[r.engine] || r.engine;
           const where = r.engine === 'cloud' ? `${engine} · ${r.url}` : `${engine} · ${String(r.url).replace(/^https?:\/\//, '')}`;
           const extra = [
-            r.vram_gb ? `${r.vram_gb} GB` : '',
             r.context ? `${Math.round(r.context / 1024)}K ctx` : '',
             r.stage ? r.stage : '',
             r.served && r.served.length ? `${t('eng_serves')} ${r.served.join(', ')}` : '',
