@@ -611,11 +611,112 @@ async def test_setup() -> None:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+# ── E. speaking while the answer is being written ────────────────────────────
+
+def test_next_sentence() -> None:
+    ns = V.next_sentence
+    assert ns("你好，今天") is None and ns("你好，今天", final=True) == ("你好，今天", "")
+    assert ns("好。今天天氣") is None, "「好。」 alone waits for more"
+    assert ns("好。今天天氣很好。明天") == ("好。今天天氣很好。", "明天")
+    assert ns("Version 3.5 is") is None and ns("Hello there. How") == ("Hello there.", " How")
+    assert ns("第一點\n第二點") == ("第一點\n", "第二點") or ns("第一點\n第二點") is None
+    long = "這是一段很長的說明，" * 8
+    s, rest = ns(long)
+    assert s.endswith("，") and len(s) <= V.LONG_RUN and s + rest == long
+    print("  ✓ the first sentence of text still being written: not 「好。」 alone, not inside 3.5, long runs at a comma")
+
+
+def openteddy_streaming(plan: dict) -> FastAPI:
+    """start_task's answer arrives in pieces (as gate.py streams it) before the task is done."""
+    import answer_stream
+    app = FastAPI()
+
+    async def start_task(**kw):
+        STARTED.append(kw)
+        tid = kw["task_id"]
+
+        async def job():
+            for piece in plan["pieces"]:
+                await asyncio.sleep(plan.get("gap", 0.15))
+                plan.setdefault("pushed_at", []).append(asyncio.get_running_loop().time())
+                answer_stream.push(tid, piece)
+            answer_stream.end(tid)
+            plan["ended_at"] = asyncio.get_running_loop().time()
+            await asyncio.sleep(plan.get("tail", 0.3))           # tracker + memory writes
+            return plan.get("final", "".join(plan["pieces"]))
+        return tid, kw.get("session_id"), asyncio.ensure_future(job()), None
+
+    async def await_task(task_id, job):
+        return "completed", await job
+
+    @app.websocket("/voice/ws")
+    async def ws(w: WebSocket):
+        await w.accept()
+        await V.Conversation(w, start_task=start_task, await_task=await_task).run()
+    return app
+
+
+async def test_streamed_speech() -> None:
+    svc, svc_task, svc_port = await serve(fake_voice_service())
+    plan: dict = {"pieces": ["收到商品", "後七天內", "可以申請退貨。", "商品需保持", "全新包裝完整。", "運費由我們負擔。"]}
+    ot, ot_task, ot_port = await serve(openteddy_streaming(plan))
+    try:
+        config.voice_enabled = True
+        config.voice_service_url = f"http://127.0.0.1:{svc_port}"
+        async with websockets.connect(f"ws://127.0.0.1:{ot_port}/voice/ws") as w:
+            await w.send(json.dumps({"type": "hello", "session_id": "s9"}))
+            assert json.loads(await w.recv())["type"] == "ready"
+            SPOKEN.clear()
+            await w.send(json.dumps({"type": "text", "text": "退貨怎麼算"}))
+            loop = asyncio.get_running_loop()
+            audio, seen, first_audio = [], [], None
+
+            async def collect():
+                nonlocal first_audio
+                while True:
+                    m = await w.recv()
+                    if isinstance(m, bytes):
+                        first_audio = first_audio or loop.time()
+                        audio.append(m)
+                        continue
+                    d = json.loads(m)
+                    seen.append(d)
+                    if d.get("type") == "audio_end":
+                        return
+            await asyncio.wait_for(collect(), 10)
+            assert first_audio < plan["ended_at"], "the first sentence is heard before the answer is fully written"
+            assert SPOKEN[0] == "收到商品後七天內可以申請退貨。", SPOKEN
+            assert SPOKEN == ["收到商品後七天內可以申請退貨。", "商品需保持全新包裝完整。", "運費由我們負擔。"], SPOKEN
+            reply = next(d for d in seen if d["type"] == "reply")
+            assert reply["text"] == "".join(plan["pieces"]) and seen[-1]["type"] == "audio_end"
+            assert STARTED[-1]["task_id"] and STARTED[-1]["context"] == {"voice": True}
+            await asyncio.sleep(0.5)
+            assert not any(d["type"] == "done" for d in seen) and len(SPOKEN) == 3, "the same answer isn't spoken twice"
+            print(f"  ✓ spoken sentence by sentence while being written: first sound "
+                  f"{(first_audio - plan['pushed_at'][0]) * 1000:.0f} ms after the first words, "
+                  f"{(plan['ended_at'] - first_audio) * 1000:.0f} ms before the answer was complete; reply = the whole text")
+
+            # A few words, then the turn went to the agent: the result comes as "done", spoken.
+            plan.update(pieces=["我幫你查一下最新的資料。"], final="台北今天晴，最高 28 度。", tail=0.6)
+            SPOKEN.clear()
+            await w.send(json.dumps({"type": "text", "text": "台北天氣"}))
+            done = await recv_until(w, "done", [], [], 10)
+            assert done["text"] == "台北今天晴，最高 28 度。"
+            await asyncio.sleep(0.6)
+            assert SPOKEN == ["我幫你查一下最新的資料。", "台北今天晴，最高 28 度。"], SPOKEN
+            print("  ✓ handed to the agent after a few words: those are said, the result follows as done")
+    finally:
+        for s, t in ((ot, ot_task), (svc, svc_task)):
+            s.should_exit = True
+            await t
+
+
 async def main() -> None:
     print("A. read aloud"); test_spoken()
     print("B. a conversation"); await test_conversation()
     print("C. guards"); await test_guards()
     print("D. turning it on"); await test_setup()
+    print("E. speaking while the answer is written"); test_next_sentence(); await test_streamed_speech()
     print("\nALL VOICE TESTS PASS")
 
 

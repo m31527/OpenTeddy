@@ -171,6 +171,30 @@ def sentences(text: str, max_chars: int = 120) -> List[str]:
     return [p for p in _pieces(text, max_chars) if p]
 
 
+_SENTENCE_END = re.compile(r"[。！？!?；;\n]|\.(?=\s)")
+MIN_SENTENCE = 6                  # 「好。」 alone rides with the next sentence
+LONG_RUN = 60                     # this long with no sentence end: cut at the last comma
+
+
+def next_sentence(buf: str, final: bool = False) -> Optional[Tuple[str, str]]:
+    """(the first complete sentence of text still being written, what follows),
+    or None until one is complete — with `final`, the rest is the last one.
+
+    Speaking starts with the first sentence, so it should end as soon as the
+    sentence does; but not on 「好。」 alone (every call to CosyVoice pays its
+    first-chunk wait, see sentences()), nor inside "3.5"."""
+    for m in _SENTENCE_END.finditer(buf):
+        if len(buf[:m.end()].strip()) >= MIN_SENTENCE:
+            return buf[:m.end()], buf[m.end():]
+    if len(buf) > LONG_RUN:
+        cut = max(buf.rfind("，", 0, LONG_RUN), buf.rfind(",", 0, LONG_RUN), buf.rfind("、", 0, LONG_RUN))
+        if cut > 10:
+            return buf[:cut + 1], buf[cut + 1:]
+    if final and buf.strip():
+        return buf, ""
+    return None
+
+
 def _join(a: str, b: str) -> str:
     """Two pieces of speech side by side: nothing between Chinese, a space in English."""
     if not a or not b:
@@ -348,9 +372,24 @@ class Conversation:
 
     async def answer(self, text: str, turn: int) -> None:
         await self.state("thinking")
+        # Listen for the answer's words before the task starts (answer_stream.py):
+        # the first sentence is spoken while the model is still writing the rest.
+        import answer_stream
+        import uuid
+        tid = str(uuid.uuid4())
+        words = answer_stream.listen(tid)
+        try:
+            await self._answer(text, turn, tid, words)
+        finally:
+            answer_stream.close(tid, words)
+
+    async def _answer(self, text: str, turn: int, tid: str, words: "asyncio.Queue") -> None:
+        import answer_stream
+        started = time.monotonic()
         try:
             task_id, _sid, job, shortcut = await self.start_task(
-                goal=text, context={"voice": True}, session_id=self.session_id or None, auto_lane=True)
+                goal=text, context={"voice": True}, session_id=self.session_id or None, auto_lane=True,
+                task_id=tid)
         except Exception as exc:  # noqa: BLE001
             detail = getattr(exc, "detail", None) or str(exc)
             await self.send({"type": "error", "text": f"沒辦法開始：{detail}"})
@@ -360,14 +399,29 @@ class Conversation:
             await self.reply(shortcut, task_id, turn)
             return
         waiter = asyncio.ensure_future(self.await_task(task_id, job))
+        getter = asyncio.ensure_future(words.get())
         try:
-            done, _ = await asyncio.wait({waiter}, timeout=WORK_ACK_S)
+            # The first of: the answer's first words, the task done (a shortcut,
+            # a hand-off finished quickly), or the work-acknowledgement deadline.
+            done, _ = await asyncio.wait({waiter, getter}, timeout=WORK_ACK_S,
+                                         return_when=asyncio.FIRST_COMPLETED)
+            first = getter.result() if getter in done else None
+            if getter in done and first is answer_stream.END and waiter not in done:
+                # The model handed the turn to the agent: no words; wait as before.
+                done, _ = await asyncio.wait({waiter}, timeout=max(0.0, WORK_ACK_S - (time.monotonic() - started)))
+                first = None
         except asyncio.CancelledError:
             # The person said something new before this was answered: it isn't
             # spoken now, but real work still gets its "done" later.
+            getter.cancel()
             self.background.append(asyncio.create_task(self.when_done(waiter, task_id, quiet_if_quick=True)))
             raise
-        if done:
+        if not getter.done():
+            getter.cancel()
+        if first is not None and first is not answer_stream.END:
+            await self.say_streamed(first, words, task_id, turn, waiter)
+            return
+        if waiter in done:
             _status, message = waiter.result()
             await self.reply(message, task_id, turn)
             return
@@ -376,6 +430,92 @@ class Conversation:
         await self.send({"type": "working", "task_id": task_id, "text": ack})
         await self.say(ack, turn)
         self.background.append(asyncio.create_task(self.when_done(waiter, task_id)))
+
+    async def say_streamed(self, first: str, words: "asyncio.Queue", task_id: str, turn: int,
+                           waiter: "asyncio.Future") -> None:
+        """Speak the answer sentence by sentence as the model writes it; the
+        text goes out as `reply` once it is complete. A turn that went on to
+        the agent after a few words gets its result later, as `done`."""
+        if turn != self.turn:
+            return
+        await self.stop_speaking()
+        written: List[str] = [first]
+        self.speaking = asyncio.create_task(self._stream_words(first, words, written, task_id, turn))
+        try:
+            await self.speaking
+        except asyncio.CancelledError:
+            pass
+        self.background.append(asyncio.create_task(self._after_streamed(waiter, task_id, "".join(written))))
+
+    async def _after_streamed(self, waiter: "asyncio.Future", task_id: str, streamed: str) -> None:
+        """The task's own result, once in: nothing more when it is the words
+        already spoken; otherwise (handed to the agent after a few words) the
+        result, as a work result is."""
+        try:
+            _status, message = await waiter
+        except (asyncio.CancelledError, Exception):  # noqa: BLE001
+            return
+        m, s = (message or "").strip(), streamed.strip()
+        if not m or m == s or m.startswith(s) and len(m) - len(s) < 4:
+            return
+        await self.send({"type": "done", "task_id": task_id, "text": message})
+        while self.speaking and not self.speaking.done():
+            await asyncio.sleep(0.3)
+        await self.say(spoken(message, SPOKEN_MAX_CHARS), self.turn)
+
+    async def _stream_words(self, first: str, words: "asyncio.Queue", written: List[str],
+                            task_id: str, turn: int) -> None:
+        import answer_stream
+        buf, ended, said, sent_reply = first, False, 0, False
+        speaking = False
+        try:
+            while True:
+                cut = next_sentence(buf, final=ended)
+                if cut is None:
+                    if ended:
+                        break
+                    got = await words.get()
+                    if got is answer_stream.END:
+                        ended = True
+                        if not sent_reply:
+                            sent_reply = True
+                            await self.send({"type": "reply", "text": "".join(written), "task_id": task_id})
+                    else:
+                        written.append(got)
+                        buf += got
+                    continue
+                sentence, buf = cut
+                line = spoken(sentence)
+                if not line:
+                    continue
+                if said + len(line) > SPOKEN_MAX_CHARS and said:
+                    line = phrase(DONE_MORE, self.en)          # the gist was said; the rest is on screen
+                    buf, ended = "", True
+                said += len(line)
+                if not speaking:
+                    speaking = True
+                    await self.state("speaking")
+                async for chunk in speak(line, self.http):
+                    await self.send(chunk)
+            if not sent_reply:
+                # Stopped early (the gist said): the screen still gets the whole answer.
+                deadline = time.monotonic() + 60
+                while time.monotonic() < deadline:
+                    try:
+                        got = await asyncio.wait_for(words.get(), max(0.1, deadline - time.monotonic()))
+                    except asyncio.TimeoutError:
+                        break
+                    if got is answer_stream.END:
+                        break
+                    written.append(got)
+                await self.send({"type": "reply", "text": "".join(written), "task_id": task_id})
+        except asyncio.CancelledError:
+            await self.send({"type": "audio_end", "interrupted": True})
+            raise
+        except Exception as exc:  # noqa: BLE001
+            await self.send({"type": "error", "text": f"語音合成失敗：{exc}"})
+        await self.send({"type": "audio_end"})
+        await self.state("listening")
 
     async def when_done(self, waiter: "asyncio.Future", task_id: str, quiet_if_quick: bool = False) -> None:
         started = time.monotonic()

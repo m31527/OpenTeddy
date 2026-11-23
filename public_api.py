@@ -8,6 +8,7 @@ like OpenAI's, so its SDKs work with base_url=<OpenTeddy>/v1 and the key.
   GET  /v1/tasks/{id}                      a turn that took longer than the wait
   POST /v1/tasks/{id}/approve|reject|cancel
   POST /v1/audio/transcriptions            speech → text (the voice service)
+  WS   /v1/audio/stt-stream                speech → text as it is spoken (partial / final)
   POST /v1/audio/speech                    text → speech (wav or raw pcm)
   WS   /v1/realtime                        a spoken conversation (voice_bridge.py's protocol)
 
@@ -257,11 +258,19 @@ async def chat_completions(request: Request, key: Dict[str, Any] = Depends(requi
         if history:
             context["history"] = history[-HISTORY_MAX:]
 
+    # A streamed answer listens for the model's words before the task starts,
+    # so not one piece is missed (answer_stream.py).
+    import answer_stream
+    words, new_task = None, str(uuid.uuid4())
+    if body.get("stream"):
+        words = answer_stream.listen(new_task)
     try:
         task_id, session_id, job, shortcut = await H.start_task(
             goal=goal, context=context, session_id=session_id, auto_lane=True, api_key_id=key["id"],
-            **({"datasets": ds} if ds is not None else {}))
+            task_id=new_task, **({"datasets": ds} if ds is not None else {}))
     except HTTPException as exc:
+        if words is not None:
+            answer_stream.close(new_task, words)
         raise ApiError(exc.status_code, str(exc.detail))
     en = voice_bridge.english(goal)
     created = int(time.time())
@@ -271,7 +280,7 @@ async def chat_completions(request: Request, key: Dict[str, Any] = Depends(requi
 
     if body.get("stream"):
         return StreamingResponse(
-            _stream(task_id, job, shortcut, model, created, ids, en),
+            _stream(task_id, job, shortcut, model, created, ids, en, words),
             media_type="text/event-stream", headers={**head, "Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
     if shortcut is not None:
@@ -294,41 +303,89 @@ async def chat_completions(request: Request, key: Dict[str, Any] = Depends(requi
     }, headers=head)
 
 
+def _rest(streamed: str, final: str) -> str:
+    """What the final answer adds to the words already streamed: nothing when
+    they are the answer; the remainder when it goes on; all of it, after a
+    blank line, when the turn went to the agent after a few words."""
+    s, f = streamed.strip(), (final or "").strip()
+    if not f or f == s:
+        return ""
+    if not s:
+        return f
+    if f.startswith(s):
+        return f[len(s):]
+    return "\n\n" + f
+
+
 async def _stream(task_id: str, job: Any, shortcut: Optional[str], model: str, created: int,
-                  ids: Dict[str, Any], en: bool):
-    """Server-sent chunks: the role first, keep-alives while OpenTeddy
-    works, then the answer in one piece (it is not produced token by token
-    on every path, so it isn't pretended to be)."""
+                  ids: Dict[str, Any], en: bool, words: Optional["asyncio.Queue"] = None):
+    """Server-sent chunks: the role first, then the answer as the model
+    writes it (answer_stream.py) — one chunk per piece — with keep-alives
+    while the agent works on a turn that needs tools, whose result comes
+    when it is done."""
+    import answer_stream
     base = {"id": f"chatcmpl-{task_id}", "object": "chat.completion.chunk", "created": created, "model": model}
 
     def sse(obj: dict) -> str:
         return "data: " + json.dumps(obj, ensure_ascii=False) + "\n\n"
 
+    def piece(text: str) -> str:
+        return sse({**base, "choices": [{"index": 0, "delta": {"content": text}, "finish_reason": None}]})
+
     yield sse({**base, "choices": [{"index": 0, "delta": {"role": "assistant", "content": ""},
                                     "finish_reason": None}], **ids})
     waiter = None
+    sink = words
+    streamed: List[str] = []
     try:
         if shortcut is not None:
             text, status = shortcut, "completed"
         else:
             waiter = asyncio.ensure_future(H.await_task(task_id, job))
-            started = time.monotonic()
+            started = last = time.monotonic()
+            getter: Optional[asyncio.Future] = None
             while True:
-                done, _ = await asyncio.wait({waiter}, timeout=KEEPALIVE_S)
-                if done:
-                    st, text = waiter.result()
+                if words is not None and getter is None:
+                    getter = asyncio.ensure_future(words.get())
+                wait_on = {waiter} | ({getter} if getter is not None else set())
+                done, _ = await asyncio.wait(wait_on, timeout=KEEPALIVE_S, return_when=asyncio.FIRST_COMPLETED)
+                if getter is not None and getter in done:
+                    got = getter.result()
+                    getter = None
+                    if got is answer_stream.END:
+                        words = None                  # the model's text is complete; the task finishes next
+                    else:
+                        streamed.append(got)
+                        last = time.monotonic()
+                        yield piece(got)
+                    continue
+                if waiter in done:
+                    while words is not None and not words.empty():   # pieces that came with the end
+                        got = words.get_nowait()
+                        if got is not answer_stream.END:
+                            streamed.append(got)
+                            yield piece(got)
+                    st, final = waiter.result()
                     status = _status(st)
+                    text = _rest("".join(streamed), final)
                     break
                 if time.monotonic() - started > STREAM_MAX_S:
                     pending = await _pending(task_id)
-                    text = _still_working(task_id, pending, en)
+                    text = ("\n\n" if streamed else "") + _still_working(task_id, pending, en)
                     status = "waiting_approval" if pending else "running"
                     break
-                yield ": keep-alive\n\n"
-        yield sse({**base, "choices": [{"index": 0, "delta": {"content": text or ""}, "finish_reason": None}]})
+                if time.monotonic() - last >= KEEPALIVE_S:
+                    last = time.monotonic()
+                    yield ": keep-alive\n\n"
+            if getter is not None:
+                getter.cancel()
+        if text:
+            yield piece(text)
         yield sse({**base, "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}], "status": status, **ids})
         yield "data: [DONE]\n\n"
     finally:
+        if sink is not None:
+            answer_stream.close(task_id, sink)
         if waiter is not None and not waiter.done():
             waiter.cancel()                       # the app hung up: the task runs on
 
@@ -510,6 +567,142 @@ async def speech(request: Request, key: Dict[str, Any] = Depends(require_key)) -
     except httpx.HTTPError as exc:
         raise ApiError(502, f"The voice service didn't answer: {exc}", "server_error", "voice_unreachable")
     return Response(_wav(pcm, rate), media_type="audio/wav")
+
+
+# ── Streaming speech to text ─────────────────────────────────────────────────
+# SenseVoice transcribes a whole clip, fast (30–100 ms for a sentence), and
+# has no streaming mode. So the utterance so far is transcribed again every
+# PARTIAL_MS while the person talks (a "partial"), and once more when it
+# ends (the "final"): when the app says so ({"type":"flush"} — LiveKit's
+# VAD does) or, with endpoint_ms, after that much silence.
+
+STT_CHUNK_MAX = 64000             # one message: at most 2 s of audio
+PARTIAL_MS = 300
+PREROLL_BYTES = ASR_RATE * 2 // 2  # 0.5 s kept before speech starts, so its start isn't cut
+SPEECH_RMS_MIN = 600.0
+
+
+def _rms(chunk: bytes) -> float:
+    import numpy as np
+    x = np.frombuffer(chunk[: len(chunk) // 2 * 2], "<i2").astype(np.float32)
+    return float(np.sqrt(np.mean(x * x))) if len(x) else 0.0
+
+
+@router.websocket("/audio/stt-stream")
+async def stt_stream(ws: WebSocket) -> None:
+    """→ binary PCM16 mono 16 kHz in small chunks (20–40 ms), and optionally
+    {"type":"config","endpoint_ms":600,"interim":true}, {"type":"flush"},
+    {"type":"reset"}. ← {"type":"speech_started"}, {"type":"partial","text"},
+    {"type":"final","text"}. The key as for /v1/realtime."""
+    token = api_keys.token_from(ws.headers)
+    key = await api_keys.verify(token) if token else None
+    if key is None:
+        await ws.close(code=4401)
+        return
+    offered = [p.strip() for p in (ws.headers.get("sec-websocket-protocol") or "").split(",") if p.strip()]
+    await ws.accept(subprotocol=api_keys.SUBPROTOCOL if api_keys.SUBPROTOCOL in offered else (offered[0] if offered else None))
+    try:
+        _voice_ready()
+    except ApiError as exc:
+        await ws.send_json({"type": "error", "code": exc.code, "text": exc.message})
+        await ws.close()
+        return
+
+    cfg = {"endpoint_ms": 0, "interim": True}
+    buf = bytearray()
+    speech, silence_ms, floor = False, 0.0, 300.0
+    last_partial, last_text = 0.0, ""
+    inflight: Optional[asyncio.Task] = None
+    client = httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=5.0))
+    send_lock = asyncio.Lock()
+
+    async def send(obj: Dict[str, Any]) -> None:
+        async with send_lock:
+            await ws.send_json(obj)
+
+    async def hear(pcm: bytes) -> str:
+        res = await voice_bridge.transcribe(pcm, client)
+        text = (res.get("text") or "").strip()
+        return text if re.search(r"\w", text) else ""
+
+    async def partial(snapshot: bytes) -> None:
+        nonlocal last_text
+        try:
+            text = await hear(snapshot)
+        except Exception:  # noqa: BLE001 — a missed partial is fine; the final counts
+            return
+        if text and text != last_text and speech:
+            last_text = text
+            await send({"type": "partial", "text": text})
+
+    async def final(always: bool) -> None:
+        nonlocal buf, speech, silence_ms, last_text, inflight
+        if inflight is not None and not inflight.done():
+            inflight.cancel()
+        pcm, had_speech = bytes(buf), speech
+        buf, speech, silence_ms, last_text = bytearray(), False, 0.0, ""
+        text = ""
+        if pcm and (had_speech or always):
+            try:
+                text = await hear(pcm[-MAX_AUDIO_S * ASR_RATE * 2:])
+            except Exception as exc:  # noqa: BLE001
+                await send({"type": "error", "code": "voice_unreachable", "text": str(exc)})
+                return
+        if text or always:
+            await send({"type": "final", "text": text})
+
+    try:
+        while True:
+            msg = await ws.receive()
+            if msg.get("type") == "websocket.disconnect":
+                break
+            if msg.get("bytes"):
+                chunk = msg["bytes"][:STT_CHUNK_MAX]
+                buf += chunk
+                ms = len(chunk) / 2 / ASR_RATE * 1000
+                level = _rms(chunk)
+                if level > max(SPEECH_RMS_MIN, floor * 3):
+                    if not speech:
+                        speech = True
+                        await send({"type": "speech_started"})
+                    silence_ms = 0.0
+                else:
+                    floor = floor * 0.95 + level * 0.05 if not speech else floor
+                    if speech:
+                        silence_ms += ms
+                        if cfg["endpoint_ms"] and silence_ms >= cfg["endpoint_ms"]:
+                            await final(False)
+                            continue
+                if not speech and len(buf) > PREROLL_BYTES:
+                    del buf[: len(buf) - PREROLL_BYTES]       # only the last 0.5 s before speech
+                now = time.monotonic()
+                if (cfg["interim"] and speech and now - last_partial >= PARTIAL_MS / 1000
+                        and (inflight is None or inflight.done())):
+                    last_partial = now
+                    inflight = asyncio.create_task(partial(bytes(buf[-MAX_AUDIO_S * ASR_RATE * 2:])))
+            elif msg.get("text"):
+                try:
+                    data = json.loads(msg["text"])
+                except ValueError:
+                    continue
+                kind = data.get("type")
+                if kind == "flush":
+                    await final(True)
+                elif kind == "reset":
+                    buf, speech, silence_ms, last_text = bytearray(), False, 0.0, ""
+                elif kind == "config":
+                    if "endpoint_ms" in data:
+                        cfg["endpoint_ms"] = max(0, min(5000, int(data.get("endpoint_ms") or 0)))
+                    if "interim" in data:
+                        cfg["interim"] = bool(data["interim"])
+    except Exception as exc:  # noqa: BLE001 — the app went away
+        logger.info("stt-stream ended (%s)", type(exc).__name__)
+    finally:
+        if inflight is not None and not inflight.done():
+            inflight.cancel()
+        await client.aclose()
+        with contextlib.suppress(Exception):
+            await ws.close()
 
 
 # ── Realtime: a spoken conversation ──────────────────────────────────────────

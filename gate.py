@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from config import config
 
@@ -85,6 +85,73 @@ def _task_from(tool_calls: Any) -> Optional[str]:
     return None
 
 
+async def _streamed(orch: Any, url: str, payload: Dict[str, Any], on_vllm: bool, task_id: str) -> Dict[str, Any]:
+    """The gate's call, streamed: each piece of the answer goes to
+    answer_stream as it arrives; returns the same shape as a plain call
+    (Ollama-style message + counts) for the code after it.
+
+    A tool call (the hand-off) streams no text: pieces are pushed only
+    while no tool call has been seen, and a model that writes a few words
+    before calling start_task is rare (the work lane then follows)."""
+    import json
+    import answer_stream
+    content: List[str] = []
+    tool_calls: List[Dict[str, Any]] = []
+    vllm_calls: Dict[int, Dict[str, str]] = {}
+    data: Dict[str, Any] = {}
+    first_ms = 0.0
+    t0 = time.monotonic()
+    async with orch._http.stream("POST", url, json=payload) as resp:
+        resp.raise_for_status()
+        async for line in resp.aiter_lines():
+            line = line.strip()
+            if not line:
+                continue
+            if on_vllm:                                   # OpenAI SSE
+                if not line.startswith("data:"):
+                    continue
+                body = line[5:].strip()
+                if body == "[DONE]":
+                    break
+                d = json.loads(body)
+                if d.get("usage"):
+                    data["prompt_eval_count"] = d["usage"].get("prompt_tokens", 0)
+                    data["eval_count"] = d["usage"].get("completion_tokens", 0)
+                for ch in d.get("choices") or []:
+                    delta = ch.get("delta") or {}
+                    for tc in delta.get("tool_calls") or []:
+                        slot = vllm_calls.setdefault(int(tc.get("index", 0)), {"name": "", "arguments": ""})
+                        fn = tc.get("function") or {}
+                        slot["name"] += fn.get("name") or ""
+                        slot["arguments"] += fn.get("arguments") or ""
+                    piece = delta.get("content") or ""
+                    if piece:
+                        content.append(piece)
+                        if not vllm_calls:
+                            first_ms = first_ms or (time.monotonic() - t0) * 1000
+                            answer_stream.push(task_id, piece)
+                continue
+            d = json.loads(line)                          # Ollama NDJSON
+            msg = d.get("message") or {}
+            if msg.get("tool_calls"):
+                tool_calls.extend(msg["tool_calls"])
+            piece = msg.get("content") or ""
+            if piece:
+                content.append(piece)
+                if not tool_calls:
+                    first_ms = first_ms or (time.monotonic() - t0) * 1000
+                    answer_stream.push(task_id, piece)
+            if d.get("done"):
+                data.update({k: v for k, v in d.items() if k != "message"})
+                break
+    if vllm_calls:
+        tool_calls = [{"function": vllm_calls[i]} for i in sorted(vllm_calls)]
+    data["message"] = {"role": "assistant", "content": "".join(content), "tool_calls": tool_calls}
+    logger.info("[gate] streamed: first piece %.0f ms, %d pieces%s", first_ms, len(content),
+                " (handed to the agent)" if tool_calls else "")
+    return data
+
+
 async def ask(orch: Any, prompt: str, task_id: str = "") -> Tuple[str, Optional[str]]:
     """(answer, None) when the model answered; ("", what) when it called
     start_task. Raises on a failed call (the caller treats it like any
@@ -125,9 +192,21 @@ async def ask(orch: Any, prompt: str, task_id: str = "") -> Tuple[str, Optional[
             payload["think"] = th
         url = f"{config.gemma_base_url}/api/chat"
     t0 = time.monotonic()
-    resp = await orch._http.post(url, json=payload)
-    resp.raise_for_status()
-    data = local_engine.normalize_response(resp.json())
+    import answer_stream
+    if answer_stream.wanted(task_id):
+        # Someone is waiting on the words (a streamed API answer, a spoken
+        # reply): send each piece as the model writes it (answer_stream.py).
+        payload["stream"] = True
+        if on_vllm:
+            payload["stream_options"] = {"include_usage": True}
+        try:
+            data = await _streamed(orch, url, payload, on_vllm, task_id)
+        finally:
+            answer_stream.end(task_id)
+    else:
+        resp = await orch._http.post(url, json=payload)
+        resp.raise_for_status()
+        data = local_engine.normalize_response(resp.json())
     t = local_engine.log_timing("[gate]", config.gemma_model, data)
     try:
         out = data.get("eval_count", 0) or 0
