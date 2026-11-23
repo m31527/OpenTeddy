@@ -142,8 +142,9 @@ async def _pick_datasets(session_id: str, requested: Any) -> Optional[List[str]]
             return None
         try:
             return await knowledge.set_session_datasets(session_id, requested)
-        except knowledge.KnowledgeError as exc:
-            raise ApiError(400, str(exc), code="dataset_not_found", param="datasets")
+        except knowledge.KnowledgeError as exc:            # an app lists them at /v1/datasets, not /knowledge
+            raise ApiError(400, str(exc).replace("GET /knowledge ", "GET /v1/datasets "),
+                           code="dataset_not_found", param="datasets")
     if not knowledge.enabled():
         return None
     try:
