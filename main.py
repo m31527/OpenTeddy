@@ -4172,6 +4172,14 @@ async def ollama_status() -> dict:
     return {"success": True, "data": {"online": online, "url": url}, "error": None}
 
 
+@app.get("/settings/engines")
+async def settings_engines() -> dict:
+    """Where each model role's calls really go (Ollama, vLLM, the cloud,
+    the voice service) and whether that is up — engines.py."""
+    import engines
+    return await engines.snapshot()
+
+
 # ── Scheduled tasks (cron-driven recurring runs) ──────────────────────────────
 # See scheduler.py for the runtime; these are just the thin HTTP wrappers
 # around the public surface. Request / response shapes are deliberately
