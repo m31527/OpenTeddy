@@ -4,7 +4,10 @@ The `/v1` API lets an app talk to OpenTeddy. An app can:
 
 - chat,
 - turn speech into text and text into speech,
-- hold a spoken conversation in real time.
+- hold a spoken conversation in real time,
+- answer from the knowledge-base datasets it names.
+
+Building a voice app? Read [Building a voice app](#building-a-voice-app) at the end.
 
 It works the way OpenAI's API does: the key goes in `Authorization: Bearer ot-…`. OpenAI's SDKs work if you set `base_url` to `<OpenTeddy>/v1`.
 
@@ -53,6 +56,7 @@ Errors come back with an HTTP status, shaped as OpenAI shapes them:
 |---|---|---|
 | 401 | `missing_api_key` / `invalid_api_key` | No key, a wrong key, or a revoked key |
 | 404 | `session_not_found` / `task_not_found` | The session or task isn't this key's |
+| 400 | `dataset_not_found` / `knowledge_off` | A dataset name or id that doesn't exist, or the knowledge base is off |
 | 400 | `unsupported_audio` and others | The request itself is wrong |
 | 503 | `voice_not_configured` / `voice_off` | There is no voice service, or voice is turned off in Settings |
 | 502 | `voice_unreachable` | The voice service didn't answer |
@@ -108,6 +112,47 @@ Text only: image parts in `content` are ignored. `temperature`, `max_tokens` and
 ## `GET /v1/models`
 
 Returns a list with one model, `openteddy`.
+
+## Datasets: which knowledge to answer from
+
+The knowledge base holds the owner's reference material: FAQs, product notes, policies. It is organised in named **datasets**, made in OpenTeddy's 知識庫 tab, and it must be switched on there.
+
+When a conversation names datasets, OpenTeddy answers from what they say and says so when they don't cover the question.
+
+**List them** so the app can offer a choice:
+
+```bash
+curl https://api.example.com/v1/datasets -H "Authorization: Bearer $OPENTEDDY_KEY"
+```
+
+```json
+{"object": "list", "enabled": true, "data": [
+  {"id": "k3f9…", "name": "客服 FAQ", "description": "退換貨、運費", "items": 120, "always": false},
+  {"id": "p81c…", "name": "產品手冊", "description": "", "items": 640, "always": true}]}
+```
+
+The list gives names and sizes, not contents. `enabled: false` means the knowledge base is off.
+
+**Name them** with `datasets`, a list of names or ids:
+
+- **In chat:** `datasets` in the body. With the OpenAI SDK, use `extra_body={"datasets": ["客服 FAQ"]}`.
+- **In realtime voice:** `datasets` in the hello. To change them mid-conversation, send `{"type": "datasets", "datasets": [...]}`.
+
+A conversation **keeps** the datasets it named. Later turns use them until the app names others; there is no need to send them every time.
+
+- `[]` means none, for that turn.
+- A conversation that has never named any uses the datasets the owner marked "always" (`always: true`).
+- The answer (chat) or `ready` (voice) lists the datasets in effect, by name.
+
+```python
+r = client.chat.completions.create(
+    model="openteddy",
+    messages=[{"role": "user", "content": "可以退貨嗎？運費誰出？"}],
+    extra_body={"datasets": ["客服 FAQ"]})
+print(r.choices[0].message.content, r.model_extra["datasets"])   # … ['客服 FAQ']
+```
+
+A name that doesn't exist gives `dataset_not_found`, and the conversation isn't started. Naming datasets while the knowledge base is off gives `knowledge_off`.
 
 ## Tasks: `GET /v1/tasks/{id}`
 
@@ -173,19 +218,148 @@ If the key is wrong, the handshake is refused with HTTP 403.
 
 | Direction | Message |
 |---|---|
-| → first | `{"type": "hello", "session_id": "…"}`. Send `session_id: ""` (or leave it out) for a new conversation. |
-| ← | `{"type": "ready", "session_id", "sample_rate", "asr_rate": 16000, "voice", "asr", "tts"}` |
-| → | **binary**: one utterance, PCM16 mono at 16 kHz. The app detects the end of speech; the web UI waits for 0.5 s of silence. |
+| → first | `{"type": "hello", "session_id": "…", "datasets": [...]}`. Leave `session_id` out (or `""`) for a new conversation. `datasets` is optional. |
+| ← | `{"type": "ready", "session_id", "sample_rate", "asr_rate": 16000, "voice", "asr", "tts", "datasets"}` |
+| → | **binary**: one utterance, PCM16 mono at 16 kHz, at most 45 s. The app decides where speech ends; the web UI waits for 0.5 s of silence. |
 | → | `{"type": "text", "text": "…"}`: a typed turn instead of a spoken one |
+| → | `{"type": "datasets", "datasets": [...]}`: answer from these from now on. The reply is ← `{"type": "datasets", "datasets": [names]}`. |
 | → | `{"type": "interrupt"}`: the person started talking, so stop speaking |
 | ← | `{"type": "state", "value": "listening" \| "thinking" \| "speaking"}` |
 | ← | `{"type": "transcript", "text", "ms"}`: what was heard |
 | ← | `{"type": "reply", "text", "task_id"}`: the answer as text |
-| ← | **binary**: the spoken answer, PCM16 mono at `sample_rate`, in chunks as it is made. `{"type": "audio_end"}` follows. |
+| ← | **binary**: the spoken answer, PCM16 mono at `sample_rate`, in chunks as it is made. `{"type": "audio_end"}` follows (`"interrupted": true` when it was cut short). |
 | ← | `{"type": "working", "task_id", "text"}`: work that takes longer than 8 s is acknowledged out loud … |
 | ← | `{"type": "done", "task_id", "text"}`: … and then spoken when it is done |
-| ← | `{"type": "error", "code", "text"}`: `code` is `not_enabled`, `not_configured`, `unreachable`, `loading` or `bad_session` |
+| ← | `{"type": "error", "code", "text"}`. `code` is one of `not_enabled`, `not_configured`, `unreachable`, `loading`, `bad_session`, `dataset_not_found` or `knowledge_off`. |
 
 Noise that isn't speech starts nothing: the voice service checks for a voice first.
 
 The audio of the conversation travels between the app and OpenTeddy over the tunnel. Between OpenTeddy and its voice service it stays on the local network.
+
+## Building a voice app
+
+There are two ways to build it. Pick one.
+
+| | **A. Realtime** (`/v1/realtime`) | **B. Three HTTP calls** |
+|---|---|---|
+| Flow | One WebSocket carries the whole conversation | transcriptions → chat/completions → speech |
+| First sound | About 2 s after the person stops talking; the answer streams | Later: the whole answer is synthesised before it plays |
+| Interrupting OpenTeddy | Yes (`interrupt`) | Stop playback yourself |
+| Effort | Audio in and out as PCM | Plain HTTP with files |
+
+**A** is what the web UI's 🎙 uses. **B** is simpler when an app already records files and only needs question → spoken answer.
+
+### A. Realtime, step by step
+
+1. **Connect** to `wss://<host>/v1/realtime` with the key. Send the hello with any `datasets`. Wait for `ready`.
+2. **Keep** `ready.session_id` to resume the same conversation later (put it in the next hello), and `ready.sample_rate` for playback.
+3. **Record** 16 kHz mono 16-bit PCM. Android `AudioRecord` gives this directly. On iOS, `AVAudioEngine` and a converter to 16 kHz Int16 do it. A browser can create an `AudioContext({sampleRate: 16000})`.
+4. **Decide where an utterance ends.** **Push-to-talk** is the easiest: record while a button is held. **Hands-free** listening ends an utterance after about 0.5 s below a noise floor. Send each utterance as **one binary message**.
+5. **Show** `transcript`, then `reply`. **Play** the binary chunks back to back at `sample_rate` until `audio_end`.
+6. When the person starts talking over the answer, send `interrupt` and drop the queued audio.
+7. A `working` message means longer work is under way. Keep listening; `done` arrives with the result later, and it is spoken too.
+
+**Browser (JavaScript), push-to-talk:**
+
+```js
+const KEY = "ot-…";              // see "Keeping the key safe" below
+const ws = new WebSocket("wss://api.example.com/v1/realtime", ["openteddy", "openteddy-key." + KEY]);
+ws.binaryType = "arraybuffer";
+const out = new AudioContext();
+let rate = 24000, playAt = 0, playing = [];
+
+ws.onopen = () => ws.send(JSON.stringify({ type: "hello", datasets: ["客服 FAQ"] }));
+ws.onmessage = (ev) => {
+  if (typeof ev.data !== "string") return play(new Int16Array(ev.data));
+  const m = JSON.parse(ev.data);
+  if (m.type === "ready") rate = m.sample_rate;          // keep m.session_id to resume later
+  else if (m.type === "transcript") console.log("you:", m.text);
+  else if (m.type === "reply" || m.type === "done") console.log("OpenTeddy:", m.text);
+  else if (m.type === "error") console.warn(m.code, m.text);
+};
+
+function play(pcm) {                                       // PCM16 → queued audio
+  const buf = out.createBuffer(1, pcm.length, rate), ch = buf.getChannelData(0);
+  for (let i = 0; i < pcm.length; i++) ch[i] = pcm[i] / 32768;
+  const src = out.createBufferSource();
+  src.buffer = buf; src.connect(out.destination);
+  playAt = Math.max(playAt, out.currentTime); src.start(playAt); playAt += buf.duration;
+  playing.push(src); src.onended = () => playing = playing.filter(s => s !== src);
+}
+
+let rec;
+async function startTalking() {                            // button pressed
+  ws.send(JSON.stringify({ type: "interrupt" }));          // OpenTeddy stops talking …
+  playing.forEach(s => s.stop()); playing = []; playAt = 0; // … and so does the queue
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  const ctx = new AudioContext({ sampleRate: 16000 });     // the browser resamples to 16 kHz
+  const node = ctx.createScriptProcessor(4096, 1, 1), chunks = [];
+  node.onaudioprocess = (e) => chunks.push(new Float32Array(e.inputBuffer.getChannelData(0)));
+  ctx.createMediaStreamSource(stream).connect(node); node.connect(ctx.destination);
+  rec = { stream, ctx, chunks };
+}
+function stopTalking() {                                   // button released: one utterance
+  rec.stream.getTracks().forEach(t => t.stop()); rec.ctx.close();
+  const n = rec.chunks.reduce((a, c) => a + c.length, 0), pcm = new Int16Array(n);
+  let i = 0;
+  for (const c of rec.chunks) for (const s of c) pcm[i++] = Math.max(-1, Math.min(1, s)) * 32767;
+  ws.send(pcm.buffer);
+}
+```
+
+The page must be served over https (or from localhost), or the browser won't give it the microphone.
+
+**Python, one question from a WAV file** (16 kHz mono 16-bit), useful for testing:
+
+```python
+import asyncio, json, wave
+import websockets                     # pip install websockets
+
+KEY, URL = "ot-…", "wss://api.example.com/v1/realtime"
+
+async def ask(path):
+    async with websockets.connect(URL, additional_headers={"Authorization": f"Bearer {KEY}"}) as ws:
+        await ws.send(json.dumps({"type": "hello", "datasets": ["客服 FAQ"]}))
+        ready = json.loads(await ws.recv())
+        with wave.open(path) as w:
+            await ws.send(w.readframes(w.getnframes()))
+        audio = bytearray()
+        while True:
+            m = await ws.recv()
+            if isinstance(m, bytes):
+                audio += m
+                continue
+            d = json.loads(m)
+            if d["type"] in ("transcript", "reply", "error"):
+                print(d["type"], d.get("text"))
+            if d["type"] in ("audio_end", "error"):
+                break
+        with wave.open("answer.wav", "wb") as w:
+            w.setnchannels(1); w.setsampwidth(2); w.setframerate(ready["sample_rate"]); w.writeframes(audio)
+
+asyncio.run(ask("question.wav"))
+```
+
+### B. Three HTTP calls
+
+```python
+from openai import OpenAI
+client = OpenAI(base_url="https://api.example.com/v1", api_key="ot-…")
+
+heard = client.audio.transcriptions.create(model="sensevoice", file=open("question.wav", "rb")).text
+r = client.chat.completions.create(model="openteddy", messages=[{"role": "user", "content": heard}],
+                                   extra_body={"datasets": ["客服 FAQ"]})     # + "session_id" to go on
+answer, session = r.choices[0].message.content, r.model_extra["session_id"]
+with client.audio.speech.with_streaming_response.create(model="cosyvoice", voice="default",
+                                                         input=answer, response_format="wav") as s:
+    s.stream_to_file("answer.wav")
+```
+
+Send WAV to transcriptions: other formats need ffmpeg on the OpenTeddy machine. A long answer can be read only in part: the app decides how much of `answer` to speak.
+
+### Keeping the key safe
+
+Anyone who has the key can use OpenTeddy as the app does.
+
+- An app that only **your own team** uses (an internal tool, a kiosk) can carry a key. Give each app its own key, so revoking one doesn't stop the others.
+- An app **customers install**, or a public web page, should not carry the key: it can be read out of the app. Put a small server of your own in between. The app logs in to your server, and your server calls OpenTeddy with the key, forwarding the WebSocket for voice.

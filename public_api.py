@@ -3,7 +3,8 @@ The /v1 API: what an app with an API key (api_keys.py) can use, shaped
 like OpenAI's, so its SDKs work with base_url=<OpenTeddy>/v1 and the key.
 
   GET  /v1/models                          one model, "openteddy"
-  POST /v1/chat/completions                a turn with OpenTeddy (stream too)
+  GET  /v1/datasets                        the knowledge-base datasets `datasets` can name
+  POST /v1/chat/completions                a turn with OpenTeddy (stream too; `datasets`)
   GET  /v1/tasks/{id}                      a turn that took longer than the wait
   POST /v1/tasks/{id}/approve|reject|cancel
   POST /v1/audio/transcriptions            speech → text (the voice service)
@@ -98,9 +99,9 @@ async def require_key(request: Request) -> Dict[str, Any]:
 
 # ── Sessions ─────────────────────────────────────────────────────────────────
 
-async def _new_session(key: Dict[str, Any], first: str) -> str:
+async def _new_session(key: Dict[str, Any], first: str, sid: str = "") -> str:
     """A session for this key, titled so the owner's web UI shows whose it is."""
-    sid = str(uuid.uuid4())
+    sid = sid or str(uuid.uuid4())
     title = f"🔑 {key['name']} · {' '.join((first or '').split())[:40] or 'API'}"
     await H.tracker().create_session(sid, title, mode="code")
     await H.tracker().rename_session(sid, title, by="user")     # session_titler leaves it as it is
@@ -119,11 +120,63 @@ def _status(s: Any) -> str:
     return str(getattr(s, "value", s) or "")
 
 
+# ── Knowledge-base datasets ──────────────────────────────────────────────────
+# A session answers from the datasets it picked (knowledge.py). An app picks
+# them with `datasets` — on a chat call, in the realtime hello, or with a
+# {"type":"datasets"} message mid-conversation — and they stay the session's
+# pick until it names others. Each turn then reads exactly those; a session
+# that never picked any reads the owner's "always" datasets.
+
+async def _pick_datasets(session_id: str, requested: Any) -> Optional[List[str]]:
+    """Save `requested` (names or ids; None = keep the session's pick) as the
+    session's datasets; return the ids each turn passes on, or None to leave
+    the choice to knowledge.scope_for (no pick, or the knowledge base off)."""
+    import knowledge
+    if requested is not None:
+        if not isinstance(requested, list) or not all(isinstance(x, str) and x.strip() for x in requested):
+            raise ApiError(400, "datasets: a list of dataset names or ids (GET /v1/datasets).", param="datasets")
+        if requested and not knowledge.enabled():
+            raise ApiError(400, "The knowledge base is off on this OpenTeddy (Settings → 知識庫).",
+                           code="knowledge_off", param="datasets")
+        if not knowledge.enabled():
+            return None
+        try:
+            return await knowledge.set_session_datasets(session_id, requested)
+        except knowledge.KnowledgeError as exc:
+            raise ApiError(400, str(exc), code="dataset_not_found", param="datasets")
+    if not knowledge.enabled():
+        return None
+    try:
+        return (await knowledge.session_datasets(session_id)) or None
+    except RuntimeError:                          # knowledge base not started
+        return None
+
+
+async def _dataset_names(ids: Optional[List[str]]) -> List[str]:
+    if not ids:
+        return []
+    import knowledge
+    by_id = {d["id"]: d["name"] for d in await knowledge.list_datasets()}
+    return [by_id.get(i, i) for i in ids]
+
+
 # ── Models ───────────────────────────────────────────────────────────────────
 
 @router.get("/models")
 async def models(key: Dict[str, Any] = Depends(require_key)) -> dict:
     return {"object": "list", "data": [{"id": MODEL, "object": "model", "created": 0, "owned_by": "openteddy"}]}
+
+
+@router.get("/datasets")
+async def datasets(key: Dict[str, Any] = Depends(require_key)) -> dict:
+    """The knowledge-base datasets an app can name in `datasets` (no contents)."""
+    import knowledge
+    if not knowledge.enabled():
+        return {"object": "list", "enabled": False, "data": []}
+    rows = await knowledge.list_datasets()
+    return {"object": "list", "enabled": True, "data": [
+        {"id": d["id"], "name": d["name"], "description": d.get("description") or "",
+         "items": d.get("items", 0), "always": bool(d.get("always"))} for d in rows]}
 
 
 # ── Chat ─────────────────────────────────────────────────────────────────────
@@ -190,8 +243,13 @@ async def chat_completions(request: Request, key: Dict[str, Any] = Depends(requi
         if not await api_keys.owns_session(key["id"], session_id):
             raise ApiError(404, f"No session {session_id} for this key.", code="session_not_found",
                            param="session_id")
+        ds = await _pick_datasets(session_id, body.get("datasets"))
     else:
-        session_id = await _new_session(key, goal)
+        # The datasets are checked before the session exists, so a wrong
+        # name leaves no empty session behind.
+        new_id = str(uuid.uuid4())
+        ds = await _pick_datasets(new_id, body.get("datasets"))
+        session_id = await _new_session(key, goal, sid=new_id)
         history = [{"role": m.get("role"), "content": _text_of(m.get("content"))}
                    for m in messages[:last] if isinstance(m, dict)]
         history = [h for h in history if h["role"] in ("system", "user", "assistant") and h["content"].strip()]
@@ -200,13 +258,15 @@ async def chat_completions(request: Request, key: Dict[str, Any] = Depends(requi
 
     try:
         task_id, session_id, job, shortcut = await H.start_task(
-            goal=goal, context=context, session_id=session_id, auto_lane=True, api_key_id=key["id"])
+            goal=goal, context=context, session_id=session_id, auto_lane=True, api_key_id=key["id"],
+            **({"datasets": ds} if ds is not None else {}))
     except HTTPException as exc:
         raise ApiError(exc.status_code, str(exc.detail))
     en = voice_bridge.english(goal)
     created = int(time.time())
     head = {"X-OpenTeddy-Session": session_id or "", "X-OpenTeddy-Task": task_id}
-    ids = {"session_id": session_id, "task_id": task_id}
+    ids = {"session_id": session_id, "task_id": task_id,
+           **({"datasets": await _dataset_names(ds)} if ds is not None else {})}
 
     if body.get("stream"):
         return StreamingResponse(
@@ -467,17 +527,40 @@ async def realtime(ws: WebSocket) -> None:
     chosen = api_keys.SUBPROTOCOL if api_keys.SUBPROTOCOL in offered else (offered[0] if offered else None)
     await ws.accept(subprotocol=chosen)
 
-    async def bind(sid: str) -> str:
-        if sid:
-            if not await api_keys.owns_session(key["id"], sid):
-                raise ValueError(f"No session {sid} for this key.")
-            return sid
-        return await _new_session(key, "語音對話")
+    def refuse(exc: ApiError) -> ValueError:
+        err = ValueError(exc.message)
+        err.code = exc.code or "bad_request"      # type: ignore[attr-defined]
+        return err
+
+    async def bind(sid: str, hello: Dict[str, Any]) -> Dict[str, Any]:
+        """The hello's session (the key's own) or a new one, and its datasets."""
+        if sid and not await api_keys.owns_session(key["id"], sid):
+            raise ValueError(f"No session {sid} for this key.")
+        new_id = sid or str(uuid.uuid4())
+        try:
+            ds = await _pick_datasets(new_id, hello.get("datasets"))
+        except ApiError as exc:
+            raise refuse(exc)
+        if not sid:
+            await _new_session(key, "語音對話", sid=new_id)
+        return {"session_id": new_id, **({"datasets": await _dataset_names(ds)} if ds is not None else {})}
+
+    async def control(data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        if data.get("type") != "datasets":
+            return None
+        try:
+            ds = await _pick_datasets(conv.session_id, data.get("datasets") if "datasets" in data else [])
+        except ApiError as exc:
+            raise refuse(exc)
+        return {"type": "datasets", "datasets": await _dataset_names(ds)}
 
     async def start(**kw: Any) -> Any:
-        return await H.start_task(**kw, api_key_id=key["id"])
+        ds = await _pick_datasets(kw.get("session_id") or "", None) if kw.get("session_id") else None
+        return await H.start_task(**kw, api_key_id=key["id"], **({"datasets": ds} if ds is not None else {}))
 
-    await voice_bridge.Conversation(ws, start_task=start, await_task=H.await_task, bind_session=bind).run()
+    conv = voice_bridge.Conversation(ws, start_task=start, await_task=H.await_task,
+                                     bind_session=bind, on_control=control)
+    await conv.run()
     with contextlib.suppress(Exception):
         await ws.close()
 

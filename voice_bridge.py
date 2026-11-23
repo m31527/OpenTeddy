@@ -210,12 +210,17 @@ class Conversation:
     `await_task` are main.py's, passed in so this file needs no import of it."""
 
     def __init__(self, ws: Any, start_task: StartTask, await_task: AwaitTask,
-                 bind_session: Optional[Callable[[str], Awaitable[str]]] = None) -> None:
-        """`bind_session`: the session to talk in, from the one the hello
-        named ("" = none) — /v1/realtime makes one for the key, and refuses
-        one that isn't the key's (raises ValueError)."""
+                 bind_session: Optional[Callable[[str, Dict[str, Any]], Awaitable[Dict[str, Any]]]] = None,
+                 on_control: Optional[Callable[[Dict[str, Any]], Awaitable[Optional[Dict[str, Any]]]]] = None) -> None:
+        """For /v1/realtime (public_api.py):
+        `bind_session(session_id, hello)`: the session to talk in, from the one
+        the hello named ("" = none) → {"session_id", …more for "ready"}; raises
+        ValueError to refuse (another key's session, an unknown dataset).
+        `on_control(message)`: a JSON message of another type (e.g. "datasets")
+        → the answer to send, or None; ValueError → an error message."""
         self.ws, self.start_task, self.await_task = ws, start_task, await_task
-        self.bind_session = bind_session
+        self.bind_session, self.on_control = bind_session, on_control
+        self.ready_extra: Dict[str, Any] = {}
         self.session_id = ""
         self.sample_rate = 24000
         self.turn = 0                              # the latest thing the person said
@@ -245,10 +250,12 @@ class Conversation:
         self.session_id = str(hello.get("session_id") or "")
         if self.bind_session is not None:
             try:
-                self.session_id = await self.bind_session(self.session_id)
+                bound = await self.bind_session(self.session_id, hello)
             except ValueError as exc:
-                await self.send({"type": "error", "code": "bad_session", "text": str(exc)})
+                await self.send({"type": "error", "code": getattr(exc, "code", "") or "bad_session", "text": str(exc)})
                 return
+            self.session_id = str(bound.get("session_id") or self.session_id)
+            self.ready_extra = {k: v for k, v in bound.items() if k != "session_id"}
         if not enabled():
             await self.send({"type": "error", "code": "not_enabled",
                              "text": "語音對話還沒開啟（設定 → 語音對話）。"})
@@ -270,7 +277,7 @@ class Conversation:
         await self.send({"type": "ready", "sample_rate": self.sample_rate, "asr_rate": ASR_RATE,
                          "voice": getattr(config, "voice_name", "") or (h.get("voices") or [""])[0],
                          "asr": h.get("asr"), "tts": h.get("tts"),
-                         **({"session_id": self.session_id} if self.session_id else {})})
+                         **({"session_id": self.session_id} if self.session_id else {}), **self.ready_extra})
         await self.state("listening")
         try:
             while True:
@@ -287,6 +294,14 @@ class Conversation:
                         await self.state("listening")
                     elif kind == "text" and str(data.get("text") or "").strip():
                         await self.new_turn(str(data["text"]).strip(), heard=None)
+                    elif self.on_control is not None:
+                        try:
+                            answer = await self.on_control(data)
+                        except ValueError as exc:
+                            answer = {"type": "error", "code": getattr(exc, "code", "") or "bad_request",
+                                      "text": str(exc)}
+                        if answer:
+                            await self.send(answer)
         except Exception as exc:  # noqa: BLE001 — the browser went away
             logger.info("voice: conversation ended (%s)", type(exc).__name__)
         finally:

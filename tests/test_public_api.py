@@ -356,6 +356,124 @@ def test_realtime(c, token, token2):
     vb.configured, vb.enabled, vb.health, vb.speak = saved
 
 
+# ── I. datasets ──────────────────────────────────────────────────────────────
+
+class FakeKB:
+    """knowledge.py's surface that public_api uses."""
+    class KnowledgeError(Exception):
+        pass
+
+    def __init__(self):
+        self.on = True
+        self.ds = [{"id": "ds1", "name": "客服 FAQ", "description": "退換貨", "items": 12, "always": False},
+                   {"id": "ds2", "name": "產品手冊", "description": "", "items": 40, "always": True}]
+        self.picks = {}
+
+    def enabled(self):
+        return self.on
+
+    async def list_datasets(self):
+        return [dict(d) for d in self.ds]
+
+    async def set_session_datasets(self, sid, refs):
+        ids = []
+        for r in refs:
+            d = next((d for d in self.ds if r in (d["id"], d["name"])), None)
+            if not d:
+                raise FakeKB.KnowledgeError(f"找不到這些資料集：{r}")
+            ids.append(d["id"])
+        self.picks[sid] = ids
+        return ids
+
+    async def session_datasets(self, sid):
+        return list(self.picks.get(sid, []))
+
+
+def test_datasets(c, token, token2):
+    import knowledge
+    kb = FakeKB()
+    saved = {n: getattr(knowledge, n) for n in ("enabled", "list_datasets", "set_session_datasets",
+                                                  "session_datasets", "KnowledgeError")}
+    for n in saved:
+        setattr(knowledge, n, getattr(kb, n) if n != "KnowledgeError" else FakeKB.KnowledgeError)
+    H = {"Authorization": f"Bearer {token}"}
+    try:
+        d = c.get("/v1/datasets", headers=H).json()
+        assert d["enabled"] and [x["name"] for x in d["data"]] == ["客服 FAQ", "產品手冊"] and d["data"][0]["items"] == 12
+        assert "sources" not in d["data"][0]
+        print("  ✓ GET /v1/datasets: names, ids, sizes — no contents")
+
+        PLAN.update(message="答", delay=0.0, shortcut=None)
+        r = c.post("/v1/chat/completions", headers=H,
+                   json={"messages": [{"role": "user", "content": "可以退貨嗎"}], "datasets": ["客服 FAQ"]}).json()
+        sid = r["session_id"]
+        assert CALLS[-1]["datasets"] == ["ds1"] and r["datasets"] == ["客服 FAQ"] and kb.picks[sid] == ["ds1"], r
+        c.post("/v1/chat/completions", headers=H, json={"messages": [{"role": "user", "content": "那運費呢"}], "session_id": sid})
+        assert CALLS[-1]["datasets"] == ["ds1"], "the session keeps its pick"
+        r = c.post("/v1/chat/completions", headers=H,
+                   json={"messages": [{"role": "user", "content": "換手冊"}], "session_id": sid, "datasets": ["ds2", "客服 FAQ"]}).json()
+        assert CALLS[-1]["datasets"] == ["ds2", "ds1"] and r["datasets"] == ["產品手冊", "客服 FAQ"]
+        r = c.post("/v1/chat/completions", headers=H, json={"messages": [{"role": "user", "content": "無"}]}).json()
+        assert "datasets" not in CALLS[-1] and "datasets" not in r, "no pick → the owner's defaults (scope_for)"
+        print("  ✓ chat: datasets by name or id, kept by the session, changed by naming others; none → defaults")
+
+        n = len(TR.sessions)
+        r = c.post("/v1/chat/completions", headers=H, json={"messages": [{"role": "user", "content": "x"}], "datasets": ["不存在"]})
+        assert r.status_code == 400 and r.json()["error"]["code"] == "dataset_not_found" and len(TR.sessions) == n
+        r = c.post("/v1/chat/completions", headers=H, json={"messages": [{"role": "user", "content": "x"}], "datasets": "客服 FAQ"})
+        assert r.status_code == 400 and r.json()["error"]["param"] == "datasets"
+        kb.on = False
+        r = c.post("/v1/chat/completions", headers=H, json={"messages": [{"role": "user", "content": "x"}], "datasets": ["ds1"]})
+        assert r.status_code == 400 and r.json()["error"]["code"] == "knowledge_off"
+        assert c.get("/v1/datasets", headers=H).json() == {"object": "list", "enabled": False, "data": []}
+        kb.on = True
+        print("  ✓ an unknown dataset → 400 and no empty session left; not a list → 400; knowledge base off → knowledge_off")
+
+        vb = voice_bridge
+        vsaved = (vb.configured, vb.enabled, vb.health, vb.speak)
+        vb.configured, vb.enabled = (lambda: True), (lambda: True)
+
+        async def health(timeout=5.0):
+            return {"ok": True, "tts_sample_rate": 24000}
+
+        async def speak(text, client, voice=""):
+            yield b"\x00\x00"
+        vb.health, vb.speak = health, speak
+        def until(ws, *types):
+            """The next JSON message of one of these types; the spoken audio (binary) is skipped."""
+            while True:
+                m = ws.receive()
+                if m.get("text"):
+                    d = json.loads(m["text"])
+                    if d.get("type") in types:
+                        return d
+
+        with c.websocket_connect("/v1/realtime", headers=H) as ws:
+            ws.send_text(json.dumps({"type": "hello", "datasets": ["客服 FAQ"]}))
+            ready = until(ws, "ready")
+            assert ready["datasets"] == ["客服 FAQ"] and kb.picks[ready["session_id"]] == ["ds1"], ready
+            ws.send_text(json.dumps({"type": "text", "text": "退貨要多久"}))
+            until(ws, "reply")
+            assert CALLS[-1]["datasets"] == ["ds1"] and CALLS[-1]["context"] == {"voice": True}
+            ws.send_text(json.dumps({"type": "datasets", "datasets": ["產品手冊"]}))
+            assert until(ws, "datasets")["datasets"] == ["產品手冊"]
+            ws.send_text(json.dumps({"type": "text", "text": "保固多久"}))
+            until(ws, "reply")
+            assert CALLS[-1]["datasets"] == ["ds2"]
+            ws.send_text(json.dumps({"type": "datasets", "datasets": ["沒有這個"]}))
+            got = until(ws, "error", "datasets")
+            assert got["type"] == "error" and got["code"] == "dataset_not_found", got
+        with c.websocket_connect("/v1/realtime", headers=H) as ws:
+            ws.send_text(json.dumps({"type": "hello", "datasets": ["不存在"]}))
+            err = until(ws, "error", "ready")
+            assert err["type"] == "error" and err["code"] == "dataset_not_found", err
+        vb.configured, vb.enabled, vb.health, vb.speak = vsaved
+        print("  ✓ realtime: datasets in the hello (named in ready), each turn reads them, switched mid-talk, unknown → error")
+    finally:
+        for n, v in saved.items():
+            setattr(knowledge, n, v)
+
+
 # ── H. privacy ───────────────────────────────────────────────────────────────
 
 def test_privacy():
@@ -379,6 +497,7 @@ if __name__ == "__main__":
         print("B–D. http"); test_http(client, TOKEN, TOKEN2)
         print("F. audio"); test_audio(client, TOKEN)
         print("G. realtime"); test_realtime(client, TOKEN, TOKEN2)
+        print("I. datasets"); test_datasets(client, TOKEN, TOKEN2)
     print("E. api-only port"); test_only_v1(TOKEN)
     print("H. privacy"); test_privacy()
     print("\nALL PUBLIC API TESTS PASS")
