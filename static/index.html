@@ -2398,6 +2398,16 @@
     }
     .ollama-dot.online  { background: var(--success); }
     .ollama-dot.offline { background: var(--error); }
+    .engine-grid { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 0.3rem 0.8rem;
+                   font-size: 0.78rem; align-items: baseline; }
+    .engine-grid .eg-role { color: var(--text-secondary); white-space: nowrap; }
+    .engine-grid .eg-model { color: var(--text-primary); min-width: 0; overflow-wrap: anywhere; }
+    .engine-grid .eg-where { color: var(--text-muted); font-size: 0.72rem; }
+    .engine-grid .eg-state { white-space: nowrap; text-align: right; }
+    .engine-grid .eg-ok   { color: var(--success); }
+    .engine-grid .eg-idle { color: var(--text-muted); }
+    .engine-grid .eg-warn { color: var(--warning); }
+    .engine-grid .eg-bad  { color: var(--error); }
     .ollama-label { color: var(--text-primary); }
     .ollama-url   { color: var(--text-muted); font-size: 0.76rem; }
     .model-list {
@@ -4762,6 +4772,13 @@
                 <span id="ollamaLabel" class="ollama-label" data-i18n="ollama_status_checking">Checking…</span>
                 <span id="ollamaUrl" class="ollama-url"></span>
               </div>
+              <!-- What really runs each role (GET /settings/engines, engines.py): the
+                   dropdowns below say what is configured, this says where calls go. -->
+              <div style="display:flex;align-items:center;gap:0.5rem;margin:0.2rem 0 0.4rem">
+                <div style="font-size:0.76rem;color:var(--text-muted);font-weight:500" data-i18n="engines_title">Running now</div>
+                <button type="button" class="mem-btn" onclick="refreshEngines()" style="font-size:0.7rem;padding:0.1rem 0.45rem" data-i18n="engines_refresh">Refresh</button>
+              </div>
+              <div id="engineStatus" class="engine-grid" style="margin-bottom:0.9rem"></div>
               <div style="font-size:0.76rem;color:var(--text-muted);margin-bottom:0.5rem;font-weight:500" data-i18n="installed_models">Installed Models</div>
               <div class="model-list" id="modelList">
                 <div style="color:var(--text-muted);font-size:0.82rem" data-i18n="ollama_loading">Loading…</div>
@@ -11899,6 +11916,7 @@
 
     // ── Settings ─────────────────────────────────────────────────────────────
     let _ollamaModels   = [];
+    let _vllmModels     = {};       // model → its vLLM server (Settings: vllm_models)
     let _settingsLoaded = false;
     // Cached chat-input default priority. Hydrated from /settings on first
     // loadSettings() call; until then we fall back to 1 (matches the
@@ -12164,6 +12182,7 @@
         _setSlider('gemma_temperature',         s.gemma_temperature?.value         ?? 0.1);
         _setSlider('qwen_temperature',          s.qwen_temperature?.value          ?? 0.2);
         _settingsLoaded = true;
+        _vllmModels = _parseVllmModels(s.vllm_models?.value);
         await refreshOllamaStatus();
         await loadOllamaModels(s.orchestrator_model?.value ?? '', s.executor_model?.value ?? '');
       } catch (e) { toast('Cannot load settings: ' + e.message, true); }
@@ -12380,7 +12399,39 @@
       lbl.textContent = String(val).includes('.') ? parseFloat(val).toFixed(2) : String(val);
     }
 
+    // ── What really runs each role (GET /settings/engines) ───────────────
+    const _ENGINE_STATE = {   // state → [i18n key, css class]
+      loaded: ['eng_st_loaded', 'eg-ok'], up: ['eng_st_up', 'eg-ok'], ready: ['eng_st_ready', 'eg-ok'],
+      cloud: ['eng_st_cloud', 'eg-ok'], installed: ['eng_st_installed', 'eg-idle'], off: ['eng_st_off', 'eg-idle'],
+      starting: ['eng_st_starting', 'eg-warn'], missing: ['eng_st_missing', 'eg-bad'],
+      not_served: ['eng_st_not_served', 'eg-bad'], unreachable: ['eng_st_unreachable', 'eg-bad'],
+      no_key: ['eng_st_no_key', 'eg-bad'],
+    };
+
+    async function refreshEngines() {
+      const box = document.getElementById('engineStatus');
+      if (!box) return;
+      try {
+        const d = await (await fetch(`${API}/settings/engines`)).json();
+        box.innerHTML = (d.roles || []).map(r => {
+          const [key, cls] = _ENGINE_STATE[r.state] || ['eng_st_unreachable', 'eg-bad'];
+          const engine = { ollama: 'Ollama', vllm: 'vLLM', cloud: t('eng_cloud'), voice: t('eng_voice_service') }[r.engine] || r.engine;
+          const where = r.engine === 'cloud' ? `${engine} · ${r.url}` : `${engine} · ${String(r.url).replace(/^https?:\/\//, '')}`;
+          const extra = [
+            r.vram_gb ? `${r.vram_gb} GB` : '',
+            r.context ? `${Math.round(r.context / 1024)}K ctx` : '',
+            r.stage ? r.stage : '',
+            r.served && r.served.length ? `${t('eng_serves')} ${r.served.join(', ')}` : '',
+          ].filter(Boolean).join(' · ');
+          return `<div class="eg-role">${escHtml(t('eng_role_' + r.role))}</div>
+            <div class="eg-model">${escHtml(r.model || '—')}<div class="eg-where">${escHtml(where)}</div></div>
+            <div class="eg-state ${cls}">● ${escHtml(t(key))}${extra ? `<div class="eg-where">${escHtml(extra)}</div>` : ''}</div>`;
+        }).join('');
+      } catch (e) { box.textContent = e.message; }
+    }
+
     async function refreshOllamaStatus() {
+      refreshEngines();
       try {
         const res  = await fetch(`${API}/settings/ollama/status`);
         const data = await res.json();
@@ -12446,11 +12497,17 @@
         const execOpts = _ollamaModels.map(m =>
           `<option value="${escHtml(m.name)}">${escHtml(m.name)}${m.size!=null?' ('+m.size+' GB)':''}</option>`
         ).join('');
-        selOrch.innerHTML = `<optgroup label="${escHtml(t('orch_local_group'))}" data-local="1">${orchOpts}</optgroup>`;
-        selExec.innerHTML = execOpts;
+        // Models a vLLM server of their own serves (the vllm_models setting) are
+        // not in Ollama's list: without this group an executor on vLLM showed as
+        // the first Ollama model, and Save made that the executor (spark-a, 11/23).
+        const vllmOpts = Object.keys(_vllmModels).map(name =>
+          `<option value="${escHtml(name)}">${escHtml(name)} · vLLM</option>`).join('');
+        const vllmGroup = vllmOpts ? `<optgroup label="${escHtml(t('models_vllm_group'))}">${vllmOpts}</optgroup>` : '';
+        selOrch.innerHTML = `<optgroup label="${escHtml(t('orch_local_group'))}" data-local="1">${orchOpts}</optgroup>${vllmGroup}`;
+        selExec.innerHTML = vllmGroup ? `<optgroup label="${escHtml(t('models_ollama_group'))}">${execOpts}</optgroup>${vllmGroup}` : execOpts;
         selOrch.disabled  = false; selExec.disabled = false;
-        if (selectedOrch && [...selOrch.options].some(o => o.value === selectedOrch)) selOrch.value = selectedOrch;
-        if (selectedExec && [...selExec.options].some(o => o.value === selectedExec)) selExec.value = selectedExec;
+        _keepSelected(selOrch, selectedOrch);
+        _keepSelected(selExec, selectedExec);
         // Sync the inline warning with the now-restored selection.
         checkOrchestratorRecommended();
         renderOrchestratorCloudOptions();
@@ -12459,6 +12516,31 @@
         _setOfflineDropdowns(selOrch, selExec);
         renderOrchestratorCloudOptions();
       }
+    }
+
+    // "qwen3.6:35b=http://127.0.0.1:8001, …" → {model: url}; local_engine.vllm_routes() reads it the same way.
+    function _parseVllmModels(raw) {
+      const out = {};
+      String(raw || '').split(/[,\n]/).forEach(part => {
+        const i = part.indexOf('=');
+        const name = (i < 0 ? '' : part.slice(0, i)).trim(), url = (i < 0 ? '' : part.slice(i + 1)).trim();
+        if (name && url) out[name] = url;
+      });
+      return out;
+    }
+
+    // Select the saved model. One that no list has any more (deleted, or its
+    // server gone) stays selected as "(not found)" rather than the dropdown
+    // showing — and Save storing — whichever model happens to be first.
+    function _keepSelected(sel, value) {
+      if (!sel || !value || value.startsWith('cloud:')) return;
+      if (![...sel.options].some(o => o.value === value)) {
+        const o = document.createElement('option');
+        o.value = value;
+        o.textContent = `${value} (${t('models_not_found')})`;
+        sel.appendChild(o);
+      }
+      sel.value = value;
     }
 
     function _setOfflineDropdowns(...sels) {
@@ -13232,6 +13314,7 @@
         if (data.success) {
           msg.textContent = t('settings_saved');
           msg.className   = 'settings-msg show';
+          refreshEngines();
         } else {
           msg.textContent = '❌ ' + (data.error ?? 'Save failed');
           msg.className   = 'settings-msg show err';
