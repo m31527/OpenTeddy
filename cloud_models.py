@@ -46,13 +46,15 @@ _KEY_FIELD = {
 # Used only when a live list can't be fetched. Current generation only;
 # anything else the operator can still type by hand.
 _FALLBACK: Dict[str, List[Dict[str, Any]]] = {
+    # Newest first, as the live API lists them (2026-11).
     "anthropic": [
+        {"id": "claude-fable-5-2", "label": "Claude Fable 5.2"},
+        {"id": "claude-haiku-5-5", "label": "Claude Haiku 5.5"},
         {"id": "claude-sonnet-5-5", "label": "Claude Sonnet 5.5"},
         {"id": "claude-opus-5-5", "label": "Claude Opus 5.5"},
         {"id": "claude-fable-5-1", "label": "Claude Fable 5.1"},
         {"id": "claude-opus-5", "label": "Claude Opus 5"},
         {"id": "claude-sonnet-5", "label": "Claude Sonnet 5"},
-        {"id": "claude-haiku-4-5-20251001", "label": "Claude Haiku 4.5"},
     ],
 }
 

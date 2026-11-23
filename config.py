@@ -327,7 +327,7 @@ class Config:
         # installs that pinned a specific model via Settings keep it —
         # this default only fires for fresh installs and env-var-only
         # configs.
-        default_factory=lambda: os.getenv("CLAUDE_MODEL", "claude-opus-4-7")
+        default_factory=lambda: os.getenv("CLAUDE_MODEL", "claude-opus-5-5")
     )
 
     # ── Cloud LLM provider switch ────────────────────────────────────────────

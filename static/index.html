@@ -4958,7 +4958,7 @@
                   <input type="text" id="inp_claude_model"
                          list="claude_model_suggestions"
                          data-i18n-placeholder="claude_model_placeholder"
-                         placeholder="claude-opus-4-7" />
+                         placeholder="claude-opus-5-5" />
                   <datalist id="claude_model_suggestions">
                     <!-- Fallback only: replaced by the live list from
                          POST /settings/cloud/models once a key is set. -->
@@ -12632,10 +12632,19 @@
       row.id = `cm_row_${provider}`;
       row.style.cssText = 'display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;margin-top:0.3rem;font-size:0.72rem';
       row.innerHTML = `<button type="button" class="btn-ghost btn-sm" onclick="refreshCloudModels('${provider}', true)">${escHtml(t('cloud_models_refresh'))}</button>`
-                    + `<span id="cm_status_${provider}" style="color:var(--text-muted)"></span>`;
+                    + `<span id="cm_status_${provider}" style="color:var(--text-muted)"></span>`
+                    // The whole list, newest first. The field's <datalist> alone hid it:
+                    // the browser filters suggestions by what's typed, so a field holding
+                    // "gpt-5" offered only gpt-5.x and the list looked old (spark-a, 11/23).
+                    + `<select id="cm_pick_${provider}" hidden onchange="pickCloudModel('${provider}', this)"
+                         style="flex-basis:100%;max-width:100%;font-size:0.76rem;margin-top:0.2rem"></select>`;
       input.insertAdjacentElement('afterend', row);
       const keyEl = document.getElementById(f.key);
       if (keyEl) keyEl.addEventListener('change', () => refreshCloudModels(provider, true));
+      input.addEventListener('input', () => {       // typed by hand: the picker follows when it can
+        const pick = document.getElementById(`cm_pick_${provider}`);
+        if (pick) pick.value = [...pick.options].some(o => o.value === input.value) ? input.value : '';
+      });
     }
 
     async function refreshCloudModels(provider, force = false) {
@@ -12659,6 +12668,7 @@
             const extra = [m.label && m.label !== m.id ? m.label : '', _modelDate(m)].filter(Boolean).join(' · ');
             return `<option value="${escHtml(m.id)}">${escHtml(extra)}</option>`;
           }).join('');
+          _fillCloudPicker(provider, models);
         }
         if (status) {
           const live = d.source === 'live';
@@ -12669,6 +12679,31 @@
       } catch (e) {
         if (status) status.textContent = t('cloud_models_fallback', { reason: e.message });
       }
+      if (provider === _activeProvider()) renderOrchestratorCloudOptions();
+    }
+
+    function _fillCloudPicker(provider, models) {
+      const pick = document.getElementById(`cm_pick_${provider}`);
+      if (!pick) return;
+      const cur = _providerModel(provider);
+      const opt = m => {
+        const extra = [m.label && m.label !== m.id ? m.label : '', _modelDate(m)].filter(Boolean).join(' · ');
+        return `<option value="${escHtml(m.id)}">${escHtml(m.id)}${extra ? ' — ' + escHtml(extra) : ''}</option>`;
+      };
+      pick.innerHTML = `<option value="">${escHtml(t('cloud_models_pick', { n: models.length }))}</option>`
+        + models.map(opt).join('')
+        + (cur && !models.some(m => m.id === cur)
+            ? `<option value="${escHtml(cur)}">${escHtml(cur)} — ${escHtml(t('models_not_found'))}</option>` : '');
+      pick.value = cur || '';
+      pick.hidden = false;
+    }
+
+    function pickCloudModel(provider, pick) {
+      const input = document.getElementById(CLOUD_MODEL_FIELDS[provider]?.input);
+      if (!input || !pick.value) return;
+      input.value = pick.value;
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.dispatchEvent(new Event('change', { bubbles: true }));
       if (provider === _activeProvider()) renderOrchestratorCloudOptions();
     }
 
