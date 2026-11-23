@@ -4,6 +4,7 @@
 #   ./deploy.sh home                    # m31527@10.255.147.17:/home/m31527/OpenTeddy (NetBird)
 #   ./deploy.sh demo                    # m31527@10.255.131.73:/home/m31527/OpenTeddy (NetBird)
 #   ./deploy.sh demo2                   # inai@10.255.104.174:/home/inai/OpenTeddy (NetBird)
+#   ./deploy.sh spark-a                 # inairoot@10.255.51.155:/home/inairoot/OpenTeddy (NetBird)
 #   ./deploy.sh user@host[:/path]       # any other machine (default path ~/OpenTeddy)
 #   ./deploy.sh home --system           # the service was installed with --system
 #   ./deploy.sh home --restart          # restart even when nothing changed
@@ -29,12 +30,15 @@ case "$1" in
   home) HOST="m31527@10.255.147.17"; REMOTE_DIR="/home/m31527/OpenTeddy" ;;
   demo) HOST="m31527@10.255.131.73"; REMOTE_DIR="/home/m31527/OpenTeddy" ;;
   demo2) HOST="inai@10.255.104.174"; REMOTE_DIR="/home/inai/OpenTeddy" ;;
+  # DGX Spark pair: A runs OpenTeddy; B (inai2@10.255.128.99) runs the voice service A uses
+  # over the direct link (192.168.100.2:8095), so B has no OpenTeddy to deploy.
+  spark-a) HOST="inairoot@10.255.51.155"; REMOTE_DIR="/home/inairoot/OpenTeddy" ;;
   *@*)
     HOST="${1%%:*}"
     REMOTE_DIR="${1#*:}"
     [[ "$REMOTE_DIR" == "$1" ]] && REMOTE_DIR="OpenTeddy"   # no ":path" given
     ;;
-  *) echo "unknown target '$1' (use home, demo, demo2, or user@host[:/path])" >&2; exit 1 ;;
+  *) echo "unknown target '$1' (use home, demo, demo2, spark-a, or user@host[:/path])" >&2; exit 1 ;;
 esac
 shift
 SYSTEM=0; RESTART=0; AUTOSTASH=0
