@@ -101,9 +101,10 @@ async def transcribe(pcm: bytes, client: Optional[httpx.AsyncClient] = None) -> 
             await c.aclose()
 
 
-async def speak(text: str, client: httpx.AsyncClient) -> AsyncIterator[bytes]:
-    """PCM16 chunks as the voice service makes them."""
-    body = {"text": text, "voice": getattr(config, "voice_name", "") or ""}
+async def speak(text: str, client: httpx.AsyncClient, voice: str = "") -> AsyncIterator[bytes]:
+    """PCM16 chunks as the voice service makes them (`voice`: one of its
+    voices; "" = the one set in Settings)."""
+    body = {"text": text, "voice": voice or getattr(config, "voice_name", "") or ""}
     async with client.stream("POST", f"{_base()}/tts", json=body) as r:
         r.raise_for_status()
         carry = b""
@@ -208,8 +209,13 @@ class Conversation:
     """The person's turns, OpenTeddy's answers, spoken. `start_task` and
     `await_task` are main.py's, passed in so this file needs no import of it."""
 
-    def __init__(self, ws: Any, start_task: StartTask, await_task: AwaitTask) -> None:
+    def __init__(self, ws: Any, start_task: StartTask, await_task: AwaitTask,
+                 bind_session: Optional[Callable[[str], Awaitable[str]]] = None) -> None:
+        """`bind_session`: the session to talk in, from the one the hello
+        named ("" = none) — /v1/realtime makes one for the key, and refuses
+        one that isn't the key's (raises ValueError)."""
         self.ws, self.start_task, self.await_task = ws, start_task, await_task
+        self.bind_session = bind_session
         self.session_id = ""
         self.sample_rate = 24000
         self.turn = 0                              # the latest thing the person said
@@ -237,6 +243,12 @@ class Conversation:
         except Exception:  # noqa: BLE001
             hello = {}
         self.session_id = str(hello.get("session_id") or "")
+        if self.bind_session is not None:
+            try:
+                self.session_id = await self.bind_session(self.session_id)
+            except ValueError as exc:
+                await self.send({"type": "error", "code": "bad_session", "text": str(exc)})
+                return
         if not enabled():
             await self.send({"type": "error", "code": "not_enabled",
                              "text": "語音對話還沒開啟（設定 → 語音對話）。"})
@@ -257,7 +269,8 @@ class Conversation:
             return
         await self.send({"type": "ready", "sample_rate": self.sample_rate, "asr_rate": ASR_RATE,
                          "voice": getattr(config, "voice_name", "") or (h.get("voices") or [""])[0],
-                         "asr": h.get("asr"), "tts": h.get("tts")})
+                         "asr": h.get("asr"), "tts": h.get("tts"),
+                         **({"session_id": self.session_id} if self.session_id else {})})
         await self.state("listening")
         try:
             while True:

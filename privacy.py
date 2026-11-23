@@ -8,6 +8,10 @@ id>" — only for a private chat (a positive id; groups are negative), and
 only when the request really came through the bridge or a schedule
 running in that person's Telegram session. Group chats have no person.
 
+An app with an API key (api_keys.py, the /v1 routes) is "api:<key id>":
+its own person, so it never reaches the owner's paired Chrome; the in-
+process origin "api_key" is set only by those routes.
+
 The web UI, CLI, MCP and Task API are one person between them,
 WEB_PERSON: whoever uses this OpenTeddy's web UI. Its Settings page pairs
 a Chrome for it, from any address that reaches the page — 127.0.0.1 on
@@ -69,6 +73,9 @@ async def resolve(req: Any, tracker: Any) -> Optional[str]:
     origin = get_triggered_by()
     if origin == "telegram":
         return person_for_chat((req.context or {}).get("telegram_chat_id"))
+    if origin == "api_key":                          # an app with its own API key (api_keys.py)
+        kid = str((req.context or {}).get("api_key_id") or "").strip()
+        return f"api:{kid}" if kid else None
     if origin == "schedule" and req.session_id:
         try:
             sess = await tracker.get_session(req.session_id)

@@ -1,0 +1,550 @@
+"""
+The /v1 API: what an app with an API key (api_keys.py) can use, shaped
+like OpenAI's, so its SDKs work with base_url=<OpenTeddy>/v1 and the key.
+
+  GET  /v1/models                          one model, "openteddy"
+  POST /v1/chat/completions                a turn with OpenTeddy (stream too)
+  GET  /v1/tasks/{id}                      a turn that took longer than the wait
+  POST /v1/tasks/{id}/approve|reject|cancel
+  POST /v1/audio/transcriptions            speech → text (the voice service)
+  POST /v1/audio/speech                    text → speech (wav or raw pcm)
+  WS   /v1/realtime                        a spoken conversation (voice_bridge.py's protocol)
+
+Every route needs a key; errors come back the OpenAI way ({"error": {…}}).
+A turn runs exactly like one typed in the web UI (gate, knowledge base,
+memory, tools), as the key's own person in the key's own sessions.
+docs/api.md is the reference.
+
+OPENTEDDY_API_PORT=8100 starts a second listener that serves /v1 and
+nothing else (on OPENTEDDY_API_HOST, default 127.0.0.1): the address to
+put behind a tunnel, so the web UI is never reachable from outside.
+"""
+from __future__ import annotations
+
+import asyncio
+import contextlib
+import io
+import json
+import logging
+import os
+import re
+import shutil
+import time
+import uuid
+import wave
+from typing import Any, Awaitable, Callable, Dict, List, Optional
+
+import httpx
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, WebSocket
+from fastapi.responses import JSONResponse, PlainTextResponse, Response, StreamingResponse
+
+import api_keys
+import voice_bridge
+
+logger = logging.getLogger(__name__)
+
+MODEL = "openteddy"
+WAIT_S = 90.0              # a plain reply waits this long: under a tunnel's 100 s for the first byte
+MAX_WAIT_S = 600.0
+STREAM_MAX_S = 1800.0      # a streamed reply keeps the line open (keep-alives) this long
+KEEPALIVE_S = 15.0
+MAX_AUDIO_BYTES = 25 * 1024 * 1024
+MAX_AUDIO_S = 120          # one transcription; split longer recordings
+MAX_SPEECH_CHARS = 4096
+ASR_RATE = voice_bridge.ASR_RATE
+HISTORY_MAX = 12           # earlier messages carried into a new session
+
+router = APIRouter(prefix="/v1")
+
+
+class _Hooks:
+    """main.py's pieces, handed over by install() so this file needs no import of it."""
+    start_task: Callable[..., Awaitable[Any]]
+    await_task: Callable[..., Awaitable[Any]]
+    tracker: Callable[[], Any]                  # → the tracker (made at start-up, so asked for each time)
+    approvals: Callable[[str], Awaitable[dict]]
+    approve: Callable[[str], Awaitable[dict]]
+    reject: Callable[[str], Awaitable[dict]]
+    cancel: Callable[[str], Awaitable[dict]]
+
+
+H = _Hooks()
+
+
+# ── Errors, the OpenAI way ───────────────────────────────────────────────────
+
+class ApiError(Exception):
+    def __init__(self, status: int, message: str, type_: str = "invalid_request_error",
+                 code: Optional[str] = None, param: Optional[str] = None) -> None:
+        super().__init__(message)
+        self.status, self.message, self.type, self.code, self.param = status, message, type_, code, param
+
+
+async def _on_api_error(_request: Request, exc: ApiError) -> JSONResponse:
+    return JSONResponse({"error": {"message": exc.message, "type": exc.type, "param": exc.param, "code": exc.code}},
+                        status_code=exc.status)
+
+
+async def require_key(request: Request) -> Dict[str, Any]:
+    token = api_keys.token_from(request.headers)
+    if not token:
+        raise ApiError(401, "Missing API key: send Authorization: Bearer ot-… (Settings → API 金鑰).",
+                       code="missing_api_key")
+    key = await api_keys.verify(token)
+    if key is None:
+        raise ApiError(401, "Incorrect API key provided, or it was revoked.", code="invalid_api_key")
+    return key
+
+
+# ── Sessions ─────────────────────────────────────────────────────────────────
+
+async def _new_session(key: Dict[str, Any], first: str) -> str:
+    """A session for this key, titled so the owner's web UI shows whose it is."""
+    sid = str(uuid.uuid4())
+    title = f"🔑 {key['name']} · {' '.join((first or '').split())[:40] or 'API'}"
+    await H.tracker().create_session(sid, title, mode="code")
+    await H.tracker().rename_session(sid, title, by="user")     # session_titler leaves it as it is
+    await api_keys.claim_session(key["id"], sid)
+    return sid
+
+
+async def _own_task(key: Dict[str, Any], task_id: str) -> Dict[str, Any]:
+    row = await H.tracker().get_task(task_id)
+    if not row or not await api_keys.owns_session(key["id"], row.get("session_id") or ""):
+        raise ApiError(404, f"No task {task_id} for this key.", code="task_not_found")
+    return row
+
+
+def _status(s: Any) -> str:
+    return str(getattr(s, "value", s) or "")
+
+
+# ── Models ───────────────────────────────────────────────────────────────────
+
+@router.get("/models")
+async def models(key: Dict[str, Any] = Depends(require_key)) -> dict:
+    return {"object": "list", "data": [{"id": MODEL, "object": "model", "created": 0, "owned_by": "openteddy"}]}
+
+
+# ── Chat ─────────────────────────────────────────────────────────────────────
+
+def _text_of(content: Any) -> str:
+    """A message's text: a string, or the text parts of a list of parts."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "\n".join(str(p.get("text") or "") for p in content
+                         if isinstance(p, dict) and p.get("type") in ("text", "input_text"))
+    return ""
+
+
+def _wait_s(value: Any) -> float:
+    try:
+        return max(0.0, min(MAX_WAIT_S, float(value)))
+    except (TypeError, ValueError):
+        return WAIT_S
+
+
+def _still_working(task_id: str, approvals: List[dict], en: bool) -> str:
+    if approvals:
+        tools = "、".join(sorted({str(a.get("tool_name") or "?") for a in approvals}))
+        if en:
+            return (f"This needs approval before it can go on ({tools}). Approve it with "
+                    f"POST /v1/tasks/{task_id}/approve, or in OpenTeddy's web UI.")
+        return f"這件事要先核准才能繼續（{tools}）。用 POST /v1/tasks/{task_id}/approve 核准，或在 OpenTeddy 網頁上核准。"
+    if en:
+        return f"Still working on it. Get the result with GET /v1/tasks/{task_id} when it's done."
+    return f"還在處理中。完成後用 GET /v1/tasks/{task_id} 取回結果。"
+
+
+async def _pending(task_id: str) -> List[dict]:
+    try:
+        return list((await H.approvals(task_id)).get("approvals") or [])
+    except Exception:  # noqa: BLE001
+        return []
+
+
+@router.post("/chat/completions")
+async def chat_completions(request: Request, key: Dict[str, Any] = Depends(require_key)) -> Response:
+    try:
+        body = await request.json()
+    except ValueError:
+        raise ApiError(400, "The body must be JSON.")
+    if not isinstance(body, dict):
+        raise ApiError(400, "The body must be a JSON object.")
+    messages = body.get("messages")
+    if not isinstance(messages, list) or not messages:
+        raise ApiError(400, "messages is required.", param="messages")
+    last = next((i for i in range(len(messages) - 1, -1, -1)
+                 if isinstance(messages[i], dict) and messages[i].get("role") == "user"), None)
+    goal = _text_of(messages[last].get("content")).strip() if last is not None else ""
+    if not goal:
+        raise ApiError(400, "The last user message has no text.", param="messages")
+    model = str(body.get("model") or MODEL)
+
+    # OpenTeddy keeps the conversation itself: name a session to go on in
+    # it, or leave it out and the earlier messages come along this once.
+    session_id = str(body.get("session_id") or request.headers.get("x-openteddy-session") or "").strip()
+    context: Dict[str, Any] = {"api": True}
+    if session_id:
+        if not await api_keys.owns_session(key["id"], session_id):
+            raise ApiError(404, f"No session {session_id} for this key.", code="session_not_found",
+                           param="session_id")
+    else:
+        session_id = await _new_session(key, goal)
+        history = [{"role": m.get("role"), "content": _text_of(m.get("content"))}
+                   for m in messages[:last] if isinstance(m, dict)]
+        history = [h for h in history if h["role"] in ("system", "user", "assistant") and h["content"].strip()]
+        if history:
+            context["history"] = history[-HISTORY_MAX:]
+
+    try:
+        task_id, session_id, job, shortcut = await H.start_task(
+            goal=goal, context=context, session_id=session_id, auto_lane=True, api_key_id=key["id"])
+    except HTTPException as exc:
+        raise ApiError(exc.status_code, str(exc.detail))
+    en = voice_bridge.english(goal)
+    created = int(time.time())
+    head = {"X-OpenTeddy-Session": session_id or "", "X-OpenTeddy-Task": task_id}
+    ids = {"session_id": session_id, "task_id": task_id}
+
+    if body.get("stream"):
+        return StreamingResponse(
+            _stream(task_id, job, shortcut, model, created, ids, en),
+            media_type="text/event-stream", headers={**head, "Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+    if shortcut is not None:
+        text, status = shortcut, "completed"
+    else:
+        waiter = asyncio.ensure_future(H.await_task(task_id, job))
+        done, _ = await asyncio.wait({waiter}, timeout=_wait_s(body.get("wait", WAIT_S)))
+        if done:
+            st, text = waiter.result()
+            status = _status(st)
+        else:
+            waiter.cancel()                       # only this wait: the task runs on
+            pending = await _pending(task_id)
+            text, status = _still_working(task_id, pending, en), ("waiting_approval" if pending else "running")
+    return JSONResponse({
+        "id": f"chatcmpl-{task_id}", "object": "chat.completion", "created": created, "model": model,
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": text or ""}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+        "status": status, **ids,
+    }, headers=head)
+
+
+async def _stream(task_id: str, job: Any, shortcut: Optional[str], model: str, created: int,
+                  ids: Dict[str, Any], en: bool):
+    """Server-sent chunks: the role first, keep-alives while OpenTeddy
+    works, then the answer in one piece (it is not produced token by token
+    on every path, so it isn't pretended to be)."""
+    base = {"id": f"chatcmpl-{task_id}", "object": "chat.completion.chunk", "created": created, "model": model}
+
+    def sse(obj: dict) -> str:
+        return "data: " + json.dumps(obj, ensure_ascii=False) + "\n\n"
+
+    yield sse({**base, "choices": [{"index": 0, "delta": {"role": "assistant", "content": ""},
+                                    "finish_reason": None}], **ids})
+    waiter = None
+    try:
+        if shortcut is not None:
+            text, status = shortcut, "completed"
+        else:
+            waiter = asyncio.ensure_future(H.await_task(task_id, job))
+            started = time.monotonic()
+            while True:
+                done, _ = await asyncio.wait({waiter}, timeout=KEEPALIVE_S)
+                if done:
+                    st, text = waiter.result()
+                    status = _status(st)
+                    break
+                if time.monotonic() - started > STREAM_MAX_S:
+                    pending = await _pending(task_id)
+                    text = _still_working(task_id, pending, en)
+                    status = "waiting_approval" if pending else "running"
+                    break
+                yield ": keep-alive\n\n"
+        yield sse({**base, "choices": [{"index": 0, "delta": {"content": text or ""}, "finish_reason": None}]})
+        yield sse({**base, "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}], "status": status, **ids})
+        yield "data: [DONE]\n\n"
+    finally:
+        if waiter is not None and not waiter.done():
+            waiter.cancel()                       # the app hung up: the task runs on
+
+
+# ── Tasks a key started ──────────────────────────────────────────────────────
+
+_TERMINAL = {"completed", "failed", "escalated", "cancelled"}
+
+
+@router.get("/tasks/{task_id}")
+async def task(task_id: str, key: Dict[str, Any] = Depends(require_key)) -> dict:
+    row = await _own_task(key, task_id)
+    status = str(row.get("status") or "")
+    return {"task_id": task_id, "session_id": row.get("session_id"), "status": status,
+            "result": (row.get("summary") or "") if status in _TERMINAL else None,
+            "approvals": await _pending(task_id),
+            "created_at": row.get("created_at"), "updated_at": row.get("updated_at") or row.get("completed_at")}
+
+
+@router.post("/tasks/{task_id}/approve")
+async def approve(task_id: str, key: Dict[str, Any] = Depends(require_key)) -> dict:
+    await _own_task(key, task_id)
+    return await H.approve(task_id)
+
+
+@router.post("/tasks/{task_id}/reject")
+async def reject(task_id: str, key: Dict[str, Any] = Depends(require_key)) -> dict:
+    await _own_task(key, task_id)
+    return await H.reject(task_id)
+
+
+@router.post("/tasks/{task_id}/cancel")
+async def cancel(task_id: str, key: Dict[str, Any] = Depends(require_key)) -> dict:
+    await _own_task(key, task_id)
+    return await H.cancel(task_id)
+
+
+# ── Audio ────────────────────────────────────────────────────────────────────
+
+def _voice_ready() -> None:
+    if not voice_bridge.configured():
+        raise ApiError(503, "This OpenTeddy has no voice service set (Settings → 語音服務網址).",
+                       "server_error", "voice_not_configured")
+    if not voice_bridge.enabled():
+        raise ApiError(503, "Voice is turned off on this OpenTeddy (Settings → 語音對話).",
+                       "server_error", "voice_off")
+
+
+def _resample(samples: Any, rate: int) -> bytes:
+    """Float or int16 mono samples at `rate` → PCM16 at 16 kHz."""
+    import numpy as np
+    x = np.asarray(samples, dtype=np.float32)
+    if rate != ASR_RATE and len(x):
+        n = int(round(len(x) * ASR_RATE / rate))
+        x = np.interp(np.linspace(0, len(x) - 1, n), np.arange(len(x)), x)
+    return np.clip(np.round(x), -32768, 32767).astype("<i2").tobytes()
+
+
+def _wav_to_pcm(data: bytes) -> bytes:
+    import numpy as np
+    try:
+        with wave.open(io.BytesIO(data)) as w:
+            ch, width, rate = w.getnchannels(), w.getsampwidth(), w.getframerate()
+            frames = w.readframes(w.getnframes())
+    except (wave.Error, EOFError) as exc:
+        raise ApiError(400, f"Couldn't read that WAV file ({exc}); send 16-bit PCM WAV.", code="unsupported_audio")
+    if width == 2:
+        x = np.frombuffer(frames, "<i2").astype(np.float32)
+    elif width == 1:
+        x = (np.frombuffer(frames, np.uint8).astype(np.float32) - 128.0) * 256.0
+    elif width == 4:
+        x = np.frombuffer(frames, "<i4").astype(np.float32) / 65536.0
+    else:
+        raise ApiError(400, f"{width * 8}-bit WAV isn't supported; send 16-bit PCM WAV.", code="unsupported_audio")
+    if ch > 1:
+        x = x[: len(x) // ch * ch].reshape(-1, ch).mean(axis=1)
+    return _resample(x, rate)
+
+
+async def _to_pcm(data: bytes, content_type: str, filename: str) -> bytes:
+    """Uploaded audio → PCM16 mono 16 kHz, what the voice service hears."""
+    import numpy as np
+    if data[:4] == b"RIFF" and data[8:12] == b"WAVE":
+        return _wav_to_pcm(data)
+    ct = (content_type or "").lower()
+    if ct.startswith(("audio/l16", "audio/pcm")) or filename.lower().endswith(".pcm"):
+        m = re.search(r"rate=(\d+)", ct)
+        return _resample(np.frombuffer(data[: len(data) // 2 * 2], "<i2"), int(m.group(1)) if m else ASR_RATE)
+    exe = shutil.which("ffmpeg")
+    if exe:
+        proc = await asyncio.create_subprocess_exec(
+            exe, "-hide_banner", "-loglevel", "error", "-i", "pipe:0", "-f", "s16le", "-ac", "1",
+            "-ar", str(ASR_RATE), "pipe:1",
+            stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        out, err = await asyncio.wait_for(proc.communicate(data), 120)
+        if proc.returncode == 0 and out:
+            return out
+        raise ApiError(400, f"Couldn't decode that audio: {err.decode(errors='replace')[-300:]}",
+                       code="unsupported_audio")
+    raise ApiError(400, "Send WAV, or raw 16-bit PCM (Content-Type audio/L16; rate=16000). mp3, m4a, webm "
+                        "and ogg need ffmpeg on the machine OpenTeddy runs on.", code="unsupported_audio")
+
+
+@router.post("/audio/transcriptions")
+async def transcriptions(file: UploadFile = File(...), model: str = Form("sensevoice"),
+                         language: Optional[str] = Form(None), response_format: str = Form("json"),
+                         key: Dict[str, Any] = Depends(require_key)) -> Response:
+    fmt = (response_format or "json").lower()
+    if fmt not in ("json", "text", "verbose_json"):
+        raise ApiError(400, "response_format: json, text or verbose_json.", param="response_format")
+    _voice_ready()
+    data = await file.read(MAX_AUDIO_BYTES + 1)
+    if len(data) > MAX_AUDIO_BYTES:
+        raise ApiError(413, "The file is over 25 MB.", param="file")
+    pcm = await _to_pcm(data, file.content_type or "", file.filename or "")
+    seconds = len(pcm) / 2 / ASR_RATE
+    if seconds > MAX_AUDIO_S:
+        raise ApiError(400, f"That is {seconds:.0f} s of audio; send at most {MAX_AUDIO_S} s at a time.",
+                       param="file")
+    try:
+        heard = await voice_bridge.transcribe(pcm)
+    except Exception as exc:  # noqa: BLE001
+        raise ApiError(502, f"The voice service didn't answer: {exc}", "server_error", "voice_unreachable")
+    text = (heard.get("text") or "").strip()
+    if not re.search(r"\w", text):                # no speech, or a noise heard as 「。」
+        text = ""
+    if fmt == "text":
+        return PlainTextResponse(text)
+    if fmt == "verbose_json":
+        return JSONResponse({"task": "transcribe", "language": heard.get("language") or "",
+                             "duration": round(seconds, 2), "text": text})
+    return JSONResponse({"text": text})
+
+
+def _wav(pcm: bytes, rate: int) -> bytes:
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        w.writeframes(pcm)
+    return buf.getvalue()
+
+
+@router.post("/audio/speech")
+async def speech(request: Request, key: Dict[str, Any] = Depends(require_key)) -> Response:
+    try:
+        body = await request.json()
+    except ValueError:
+        raise ApiError(400, "The body must be JSON.")
+    text = voice_bridge.spoken(str((body or {}).get("input") or ""))
+    if not text:
+        raise ApiError(400, "input is required.", param="input")
+    if len(text) > MAX_SPEECH_CHARS:
+        raise ApiError(400, f"input is over {MAX_SPEECH_CHARS} characters.", param="input")
+    fmt = str(body.get("response_format") or "wav").lower()
+    if fmt not in ("wav", "pcm"):
+        raise ApiError(400, "response_format: wav or pcm.", param="response_format")
+    _voice_ready()
+    try:
+        h = await voice_bridge.health()
+    except Exception as exc:  # noqa: BLE001
+        raise ApiError(502, f"The voice service didn't answer: {exc}", "server_error", "voice_unreachable")
+    rate = int(h.get("tts_sample_rate") or 24000)
+    voice = str(body.get("voice") or "")
+    voice = voice if voice in (h.get("voices") or []) else ""     # OpenAI's names ("alloy"…) → the set voice
+
+    async def pcm_chunks():
+        async with httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=5.0)) as c:
+            for piece in voice_bridge.sentences(text):
+                async for chunk in voice_bridge.speak(piece, c, voice=voice):
+                    yield chunk
+
+    if fmt == "pcm":
+        return StreamingResponse(pcm_chunks(), media_type=f"audio/L16; rate={rate}",
+                                 headers={"X-Sample-Rate": str(rate)})
+    try:
+        pcm = b"".join([c async for c in pcm_chunks()])
+    except httpx.HTTPError as exc:
+        raise ApiError(502, f"The voice service didn't answer: {exc}", "server_error", "voice_unreachable")
+    return Response(_wav(pcm, rate), media_type="audio/wav")
+
+
+# ── Realtime: a spoken conversation ──────────────────────────────────────────
+
+@router.websocket("/realtime")
+async def realtime(ws: WebSocket) -> None:
+    """voice_bridge.py's conversation for an app. The key comes as
+    `Authorization: Bearer …`, or (a browser can't set headers) as the
+    subprotocol `openteddy-key.<key>` next to `openteddy`."""
+    token = api_keys.token_from(ws.headers)
+    key = await api_keys.verify(token) if token else None
+    if key is None:
+        await ws.close(code=4401)                 # → HTTP 403 at the handshake
+        return
+    offered = [p.strip() for p in (ws.headers.get("sec-websocket-protocol") or "").split(",") if p.strip()]
+    chosen = api_keys.SUBPROTOCOL if api_keys.SUBPROTOCOL in offered else (offered[0] if offered else None)
+    await ws.accept(subprotocol=chosen)
+
+    async def bind(sid: str) -> str:
+        if sid:
+            if not await api_keys.owns_session(key["id"], sid):
+                raise ValueError(f"No session {sid} for this key.")
+            return sid
+        return await _new_session(key, "語音對話")
+
+    async def start(**kw: Any) -> Any:
+        return await H.start_task(**kw, api_key_id=key["id"])
+
+    await voice_bridge.Conversation(ws, start_task=start, await_task=H.await_task, bind_session=bind).run()
+    with contextlib.suppress(Exception):
+        await ws.close()
+
+
+# ── Wiring ───────────────────────────────────────────────────────────────────
+
+def install(app: Any, **hooks: Any) -> None:
+    """Add /v1 to `app`; `hooks` are main.py's start_task, await_task,
+    tracker, approvals, approve, reject, cancel."""
+    for name, fn in hooks.items():
+        setattr(H, name, fn)
+    app.include_router(router)
+    app.add_exception_handler(ApiError, _on_api_error)
+
+
+class OnlyV1:
+    """The app as the API port serves it: /v1/… and nothing else."""
+
+    def __init__(self, app: Any) -> None:
+        self.app = app
+
+    async def __call__(self, scope: dict, receive: Any, send: Any) -> None:
+        if scope.get("type") in ("http", "websocket") and not str(scope.get("path") or "").startswith("/v1/"):
+            if scope["type"] == "websocket":
+                await send({"type": "websocket.close", "code": 4404})
+                return
+            body = json.dumps({"error": {"message": "Not found: this port serves /v1 only.",
+                                         "type": "invalid_request_error", "param": None, "code": "not_found"}})
+            await send({"type": "http.response.start", "status": 404,
+                        "headers": [(b"content-type", b"application/json")]})
+            await send({"type": "http.response.body", "body": body.encode()})
+            return
+        await self.app(scope, receive, send)
+
+
+_server: Any = None
+_task: Optional[asyncio.Task] = None
+
+
+def port() -> int:
+    try:
+        return int(os.environ.get("OPENTEDDY_API_PORT", "") or 0)
+    except ValueError:
+        return 0
+
+
+async def start(app: Any) -> bool:
+    """Serve /v1 alone on OPENTEDDY_API_PORT, when it is set."""
+    global _server, _task
+    p = port()
+    if not p or _task is not None:
+        return False
+    import uvicorn
+    host = os.environ.get("OPENTEDDY_API_HOST", "127.0.0.1")
+    cfg = uvicorn.Config(OnlyV1(app), host=host, port=p, log_level="warning", lifespan="off", ws="auto")
+    _server = uvicorn.Server(cfg)
+    _server.capture_signals = contextlib.nullcontext          # type: ignore[method-assign]
+    _task = asyncio.create_task(_server.serve())
+    logger.info("api: /v1 also on http://%s:%d (that port serves nothing else)", host, p)
+    return True
+
+
+async def stop() -> None:
+    global _server, _task
+    if _server is not None:
+        _server.should_exit = True
+    if _task is not None:
+        with contextlib.suppress(Exception):
+            await asyncio.wait_for(_task, 5)
+    _server, _task = None, None

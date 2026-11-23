@@ -5642,6 +5642,33 @@
               </div>
             </div>
 
+            <!-- 🔑 API keys — what an app uses to reach /v1 (api_keys.py, public_api.py). -->
+            <div class="settings-section collapsed">
+              <h3 onclick="toggleSettingsSection(this); refreshApiKeys()" data-i18n="apikeys_heading">🔑 API keys</h3>
+              <div class="settings-section-body">
+              <div style="font-size:0.78rem;color:var(--text-secondary);margin-bottom:0.9rem;line-height:1.5" data-i18n="apikeys_desc">
+                Let an app use OpenTeddy through its /v1 API, the OpenAI way.
+              </div>
+              <div class="row" style="margin-bottom:0.7rem;align-items:flex-end;gap:0.6rem">
+                <div class="field" style="flex:1">
+                  <input type="text" id="inp_api_key_name" maxlength="60" autocomplete="off" spellcheck="false"
+                         data-i18n-placeholder="apikeys_name_ph" placeholder="Name, e.g. Support app"
+                         onkeydown="if (event.key === 'Enter') { event.preventDefault(); createApiKey(); }" />
+                </div>
+                <button type="button" class="mem-btn" onclick="createApiKey()" style="font-size:0.78rem"><span data-i18n="apikeys_create">Create key</span></button>
+              </div>
+              <div id="apiKeyNew" hidden style="border:1px solid var(--success-border);background:var(--success-bg);border-radius:8px;padding:0.6rem 0.7rem;margin-bottom:0.8rem;font-size:0.78rem">
+                <div style="color:var(--text-primary);margin-bottom:0.4rem" data-i18n="apikeys_new_title">Copy this key now — it won't be shown again:</div>
+                <div style="display:flex;gap:0.5rem;align-items:center">
+                  <code id="apiKeyNewToken" style="flex:1;font-family:var(--font-mono);color:var(--text-strong);word-break:break-all;user-select:all"></code>
+                  <button type="button" class="mem-btn" onclick="copyNewApiKey()" style="font-size:0.74rem"><span data-i18n="apikeys_copy">Copy</span></button>
+                </div>
+              </div>
+              <div id="apiKeyList" style="font-size:0.78rem;line-height:1.6"></div>
+              <div id="apiKeyPort" style="font-size:0.74rem;color:var(--text-muted);margin-top:0.7rem;line-height:1.5"></div>
+              </div>
+            </div>
+
             <!-- Alerts — watchers.py tells the right person on Telegram without being asked. -->
             <div class="settings-section collapsed">
               <h3 onclick="toggleSettingsSection(this)" data-i18n="watch_heading">🔔 Proactive alerts</h3>
@@ -11191,6 +11218,75 @@
       if (VSETUP.st && VSETUP.st.enabled && v) { await enableVoiceService(v); return; }
       try { await _kbSetting({ voice_service_url: v }); toast(t('voice_url_saved')); refreshVoiceSettings(); }
       catch (e) { toast(e.message, true); }
+    }
+
+    // ── API keys (GET/POST/DELETE /api-keys; apps use them on /v1) ───────
+    function _apiKeyWhen(iso) {
+      if (!iso) return '';
+      const d = new Date(/[zZ]|[+-]\d\d:?\d\d$/.test(iso) ? iso : iso + 'Z');   // stored as naive UTC
+      return isNaN(d) ? iso : d.toLocaleString();
+    }
+
+    async function refreshApiKeys() {
+      const list = document.getElementById('apiKeyList');
+      if (!list) return;
+      try {
+        const d = await (await fetch(`${API}/api-keys`)).json();
+        const keys = d.keys || [];
+        list.innerHTML = keys.length ? keys.map(k => `
+          <div style="display:flex;align-items:center;gap:0.6rem;padding:0.35rem 0;border-top:1px solid var(--border)">
+            <div style="flex:1;min-width:0">
+              <div style="color:${k.revoked_at ? 'var(--text-muted)' : 'var(--text-primary)'}">${escHtml(k.name)}
+                <code style="font-family:var(--font-mono);color:var(--text-muted);margin-left:0.35rem">${escHtml(k.hint)}</code>
+                ${k.revoked_at ? `<span style="color:var(--error);margin-left:0.35rem">${escHtml(t('apikeys_revoked_label'))}</span>` : ''}
+              </div>
+              <div style="color:var(--text-muted);font-size:0.72rem">${escHtml(k.last_used_at
+                ? t('apikeys_used', { when: _apiKeyWhen(k.last_used_at), n: k.uses })
+                : t('apikeys_never_used'))}</div>
+            </div>
+            ${k.revoked_at ? '' : `<button type="button" class="mem-btn" style="font-size:0.72rem"
+                onclick="revokeApiKey('${escHtml(k.id)}', this.dataset.name)" data-name="${escHtml(k.name)}">${escHtml(t('apikeys_revoke'))}</button>`}
+          </div>`).join('') : `<div style="color:var(--text-muted)">${escHtml(t('apikeys_none'))}</div>`;
+        document.getElementById('apiKeyPort').textContent =
+          d.api_port ? t('apikeys_port_on', { port: d.api_port }) : t('apikeys_port_off');
+      } catch (e) { list.textContent = e.message; }
+    }
+
+    async function createApiKey() {
+      const inp = document.getElementById('inp_api_key_name');
+      const name = inp.value.trim();
+      if (!name) { toast(t('apikeys_name_needed'), true); inp.focus(); return; }
+      try {
+        const res = await fetch(`${API}/api-keys`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) });
+        const d = await res.json();
+        if (!res.ok) throw new Error(d.detail || res.statusText);
+        document.getElementById('apiKeyNewToken').textContent = d.token;
+        document.getElementById('apiKeyNew').hidden = false;
+        inp.value = '';
+        refreshApiKeys();
+      } catch (e) { toast(e.message, true); }
+    }
+
+    async function copyNewApiKey() {
+      const el = document.getElementById('apiKeyNewToken');
+      try { await navigator.clipboard.writeText(el.textContent.trim()); toast(t('apikeys_copied')); }
+      catch { window.getSelection().selectAllChildren(el); }
+    }
+
+    async function revokeApiKey(id, name) {
+      const ok = await showConfirm({
+        title: t('apikeys_revoke_confirm', { name: name || id }), body: '',
+        okLabel: t('apikeys_revoke'), cancelLabel: t('btn_cancel'), danger: true,
+      });
+      if (!ok) return;
+      try {
+        const res = await fetch(`${API}/api-keys/${encodeURIComponent(id)}`, { method: 'DELETE' });
+        if (!res.ok) throw new Error((await res.json()).detail || res.statusText);
+        toast(t('apikeys_revoked'));
+        document.getElementById('apiKeyNew').hidden = true;
+        refreshApiKeys();
+      } catch (e) { toast(e.message, true); }
     }
 
     document.addEventListener('keydown', (e) => {

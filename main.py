@@ -677,6 +677,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:  # type: ignore[type-arg]
         await https_listener.start(app)
     except Exception as exc:  # noqa: BLE001
         logger.warning("https listener not started: %s", exc)
+    # And a port that serves only /v1 when OPENTEDDY_API_PORT is set
+    # (public_api.py): what goes behind a tunnel for apps with API keys.
+    try:
+        import public_api
+        await public_api.start(app)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("api listener not started: %s", exc)
 
     yield
 
@@ -685,6 +692,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:  # type: ignore[type-arg]
         await https_listener.stop()
     except Exception as exc:  # noqa: BLE001
         logger.warning("https listener shutdown saw: %s", exc)
+    try:
+        import public_api
+        await public_api.stop()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("api listener shutdown saw: %s", exc)
 
     # Fleet shutdown — only does anything if a node was actually started.
     try:
@@ -2264,8 +2276,12 @@ async def _start_task(
     auto_lane: bool = False,
     workspace_dir: Optional[str] = None,
     datasets: Optional[list] = None,
+    api_key_id: Optional[str] = None,
 ) -> tuple[str, Optional[str], Optional["asyncio.Task"], Optional[str]]:
     """Validate, bind, and launch a task WITHOUT waiting for it.
+
+    `api_key_id`: the task comes through an API key (public_api.py) and
+    runs as that key's own person, not the web UI's (privacy.py).
 
     Returns (task_id, session_id, asyncio_task, shortcut_message). When
     the natural-language scheduling shortcut fires, no task runs and
@@ -2389,6 +2405,12 @@ async def _start_task(
         origin = "api_trusted"
 
     ctx = dict(context or {})
+    # Whose task this is comes from the door it came through, never from
+    # what a caller put in its context.
+    ctx.pop("api_key_id", None)
+    if api_key_id:
+        ctx["api_key_id"] = api_key_id
+        origin = origin or "api_key"
     if privacy:
         ctx["privacy"] = privacy
     if kb_ids is not None:
@@ -4700,6 +4722,48 @@ async def delete_ollama_model(name: str) -> dict:
     except Exception as exc:  # noqa: BLE001
         logger.error("Ollama delete error: %s", exc)
         return {"success": False, "data": None, "error": str(exc)}
+
+
+# ── API keys (Settings → API 金鑰) and the /v1 API they open ─────────────────
+# These three are the web UI's, like every other /settings-ish route: the
+# API-only port (OPENTEDDY_API_PORT) serves /v1 and never them.
+
+class _ApiKeyCreate(BaseModel):
+    name: str
+
+
+@app.get("/api-keys")
+async def api_keys_list() -> dict:
+    import api_keys
+    import public_api
+    return {"keys": await api_keys.list_keys(), "api_port": public_api.port()}
+
+
+@app.post("/api-keys")
+async def api_keys_create(body: _ApiKeyCreate) -> dict:
+    """A new key. The key itself is in this answer and nowhere else, ever."""
+    import api_keys
+    try:
+        row, token = await api_keys.create(body.name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    logger.info("API key %s (%s) created", row["id"], row["name"])
+    return {"key": row, "token": token}
+
+
+@app.delete("/api-keys/{key_id}")
+async def api_keys_revoke(key_id: str) -> dict:
+    import api_keys
+    if not await api_keys.revoke(key_id):
+        raise HTTPException(status_code=404, detail="No such key, or it was already revoked")
+    logger.info("API key %s revoked", key_id)
+    return {"revoked": key_id}
+
+
+import public_api  # noqa: E402 — needs the routes above defined
+
+public_api.install(app, start_task=_start_task, await_task=_await_task, tracker=lambda: tracker,
+                   approvals=task_approvals, approve=approve_task, reject=reject_task, cancel=cancel_task)
 
 
 # ── CLI entry point ───────────────────────────────────────────────────────────

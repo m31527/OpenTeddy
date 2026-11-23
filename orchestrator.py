@@ -1877,6 +1877,9 @@ class Orchestrator:
         system prefix stays cacheable. Skipped for scheduled runs: a daily
         report must not be steered by yesterday's report.
         """
+        history = (req.context or {}).get("history")
+        if isinstance(history, list) and history:
+            return self._history_block(history, max_chars)
         if not req.session_id or (req.context or {}).get("triggered_by") == "schedule":
             return ""
         try:
@@ -1909,6 +1912,27 @@ class Orchestrator:
                 pass
             blocks.append(f"{age}使用者：{goal[:300]}\n助理：{summ[:500]}")
         text = "\n\n".join(blocks)
+        if len(text) > max_chars:
+            text = "…" + text[-max_chars:]
+        return "【最近的對話（同一個對話串，舊→新；回答時可引用）】\n" + text
+
+    @staticmethod
+    def _history_block(history: List[Any], max_chars: int) -> str:
+        """The earlier messages an app sent along (OpenAI style, POST
+        /v1/chat/completions) when it doesn't use an OpenTeddy session: the
+        same block _recent_turns_block makes from this session's tasks."""
+        label = {"user": "使用者", "assistant": "助理", "system": "（App 的說明）"}
+        lines: List[str] = []
+        for m in history:
+            if not isinstance(m, dict) or m.get("role") not in label:
+                continue
+            content = re.sub(r"\s+", " ", str(m.get("content") or "")).strip()
+            if content:
+                sep = "" if m["role"] == "system" else "："
+                lines.append(f"{label[m['role']]}{sep}{content[:600]}")
+        if not lines:
+            return ""
+        text = "\n".join(lines)
         if len(text) > max_chars:
             text = "…" + text[-max_chars:]
         return "【最近的對話（同一個對話串，舊→新；回答時可引用）】\n" + text
