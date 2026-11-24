@@ -180,6 +180,11 @@ def test_http(c, token, token2):
     assert r.json()["session_id"] == sid
     assert c.post("/v1/chat/completions", headers=H, json={"messages": [{"role": "assistant", "content": "x"}]}).status_code == 400
     print("  ✓ going on in the key's session; another key's session → 404; no user text → 400")
+    c.post("/v1/chat/completions", headers=H, json={"messages": [{"role": "user", "content": "說話"}], "voice": True})
+    assert CALLS[-1]["context"].get("voice") is True
+    c.post("/v1/chat/completions", headers=H, json={"messages": [{"role": "user", "content": "打字"}]})
+    assert "voice" not in CALLS[-1]["context"]
+    print("  ✓ \"voice\": true → the chat lane answers for speaking (context voice)")
 
     PLAN.update(delay=1.5, message="慢慢做完了")
     r = c.post("/v1/chat/completions", headers=H, json={"messages": [{"role": "user", "content": "做件大事"}], "wait": 0.2})

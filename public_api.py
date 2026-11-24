@@ -241,6 +241,10 @@ async def chat_completions(request: Request, key: Dict[str, Any] = Depends(requi
     # it, or leave it out and the earlier messages come along this once.
     session_id = str(body.get("session_id") or request.headers.get("x-openteddy-session") or "").strip()
     context: Dict[str, Any] = {"api": True}
+    if body.get("voice"):
+        # The answer will be read aloud (a LiveKit agent, an app's own TTS): the
+        # chat lane then answers in short spoken sentences, no markdown or links.
+        context["voice"] = True
     if session_id:
         if not await api_keys.owns_session(key["id"], session_id):
             raise ApiError(404, f"No session {session_id} for this key.", code="session_not_found",
