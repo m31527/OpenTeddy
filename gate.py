@@ -48,6 +48,21 @@ Never say you are going to do something ("請稍候", "我去查", "let me check
 
 _system_cache: Dict[str, str] = {}
 
+# A role the owner gave this conversation (an Agent's persona, or an app's
+# `instructions` through /v1): new-staff training has OpenTeddy play a brand's
+# customer, and the assistant's own manner — 「很高興您覺得不錯，請問您對我們
+# 哪一項服務比較感興趣呢」 — broke it (the owner, 11/24). It goes after the fixed
+# prompt, so the model server still reuses that prefix.
+ROLE_HEAD = ("\n\n=== Your role in this conversation ===\n"
+             "The owner set the role below for this conversation, and it comes before anything above about who "
+             "you are: speak as this role, in the first person, in every reply, and say only what this role would "
+             "say — not what an assistant would.\n")
+
+
+def with_role(system: str, role: str) -> str:
+    role = (role or "").strip()
+    return system + ROLE_HEAD + role if role else system
+
 
 def system_prompt() -> str:
     """Built once from the registered tools; fixed afterwards, so the
@@ -152,16 +167,17 @@ async def _streamed(orch: Any, url: str, payload: Dict[str, Any], on_vllm: bool,
     return data
 
 
-async def ask(orch: Any, prompt: str, task_id: str = "") -> Tuple[str, Optional[str]]:
+async def ask(orch: Any, prompt: str, task_id: str = "", role: str = "") -> Tuple[str, Optional[str]]:
     """(answer, None) when the model answered; ("", what) when it called
     start_task. Raises on a failed call (the caller treats it like any
-    fast-chat failure)."""
+    fast-chat failure). `role`: the conversation's role (with_role)."""
     from config import orchestrator_on_cloud
+    system = with_role(system_prompt(), role)
     if orchestrator_on_cloud():
         provider = orch.escalation.provider
         hist = provider.new_history()
         hist.add_user_message(prompt)
-        r = await provider.complete_with_tools(hist, [START_TASK], system=system_prompt(), max_tokens=2048)
+        r = await provider.complete_with_tools(hist, [START_TASK], system=system, max_tokens=2048)
         for u in r.tool_uses or []:               # any tool call is a hand-off (see _task_from)
             return "", (str((u.input or {}).get("what") or "").strip() if u.name == "start_task"
                         else f"{u.name} {u.input}"[:120]) or "start_task"
@@ -172,14 +188,14 @@ async def ask(orch: Any, prompt: str, task_id: str = "") -> Tuple[str, Optional[
     if on_vllm:
         payload = local_engine.build_payload(
             model=config.gemma_model, messages=[{"role": "user", "content": prompt}],
-            system=system_prompt(), tools=[START_TASK], stream=False,
+            system=system, tools=[START_TASK], stream=False,
             temperature=float(getattr(config, "gemma_temperature", 0.1)),
             num_predict=config.gemma_max_tokens)
         url = local_engine.chat_endpoint(config.gemma_model)
     else:
         payload = {
             "model": config.gemma_model,
-            "messages": [{"role": "system", "content": system_prompt()}, {"role": "user", "content": prompt}],
+            "messages": [{"role": "system", "content": system}, {"role": "user", "content": prompt}],
             "tools": [START_TASK],
             "stream": False,
             "options": {"temperature": float(getattr(config, "gemma_temperature", 0.1)),
@@ -226,3 +242,38 @@ async def ask(orch: Any, prompt: str, task_id: str = "") -> Tuple[str, Optional[
     if what:
         return "", what
     return (msg.get("content") or "").strip(), None
+
+
+async def say(orch: Any, prompt: str, system: str, task_id: str) -> str:
+    """A plain answer (no start_task) from the chat model, streamed to whoever
+    listens (answer_stream.py): the chat lane of a session set to chat, which
+    the gate doesn't see. Local engines only; the caller uses the cloud path."""
+    import answer_stream
+    import local_engine
+    on_vllm = local_engine.routed(config.gemma_model)
+    if on_vllm:
+        payload = local_engine.build_payload(
+            model=config.gemma_model, messages=[{"role": "user", "content": prompt}], system=system,
+            tools=None, stream=True, temperature=float(getattr(config, "gemma_temperature", 0.1)),
+            num_predict=config.gemma_max_tokens)
+        url = local_engine.chat_endpoint(config.gemma_model)
+    else:
+        payload = {
+            "model": config.gemma_model,
+            "messages": [{"role": "system", "content": system}, {"role": "user", "content": prompt}],
+            "stream": True,
+            "options": {"temperature": float(getattr(config, "gemma_temperature", 0.1)),
+                        "num_predict": config.gemma_max_tokens,
+                        "num_ctx": int(getattr(config, "gemma_num_ctx", 16384))},
+            "keep_alive": getattr(config, "ollama_keep_alive", "24h"),
+        }
+        th = local_engine.think_setting(config.gemma_model)
+        if th is not None:
+            payload["think"] = th
+        url = f"{config.gemma_base_url}/api/chat"
+    try:
+        data = await _streamed(orch, url, payload, on_vllm, task_id)
+    finally:
+        answer_stream.end(task_id)
+    local_engine.log_timing("[chat]", config.gemma_model, data)
+    return ((data.get("message") or {}).get("content") or "").strip()

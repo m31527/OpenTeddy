@@ -774,9 +774,13 @@ class Orchestrator:
                         try:
                             agent = await self.tracker.get_agent(agent_id)
                             if agent and (agent.get("system_prompt") or "").strip():
+                                # An app's own `instructions` for this conversation
+                                # (/v1, public_api.py) follow the agent's, more specific.
+                                _own = str((req.context or {}).get("agent_persona") or "").strip()
                                 req.context["agent_persona"] = (
                                     f"[Agent: {agent.get('name', '')}]\n"
                                     + agent["system_prompt"].strip()
+                                    + (f"\n\n{_own}" if _own else "")
                                 )
                             # Programmatic schema snapshot — with this in
                             # the prompt the model skips the whole
@@ -3241,20 +3245,29 @@ class Orchestrator:
                           "問過的問題。這句話是語音辨識出來的，如果不通順、聽不懂，就簡短說沒聽清楚，請對方再說一次。）\n")
         prompt = (_clock_note() + mem_block + kb_block + voice_note
                   + ((recent + "\n\n使用者現在說：" + req.goal) if recent else req.goal))
+        # The conversation's role (an Agent's persona, an app's instructions):
+        # the chat lane speaks as it too, not only the planner (gate.with_role).
+        role = str((req.context or {}).get("agent_persona") or "")
+        import gate as _gate
         if gated:
             # Nobody picked a lane for this message: the model answers it,
             # or hands it to the agent by calling start_task (gate.py).
-            import gate as _gate
-            answer, what = await _gate.ask(self, prompt, task_id=req.id)
+            answer, what = await _gate.ask(self, prompt, task_id=req.id, role=role)
             if what:
                 raise _NeedsWork(f"start_task: {what}")
             if not answer:
                 self._last_gemma_error = "the model neither answered nor called start_task"
         else:
-            answer = await self._orchestrator_complete(
-                prompt, system, task_id=req.id,
-                task_description=f"[fast-chat] {req.goal[:100]}",
-            )
+            import answer_stream
+            from config import orchestrator_on_cloud
+            if answer_stream.wanted(req.id) and not orchestrator_on_cloud():
+                # Someone waits on the words (a streamed API answer, voice).
+                answer = await _gate.say(self, prompt, _gate.with_role(system, role), req.id)
+            else:
+                answer = await self._orchestrator_complete(
+                    prompt, _gate.with_role(system, role), task_id=req.id,
+                    task_description=f"[fast-chat] {req.goal[:100]}",
+                )
         if not answer or not answer.strip() or answer.strip() == "[]":
             # "[]" is _gemma_complete's on-error sentinel (a timeout, a
             # refused request). It passed the old emptiness check and

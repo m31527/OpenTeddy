@@ -20,9 +20,12 @@ Run (README.md):
     LIVEKIT_URL=ws://127.0.0.1:7880  LIVEKIT_API_KEY=…  LIVEKIT_API_SECRET=…
     python agent.py start
 
-Datasets: the room's metadata {"datasets": ["客服 FAQ"]}, or the caller's
-participant attribute "datasets" (a JSON list). One room = one OpenTeddy
-session, so the conversation is remembered for as long as the room lives.
+The room's metadata (JSON) sets the conversation up, or the caller's
+participant attributes of the same names:
+    {"datasets": ["客服 FAQ"], "agent": "品牌客戶・王經理", "instructions": "…"}
+— the knowledge base to answer from, an Agent defined in OpenTeddy whose
+role it plays, and a role the app writes itself (docs/api.md). One room =
+one OpenTeddy session, remembered for as long as the room lives.
 """
 from __future__ import annotations
 
@@ -135,10 +138,11 @@ class OpenTeddyLLM(llm.LLM):
     """OpenTeddy keeps the conversation (its session: memory, knowledge base,
     datasets), so only the newest user message is sent each turn."""
 
-    def __init__(self, datasets: Optional[List[str]] = None) -> None:
+    def __init__(self, datasets: Optional[List[str]] = None, agent: Optional[str] = None,
+                 instructions: Optional[str] = None) -> None:
         super().__init__()
         self.session_id: Optional[str] = None
-        self.datasets = datasets
+        self.datasets, self.agent, self.instructions = datasets, agent, instructions
 
     @property
     def model(self) -> str:
@@ -167,8 +171,13 @@ class OpenTeddyLLMStream(llm.LLMStream):
                       "messages": [{"role": "user", "content": said}]}
         if ot.session_id:
             body["session_id"] = ot.session_id
-        elif ot.datasets is not None:
-            body["datasets"] = ot.datasets                              # the session keeps them
+        else:                                                           # the session keeps all three
+            if ot.datasets is not None:
+                body["datasets"] = ot.datasets
+            if ot.agent:
+                body["agent"] = ot.agent
+            if ot.instructions:
+                body["instructions"] = ot.instructions
         rid = str(uuid.uuid4())
         logger.info("timeline %.3f llm request (%d chars)", time.time(), len(said))
         first = True
@@ -275,18 +284,31 @@ class ClauseFirstTokenizer(tokenize.SentenceTokenizer):
 
 # ── The worker ───────────────────────────────────────────────────────────────
 
-def _datasets(ctx: JobContext, participant: Any) -> Optional[List[str]]:
-    for raw in ((ctx.room.metadata or ""), (getattr(participant, "attributes", {}) or {}).get("datasets", "")):
-        if not raw:
-            continue
-        try:
-            v = json.loads(raw)
-        except ValueError:
-            continue
-        v = v.get("datasets") if isinstance(v, dict) else v
-        if isinstance(v, list):
-            return [str(x) for x in v]
-    return None
+def _room_settings(ctx: JobContext, participant: Any) -> dict:
+    """{"datasets", "agent", "instructions"} from the room's metadata (JSON),
+    else the caller's attributes of the same names (datasets as a JSON list)."""
+    out: dict = {}
+    try:
+        meta = json.loads(ctx.room.metadata or "{}")
+    except ValueError:
+        meta = {}
+    attrs = getattr(participant, "attributes", {}) or {}
+    for name in ("datasets", "agent", "instructions"):
+        value = meta.get(name) if isinstance(meta, dict) else None
+        if value is None and attrs.get(name):
+            value = attrs[name]
+            if name == "datasets":
+                try:
+                    value = json.loads(value)
+                except ValueError:
+                    value = None
+        if value is not None:
+            out[name] = value
+    if isinstance(meta, list):                                          # metadata that is just the datasets
+        out.setdefault("datasets", meta)
+    if not isinstance(out.get("datasets", []), list):
+        out.pop("datasets")
+    return out
 
 
 def prewarm(proc: JobProcess) -> None:
@@ -296,12 +318,13 @@ def prewarm(proc: JobProcess) -> None:
 async def entrypoint(ctx: JobContext) -> None:
     await ctx.connect()
     participant = await ctx.wait_for_participant()
-    datasets = _datasets(ctx, participant)
-    logger.info("room %s: a caller joined, datasets %s", ctx.room.name, datasets)
+    settings = _room_settings(ctx, participant)
+    logger.info("room %s: a caller joined, datasets %s, agent %s, instructions %s", ctx.room.name,
+                settings.get("datasets"), settings.get("agent"), "yes" if settings.get("instructions") else "no")
     session = AgentSession(
         vad=ctx.proc.userdata.get("vad") or silero.VAD.load(min_silence_duration=VAD_SILENCE_S),
         stt=OpenTeddySTT(),
-        llm=OpenTeddyLLM(datasets),
+        llm=OpenTeddyLLM(settings.get("datasets"), settings.get("agent"), settings.get("instructions")),
         # Speak the first clause as soon as it is written (ClauseFirstTokenizer).
         tts=tts.StreamAdapter(tts=OpenTeddyTTS(), sentence_tokenizer=ClauseFirstTokenizer()),
         turn_handling={"endpointing": {"min_delay": ENDPOINT_MIN_S, "max_delay": 2.0},

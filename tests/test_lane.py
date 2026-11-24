@@ -242,6 +242,17 @@ def test_gate() -> None:
         await O.Orchestrator._fast_chat_response(fake, spoken, "chat", {"confidence": 0.9})
         assert len(asked_memory) == 1 and "上週查過天氣" not in sent[-1][1]["messages"][1]["content"]
         fake.memory = None
+        # A role (an Agent's persona, an app's instructions) goes after the fixed
+        # prompt: the model plays it, and the cached prefix stays the same.
+        import gate as G
+        reply.clear()
+        reply.update({"content": "我是王經理，想先了解報價。"})
+        roled = TaskRequest(goal="你好", session_id="s", mode="chat",
+                            context={"mode_override": True, "gate": "code", "agent_persona": "你是品牌客戶王經理。"})
+        r = await O.Orchestrator._fast_chat_response(fake, roled, "chat", {"confidence": 0.9})
+        sys_msg = sent[-1][1]["messages"][0]["content"]
+        assert sys_msg.startswith(G.system_prompt()) and sys_msg.endswith(G.ROLE_HEAD + "你是品牌客戶王經理。"), sys_msg[-200:]
+        assert r.summary == "我是王經理，想先了解報價。"
         reply.clear()
         reply.update({"content": "好的，我去 momo 幫你查，請稍候…"})
         try:

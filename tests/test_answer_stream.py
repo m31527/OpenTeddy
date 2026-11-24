@@ -131,9 +131,29 @@ def test_ask():
     print("  ✓ gate.ask streams only when someone listens; same answer either way; END after the text")
 
 
+def test_say():
+    """gate.say: a plain streamed answer (no tools) with the conversation's role."""
+    seen = {}
+
+    def handler(req):
+        seen["p"] = json.loads(req.content)
+        return httpx.Response(200, text="\n".join(json.dumps(x, ensure_ascii=False) for x in [
+            {"message": {"content": "嗯，"}}, {"message": {"content": "價格是重點。"}},
+            {"message": {"content": ""}, "done": True}]))
+    q = answer_stream.listen("t-say")
+    out = run(gate.say(orch_with(handler), "報價多少", gate.with_role("基本提示", "你是王經理。"), "t-say"))
+    assert out == "嗯，價格是重點。" and drain(q) == ["嗯，", "價格是重點。", answer_stream.END]
+    p = seen["p"]
+    assert p["stream"] is True and "tools" not in p and p["messages"][0]["content"].endswith("你是王經理。")
+    assert gate.with_role("x", "") == "x" and gate.with_role("x", "  ") == "x"
+    answer_stream.close("t-say", q)
+    print("  ✓ gate.say: streamed, no tools, the role after the prompt; no role → the prompt as it is")
+
+
 if __name__ == "__main__":
     print("A. registry"); test_registry()
     print("B. Ollama"); test_ollama()
     print("C. vLLM"); test_vllm()
     print("D. gate.ask"); test_ask()
+    print("E. gate.say"); test_say()
     print("\nALL ANSWER STREAM TESTS PASS")

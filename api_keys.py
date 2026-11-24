@@ -39,6 +39,11 @@ _TABLES = (
     " created_at TEXT NOT NULL, last_used_at TEXT, uses INTEGER NOT NULL DEFAULT 0, revoked_at TEXT)",
     "CREATE TABLE IF NOT EXISTS api_key_sessions ("
     " session_id TEXT PRIMARY KEY, key_id TEXT NOT NULL, created_at TEXT NOT NULL)",
+    # What an app set for a whole conversation: its role (`instructions`), and
+    # whether it chose to answer without the knowledge base (`"datasets": []`).
+    "CREATE TABLE IF NOT EXISTS api_session_settings ("
+    " session_id TEXT PRIMARY KEY, instructions TEXT NOT NULL DEFAULT '',"
+    " no_datasets INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL)",
 )
 _ready_for: Optional[str] = None          # the db path the tables were made in
 
@@ -162,3 +167,49 @@ async def owns_session(key_id: str, session_id: str) -> bool:
         async with db.execute("SELECT key_id FROM api_key_sessions WHERE session_id=?", (session_id,)) as cur:
             row = await cur.fetchone()
     return bool(row) and row[0] == key_id
+
+
+# ── What an app set for a conversation ───────────────────────────────────────
+
+_SETTINGS = ("instructions", "no_datasets")
+
+
+async def _set(session_id: str, column: str, value: Any) -> None:
+    assert column in _SETTINGS
+    await _ensure()
+    async with aiosqlite.connect(_db()) as db:
+        await db.execute(f"INSERT INTO api_session_settings (session_id, {column}, updated_at) VALUES (?, ?, ?) "
+                         f"ON CONFLICT(session_id) DO UPDATE SET {column}=excluded.{column}, "
+                         "updated_at=excluded.updated_at", (session_id, value, _now()))
+        await db.commit()
+
+
+async def _get(session_id: str, column: str) -> Any:
+    assert column in _SETTINGS
+    if not session_id:
+        return None
+    await _ensure()
+    async with aiosqlite.connect(_db()) as db:
+        async with db.execute(f"SELECT {column} FROM api_session_settings WHERE session_id=?",
+                              (session_id,)) as cur:
+            row = await cur.fetchone()
+    return row[0] if row else None
+
+
+async def set_instructions(session_id: str, text: str) -> None:
+    """The conversation's role (`instructions`); "" removes it."""
+    await _set(session_id, "instructions", text or "")
+
+
+async def get_instructions(session_id: str) -> str:
+    return (await _get(session_id, "instructions")) or ""
+
+
+async def set_no_datasets(session_id: str, none: bool) -> None:
+    """Whether the conversation answers without the knowledge base — the
+    "always" datasets too — because the app named `"datasets": []`."""
+    await _set(session_id, "no_datasets", int(bool(none)))
+
+
+async def no_datasets(session_id: str) -> bool:
+    return bool(await _get(session_id, "no_datasets"))

@@ -100,11 +100,17 @@ async def require_key(request: Request) -> Dict[str, Any]:
 
 # ── Sessions ─────────────────────────────────────────────────────────────────
 
-async def _new_session(key: Dict[str, Any], first: str, sid: str = "") -> str:
-    """A session for this key, titled so the owner's web UI shows whose it is."""
+async def _new_session(key: Dict[str, Any], first: str, sid: str = "",
+                       agent: Optional[Dict[str, Any]] = None) -> str:
+    """A session for this key, titled so the owner's web UI shows whose it is;
+    built from `agent` (its persona, mode and bindings) when one is named."""
     sid = sid or str(uuid.uuid4())
-    title = f"🔑 {key['name']} · {' '.join((first or '').split())[:40] or 'API'}"
-    await H.tracker().create_session(sid, title, mode="code")
+    title = (f"🔑 {key['name']} · " + (f"{agent.get('name', '')} · " if agent else "")
+             + (' '.join((first or '').split())[:40] or 'API'))
+    if agent:
+        await H.tracker().create_session_from_agent(sid, agent, title=title)
+    else:
+        await H.tracker().create_session(sid, title, mode="code")
     await H.tracker().rename_session(sid, title, by="user")     # session_titler leaves it as it is
     await api_keys.claim_session(key["id"], sid)
     return sid
@@ -125,13 +131,16 @@ def _status(s: Any) -> str:
 # A session answers from the datasets it picked (knowledge.py). An app picks
 # them with `datasets` — on a chat call, in the realtime hello, or with a
 # {"type":"datasets"} message mid-conversation — and they stay the session's
-# pick until it names others. Each turn then reads exactly those; a session
-# that never picked any reads the owner's "always" datasets.
+# pick until it names others. Each turn then reads exactly those. `[]` is a
+# pick too: no knowledge at all, for the rest of the conversation (a role
+# that plays a customer). A session that never picked reads the owner's
+# "always" datasets.
 
 async def _pick_datasets(session_id: str, requested: Any) -> Optional[List[str]]:
     """Save `requested` (names or ids; None = keep the session's pick) as the
-    session's datasets; return the ids each turn passes on, or None to leave
-    the choice to knowledge.scope_for (no pick, or the knowledge base off)."""
+    session's datasets; return the ids each turn passes on ([] = none), or
+    None to leave the choice to knowledge.scope_for (no pick, or the
+    knowledge base off)."""
     import knowledge
     if requested is not None:
         if not isinstance(requested, list) or not all(isinstance(x, str) and x.strip() for x in requested):
@@ -140,18 +149,24 @@ async def _pick_datasets(session_id: str, requested: Any) -> Optional[List[str]]
             raise ApiError(400, "The knowledge base is off on this OpenTeddy (Settings → 知識庫).",
                            code="knowledge_off", param="datasets")
         if not knowledge.enabled():
+            await api_keys.set_no_datasets(session_id, True)
             return None
         try:
-            return await knowledge.set_session_datasets(session_id, requested)
+            ids = await knowledge.set_session_datasets(session_id, requested)
         except knowledge.KnowledgeError as exc:            # an app lists them at /v1/datasets, not /knowledge
             raise ApiError(400, str(exc).replace("GET /knowledge ", "GET /v1/datasets "),
                            code="dataset_not_found", param="datasets")
+        await api_keys.set_no_datasets(session_id, not ids)
+        return ids
     if not knowledge.enabled():
         return None
     try:
-        return (await knowledge.session_datasets(session_id)) or None
+        picked = await knowledge.session_datasets(session_id)
     except RuntimeError:                          # knowledge base not started
         return None
+    if picked:
+        return picked
+    return [] if await api_keys.no_datasets(session_id) else None
 
 
 async def _dataset_names(ids: Optional[List[str]]) -> List[str]:
@@ -160,6 +175,42 @@ async def _dataset_names(ids: Optional[List[str]]) -> List[str]:
     import knowledge
     by_id = {d["id"]: d["name"] for d in await knowledge.list_datasets()}
     return [by_id.get(i, i) for i in ids]
+
+
+# ── The role a conversation plays ────────────────────────────────────────────
+# `agent` builds the conversation from an Agent defined in OpenTeddy (its
+# persona, kept and edited there); `instructions` is a role the app writes
+# itself, kept for the conversation's every turn. Both together: the agent's
+# persona first, then the instructions. gate.with_role puts it in the chat
+# lane's prompt, so a trainee talking to "a brand's customer" gets the
+# customer, not the assistant's 「請問您對我們哪一項服務比較感興趣呢」.
+
+MAX_INSTRUCTIONS = 4000
+
+
+async def _resolve_agent(ref: Any) -> Dict[str, Any]:
+    name = str(ref or "").strip()
+    if not name:
+        raise ApiError(400, "agent: the name or id of an Agent (OpenTeddy → Agent).", param="agent")
+    tracker = H.tracker()
+    agent = await tracker.get_agent(name)
+    if not agent:
+        agent = next((a for a in await tracker.list_agents()
+                      if (a.get("name") or "").strip().lower() == name.lower()), None)
+    if not agent:
+        raise ApiError(400, f"No agent named {name!r} (OpenTeddy → Agent).", code="agent_not_found", param="agent")
+    return agent
+
+
+def _instructions(value: Any) -> Optional[str]:
+    """The `instructions` an app sent: None when absent, "" to clear."""
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ApiError(400, "instructions: a string.", param="instructions")
+    if len(value) > MAX_INSTRUCTIONS:
+        raise ApiError(400, f"instructions: at most {MAX_INSTRUCTIONS} characters.", param="instructions")
+    return value.strip()
 
 
 # ── Models ───────────────────────────────────────────────────────────────────
@@ -245,22 +296,32 @@ async def chat_completions(request: Request, key: Dict[str, Any] = Depends(requi
         # The answer will be read aloud (a LiveKit agent, an app's own TTS): the
         # chat lane then answers in short spoken sentences, no markdown or links.
         context["voice"] = True
+    role = _instructions(body.get("instructions"))
     if session_id:
         if not await api_keys.owns_session(key["id"], session_id):
             raise ApiError(404, f"No session {session_id} for this key.", code="session_not_found",
                            param="session_id")
+        if body.get("agent") is not None:
+            raise ApiError(400, "agent sets the role of a new conversation: leave session_id out to start one.",
+                           param="agent")
         ds = await _pick_datasets(session_id, body.get("datasets"))
     else:
-        # The datasets are checked before the session exists, so a wrong
-        # name leaves no empty session behind.
+        # The agent and datasets are checked before the session exists, so a
+        # wrong name leaves no empty session behind.
+        agent = await _resolve_agent(body["agent"]) if body.get("agent") is not None else None
         new_id = str(uuid.uuid4())
         ds = await _pick_datasets(new_id, body.get("datasets"))
-        session_id = await _new_session(key, goal, sid=new_id)
+        session_id = await _new_session(key, goal, sid=new_id, agent=agent)
         history = [{"role": m.get("role"), "content": _text_of(m.get("content"))}
                    for m in messages[:last] if isinstance(m, dict)]
         history = [h for h in history if h["role"] in ("system", "user", "assistant") and h["content"].strip()]
         if history:
             context["history"] = history[-HISTORY_MAX:]
+    if role is not None:
+        await api_keys.set_instructions(session_id, role)
+    role = await api_keys.get_instructions(session_id)
+    if role:
+        context["agent_persona"] = role                # with the agent's own persona, if any (orchestrator)
 
     # A streamed answer listens for the model's words before the task starts,
     # so not one piece is missed (answer_stream.py).
@@ -731,29 +792,47 @@ async def realtime(ws: WebSocket) -> None:
         return err
 
     async def bind(sid: str, hello: Dict[str, Any]) -> Dict[str, Any]:
-        """The hello's session (the key's own) or a new one, and its datasets."""
+        """The hello's session (the key's own) or a new one — from `agent` when
+        one is named — with its datasets and role (`instructions`)."""
         if sid and not await api_keys.owns_session(key["id"], sid):
             raise ValueError(f"No session {sid} for this key.")
         new_id = sid or str(uuid.uuid4())
         try:
+            if sid and hello.get("agent") is not None:
+                raise ApiError(400, "agent sets the role of a new conversation: leave session_id out to start one.",
+                               param="agent")
+            agent = await _resolve_agent(hello["agent"]) if hello.get("agent") is not None and not sid else None
+            role = _instructions(hello.get("instructions"))
             ds = await _pick_datasets(new_id, hello.get("datasets"))
         except ApiError as exc:
             raise refuse(exc)
         if not sid:
-            await _new_session(key, "語音對話", sid=new_id)
-        return {"session_id": new_id, **({"datasets": await _dataset_names(ds)} if ds is not None else {})}
+            await _new_session(key, "語音對話", sid=new_id, agent=agent)
+        if role is not None:
+            await api_keys.set_instructions(new_id, role)
+        return {"session_id": new_id, **({"datasets": await _dataset_names(ds)} if ds is not None else {}),
+                **({"agent": agent.get("name", "")} if agent else {}),
+                **({"instructions": True} if await api_keys.get_instructions(new_id) else {})}
 
     async def control(data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        if data.get("type") != "datasets":
-            return None
+        kind = data.get("type")
         try:
-            ds = await _pick_datasets(conv.session_id, data.get("datasets") if "datasets" in data else [])
+            if kind == "datasets":
+                ds = await _pick_datasets(conv.session_id, data.get("datasets") if "datasets" in data else [])
+                return {"type": "datasets", "datasets": await _dataset_names(ds)}
+            if kind == "instructions":                    # a new role from the next turn on ("" clears it)
+                await api_keys.set_instructions(conv.session_id, _instructions(data.get("instructions") or ""))
+                return {"type": "instructions", "set": bool(await api_keys.get_instructions(conv.session_id))}
         except ApiError as exc:
             raise refuse(exc)
-        return {"type": "datasets", "datasets": await _dataset_names(ds)}
+        return None
 
     async def start(**kw: Any) -> Any:
-        ds = await _pick_datasets(kw.get("session_id") or "", None) if kw.get("session_id") else None
+        sid = kw.get("session_id") or ""
+        ds = await _pick_datasets(sid, None) if sid else None
+        role = await api_keys.get_instructions(sid)
+        if role:
+            kw["context"] = {**(kw.get("context") or {}), "agent_persona": role}
         return await H.start_task(**kw, api_key_id=key["id"], **({"datasets": ds} if ds is not None else {}))
 
     conv = voice_bridge.Conversation(ws, start_task=start, await_task=H.await_task,

@@ -57,6 +57,7 @@ Errors come back with an HTTP status, shaped as OpenAI shapes them:
 | 401 | `missing_api_key` / `invalid_api_key` | No key, a wrong key, or a revoked key |
 | 404 | `session_not_found` / `task_not_found` | The session or task isn't this key's |
 | 400 | `dataset_not_found` / `knowledge_off` | A dataset name or id that doesn't exist, or the knowledge base is off |
+| 400 | `agent_not_found` | No Agent with that name or id |
 | 400 | `unsupported_audio` and others | The request itself is wrong |
 | 503 | `voice_not_configured` / `voice_off` | There is no voice service, or voice is turned off in Settings |
 | 502 | `voice_unreachable` | The voice service didn't answer |
@@ -115,6 +116,38 @@ Text only: image parts in `content` are ignored. `temperature`, `max_tokens` and
 
 Returns a list with one model, `openteddy`.
 
+## Roles: who OpenTeddy plays
+
+By default OpenTeddy answers as a helpful assistant. A conversation can be given a **role** instead, and then every reply speaks as that role, in the first person.
+
+The main use is training. In new-staff training, OpenTeddy plays a brand's customer: it asks what a real customer would ask, pushes back on price, and answers seriously. It does not answer the way an assistant would, with lines like 「很高興您覺得不錯，請問您對我們哪一項服務比較感興趣呢」.
+
+There are two ways to give a role, and they can be combined:
+
+- **`agent`**: the name or id of an **Agent** defined in OpenTeddy's web UI (Agent tab). Its persona is the role. This suits fixed roles used again and again, such as five typical customers. Edit the Agent and every new conversation with it changes, with no app release.
+- **`instructions`**: a role the app writes itself, for example a scenario made up for this one session. It is kept for the whole conversation until the app changes it; `""` removes it.
+
+With both, the Agent's persona comes first and the instructions add to it ("this time the customer wants a discount").
+
+| Where | How |
+|---|---|
+| Chat | Body fields `agent` and `instructions`. `agent` only applies when starting a conversation (no `session_id`); `instructions` can be sent with any turn. With the OpenAI SDK, put them in `extra_body`. |
+| Realtime voice | Put `agent` and `instructions` in the hello; `ready` names the agent and says `"instructions": true`. To change the role mid-call, send `{"type": "instructions", "instructions": "…"}`. |
+| LiveKit | Room metadata `{"agent": "…", "instructions": "…"}`, next to `datasets`. |
+
+Writing a good role:
+
+- Say **who** it is, **what** it wants, and **how** it talks. For example: 「你是連鎖烘焙品牌的採購王經理，正在比較三家包材供應商。你在意單價和交期，說話直接、不客套。你是客戶，不是業務：不要推銷、不要問對方想了解哪項服務；就你的立場認真回應，該追問就追問。」
+- A role that plays a **customer** shouldn't answer from the brand's knowledge base: send `"datasets": []` with it, and the whole conversation stays off the knowledge base. A role that speaks for the brand names its datasets instead. See [Datasets](#datasets-which-knowledge-to-answer-from).
+- The length and plain style of a spoken answer still apply with `"voice": true`.
+
+```python
+r = client.chat.completions.create(model="openteddy", messages=[{"role": "user", "content": "王經理您好，我是業務小林。"}],
+    extra_body={"agent": "品牌客戶・王經理", "instructions": "這次他很趕交期。", "datasets": [], "voice": True})
+```
+
+An unknown agent gives `agent_not_found`, and no conversation is started.
+
 ## Datasets: which knowledge to answer from
 
 The knowledge base holds the owner's reference material: FAQs, product notes, policies. It is organised in named **datasets**, made in OpenTeddy's 知識庫 tab, and it must be switched on there.
@@ -139,12 +172,19 @@ The list gives names and sizes, not contents. `enabled: false` means the knowled
 
 - **In chat:** `datasets` in the body. With the OpenAI SDK, use `extra_body={"datasets": ["客服 FAQ"]}`.
 - **In realtime voice:** `datasets` in the hello. To change them mid-conversation, send `{"type": "datasets", "datasets": [...]}`.
+- **Through LiveKit:** `datasets` in the room's metadata (`contrib/livekit/README.md`).
 
 A conversation **keeps** the datasets it named. Later turns use them until the app names others; there is no need to send them every time.
 
-- `[]` means none, for that turn.
-- A conversation that has never named any uses the datasets the owner marked "always" (`always: true`).
-- The answer (chat) or `ready` (voice) lists the datasets in effect, by name.
+| The app sends | The conversation answers from |
+|---|---|
+| `["客服 FAQ", "產品手冊"]` | exactly these datasets, from now on |
+| `[]` | **no** knowledge base at all, from now on, "always" datasets included |
+| nothing, ever | the datasets the owner marked "always" (`always: true`) |
+
+The answer (chat) or `ready` (voice) lists the datasets in effect, by name; `[]` there means none.
+
+Datasets and [roles](#roles-who-openteddy-plays) go together: a role that **speaks for the brand** (a support agent, a sales rep) names the brand's datasets, while a role that **plays a customer** sends `[]`, because a customer doesn't know the brand's FAQ. An Agent named with `agent` brings no datasets of its own, so name them alongside it.
 
 ```python
 r = client.chat.completions.create(
@@ -241,11 +281,12 @@ If the key is wrong, the handshake is refused with HTTP 403.
 
 | Direction | Message |
 |---|---|
-| → first | `{"type": "hello", "session_id": "…", "datasets": [...]}`. Leave `session_id` out (or `""`) for a new conversation. `datasets` is optional. |
-| ← | `{"type": "ready", "session_id", "sample_rate", "asr_rate": 16000, "voice", "asr", "tts", "datasets"}` |
+| → first | `{"type": "hello", "session_id": "…", "datasets": [...], "agent": "…", "instructions": "…"}`. Leave `session_id` out (or `""`) for a new conversation. Everything except `type` is optional; see [Roles](#roles-who-openteddy-plays). |
+| ← | `{"type": "ready", "session_id", "sample_rate", "asr_rate": 16000, "voice", "asr", "tts", "datasets", "agent", "instructions"}` |
 | → | **binary**: one utterance, PCM16 mono at 16 kHz, at most 45 s. The app decides where speech ends; the web UI waits for 0.5 s of silence. |
 | → | `{"type": "text", "text": "…"}`: a typed turn instead of a spoken one |
 | → | `{"type": "datasets", "datasets": [...]}`: answer from these from now on. The reply is ← `{"type": "datasets", "datasets": [names]}`. |
+| → | `{"type": "instructions", "instructions": "…"}`: play this role from the next turn on (`""` removes it). The reply is ← `{"type": "instructions", "set": true}`. |
 | → | `{"type": "interrupt"}`: the person started talking, so stop speaking |
 | ← | `{"type": "state", "value": "listening" \| "thinking" \| "speaking"}` |
 | ← | `{"type": "transcript", "text", "ms"}`: what was heard |
@@ -253,7 +294,7 @@ If the key is wrong, the handshake is refused with HTTP 403.
 | ← | **binary**: the spoken answer, PCM16 mono at `sample_rate`, in chunks as it is made. Speaking starts with the answer's first sentence while the rest is still being written. `{"type": "audio_end"}` follows (`"interrupted": true` when it was cut short). |
 | ← | `{"type": "working", "task_id", "text"}`: work that takes longer than 8 s is acknowledged out loud … |
 | ← | `{"type": "done", "task_id", "text"}`: … and then spoken when it is done |
-| ← | `{"type": "error", "code", "text"}`. `code` is one of `not_enabled`, `not_configured`, `unreachable`, `loading`, `bad_session`, `dataset_not_found` or `knowledge_off`. |
+| ← | `{"type": "error", "code", "text"}`. `code` is one of `not_enabled`, `not_configured`, `unreachable`, `loading`, `bad_session`, `dataset_not_found`, `knowledge_off` or `agent_not_found`. |
 
 Noise that isn't speech starts nothing: the voice service checks for a voice first.
 

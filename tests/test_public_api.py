@@ -45,9 +45,20 @@ def run(coro):
 class FakeTracker:
     def __init__(self):
         self.sessions, self.tasks = {}, {}
+        self.agents = {"ag1": {"id": "ag1", "name": "品牌客戶・王經理", "mode": "chat",
+                               "system_prompt": "你是品牌客戶王經理，在意價格與交期。"}}
 
     async def create_session(self, sid, title, mode="code"):
         self.sessions[sid] = {"title": title, "mode": mode, "state": "pending"}
+
+    async def get_agent(self, aid):
+        return self.agents.get(aid)
+
+    async def list_agents(self):
+        return list(self.agents.values())
+
+    async def create_session_from_agent(self, sid, agent, title=""):
+        self.sessions[sid] = {"title": title, "mode": agent["mode"], "state": "pending", "agent_id": agent["id"]}
 
     async def rename_session(self, sid, title, by="user"):
         self.sessions[sid].update(title=title, state=by)
@@ -454,6 +465,81 @@ def test_stt_stream(c, token):
         vb.configured, vb.enabled, vb.transcribe = saved
 
 
+# ── K. the role a conversation plays ─────────────────────────────────────────
+
+def test_roles(c, token):
+    H = {"Authorization": f"Bearer {token}"}
+    PLAN.update(words=None, message="嗯", delay=0.0, shortcut=None)
+    role = "你是品牌客戶王經理，正在比較三家供應商，說話直接，不推銷、不反問服務。"
+    r = c.post("/v1/chat/completions", headers=H, json={"messages": [{"role": "user", "content": "您好"}],
+                                                        "instructions": role}).json()
+    sid = r["session_id"]
+    assert CALLS[-1]["context"]["agent_persona"] == role
+    c.post("/v1/chat/completions", headers=H, json={"messages": [{"role": "user", "content": "報價如下"}], "session_id": sid})
+    assert CALLS[-1]["context"]["agent_persona"] == role, "the role stays for the conversation"
+    c.post("/v1/chat/completions", headers=H, json={"messages": [{"role": "user", "content": "結束"}], "session_id": sid,
+                                                    "instructions": ""})
+    assert "agent_persona" not in CALLS[-1]["context"], "\"\" clears it"
+    bad = c.post("/v1/chat/completions", headers=H, json={"messages": [{"role": "user", "content": "x"}], "instructions": 3})
+    assert bad.status_code == 400 and bad.json()["error"]["param"] == "instructions"
+    print("  ✓ instructions: the conversation's role on every turn until changed; \"\" clears; not a string → 400")
+
+    r = c.post("/v1/chat/completions", headers=H, json={"messages": [{"role": "user", "content": "您好"}],
+                                                        "agent": "品牌客戶・王經理"}).json()
+    s2 = r["session_id"]
+    assert TR.sessions[s2]["agent_id"] == "ag1" and "品牌客戶・王經理" in TR.sessions[s2]["title"]
+    assert "agent_persona" not in CALLS[-1]["context"], "the agent's persona is the orchestrator's to add (live)"
+    r = c.post("/v1/chat/completions", headers=H, json={"messages": [{"role": "user", "content": "x"}], "agent": "ag1",
+                                                        "instructions": "這次客戶想比價。"}).json()
+    assert TR.sessions[r["session_id"]]["agent_id"] == "ag1" and CALLS[-1]["context"]["agent_persona"] == "這次客戶想比價。"
+    n = len(TR.sessions)
+    r = c.post("/v1/chat/completions", headers=H, json={"messages": [{"role": "user", "content": "x"}], "agent": "不存在"})
+    assert r.status_code == 400 and r.json()["error"]["code"] == "agent_not_found" and len(TR.sessions) == n
+    r = c.post("/v1/chat/completions", headers=H, json={"messages": [{"role": "user", "content": "x"}], "agent": "ag1",
+                                                        "session_id": s2})
+    assert r.status_code == 400 and r.json()["error"]["param"] == "agent"
+    print("  ✓ agent by name or id → a session built from it; with instructions on top; unknown / on an existing session → 400")
+
+    vb = voice_bridge
+    saved = (vb.configured, vb.enabled, vb.health, vb.speak)
+    vb.configured, vb.enabled = (lambda: True), (lambda: True)
+
+    async def health(timeout=5.0):
+        return {"ok": True, "tts_sample_rate": 24000}
+
+    async def speak(text, client, voice=""):
+        yield b"\x00\x00"
+    vb.health, vb.speak = health, speak
+
+    def until(ws, *types):
+        while True:
+            m = ws.receive()
+            if m.get("text"):
+                d = json.loads(m["text"])
+                if d.get("type") in types:
+                    return d
+    try:
+        with c.websocket_connect("/v1/realtime", headers=H) as ws:
+            ws.send_text(json.dumps({"type": "hello", "agent": "品牌客戶・王經理", "instructions": "客戶今天很急。"}))
+            ready = until(ws, "ready")
+            assert ready["agent"] == "品牌客戶・王經理" and ready["instructions"] is True, ready
+            assert TR.sessions[ready["session_id"]]["agent_id"] == "ag1"
+            ws.send_text(json.dumps({"type": "text", "text": "您好，我是業務小林"}))
+            until(ws, "reply")
+            assert CALLS[-1]["context"] == {"voice": True, "agent_persona": "客戶今天很急。"}, CALLS[-1]["context"]
+            ws.send_text(json.dumps({"type": "instructions", "instructions": "客戶改成很有耐心。"}))
+            assert until(ws, "instructions")["set"] is True
+            ws.send_text(json.dumps({"type": "text", "text": "那我們談談交期"}))
+            until(ws, "reply")
+            assert CALLS[-1]["context"]["agent_persona"] == "客戶改成很有耐心。"
+        with c.websocket_connect("/v1/realtime", headers=H) as ws:
+            ws.send_text(json.dumps({"type": "hello", "agent": "不存在"}))
+            assert until(ws, "error", "ready")["code"] == "agent_not_found"
+        print("  ✓ realtime: agent + instructions in the hello (named in ready), each spoken turn plays it, changed mid-call")
+    finally:
+        vb.configured, vb.enabled, vb.health, vb.speak = saved
+
+
 # ── I. datasets ──────────────────────────────────────────────────────────────
 
 class FakeKB:
@@ -515,6 +601,21 @@ def test_datasets(c, token, token2):
         assert "datasets" not in CALLS[-1] and "datasets" not in r, "no pick → the owner's defaults (scope_for)"
         print("  ✓ chat: datasets by name or id, kept by the session, changed by naming others; none → defaults")
 
+        r = c.post("/v1/chat/completions", headers=H,
+                   json={"messages": [{"role": "user", "content": "我是客戶"}], "datasets": []}).json()
+        sid = r["session_id"]
+        assert CALLS[-1]["datasets"] == [] and r["datasets"] == [], r
+        for _ in range(2):
+            r = c.post("/v1/chat/completions", headers=H,
+                       json={"messages": [{"role": "user", "content": "再問"}], "session_id": sid}).json()
+            assert CALLS[-1]["datasets"] == [] and r["datasets"] == [], "[] holds for the whole conversation"
+        r = c.post("/v1/chat/completions", headers=H,
+                   json={"messages": [{"role": "user", "content": "查 FAQ"}], "session_id": sid, "datasets": ["客服 FAQ"]}).json()
+        assert CALLS[-1]["datasets"] == ["ds1"]
+        c.post("/v1/chat/completions", headers=H, json={"messages": [{"role": "user", "content": "再"}], "session_id": sid})
+        assert CALLS[-1]["datasets"] == ["ds1"], "naming datasets again ends the [] choice"
+        print("  ✓ chat: [] = no knowledge base, \"always\" datasets included, for the rest of the conversation")
+
         n = len(TR.sessions)
         r = c.post("/v1/chat/completions", headers=H, json={"messages": [{"role": "user", "content": "x"}], "datasets": ["不存在"]})
         assert r.status_code == 400 and r.json()["error"]["code"] == "dataset_not_found" and len(TR.sessions) == n
@@ -562,6 +663,20 @@ def test_datasets(c, token, token2):
             got = until(ws, "error", "datasets")
             assert got["type"] == "error" and got["code"] == "dataset_not_found", got
         with c.websocket_connect("/v1/realtime", headers=H) as ws:
+            ws.send_text(json.dumps({"type": "hello", "datasets": []}))
+            assert until(ws, "ready")["datasets"] == []
+            for say in ("你好", "多少錢"):
+                ws.send_text(json.dumps({"type": "text", "text": say}))
+                until(ws, "reply")
+                assert CALLS[-1]["datasets"] == [], "[] in the hello holds for every turn"
+            ws.send_text(json.dumps({"type": "datasets", "datasets": ["客服 FAQ"]}))
+            until(ws, "datasets")
+            ws.send_text(json.dumps({"type": "datasets", "datasets": []}))
+            assert until(ws, "datasets")["datasets"] == []
+            ws.send_text(json.dumps({"type": "text", "text": "再問"}))
+            until(ws, "reply")
+            assert CALLS[-1]["datasets"] == []
+        with c.websocket_connect("/v1/realtime", headers=H) as ws:
             ws.send_text(json.dumps({"type": "hello", "datasets": ["不存在"]}))
             err = until(ws, "error", "ready")
             assert err["type"] == "error" and err["code"] == "dataset_not_found", err
@@ -597,6 +712,7 @@ if __name__ == "__main__":
         print("G. realtime"); test_realtime(client, TOKEN, TOKEN2)
         print("I. datasets"); test_datasets(client, TOKEN, TOKEN2)
         print("J. streaming speech to text"); test_stt_stream(client, TOKEN)
+        print("K. roles"); test_roles(client, TOKEN)
     print("E. api-only port"); test_only_v1(TOKEN)
     print("H. privacy"); test_privacy()
     print("\nALL PUBLIC API TESTS PASS")

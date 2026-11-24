@@ -126,7 +126,13 @@ token = (api.AccessToken(LIVEKIT_API_KEY, LIVEKIT_API_SECRET)
          .to_jwt())
 ```
 
-**Datasets.** Create the room with metadata `{"datasets": ["客服 FAQ"]}` (`RoomService.CreateRoom`), or give the participant an attribute `datasets` holding a JSON list. The agent passes these datasets to OpenTeddy, and the room's conversation answers from them. The knowledge base must be turned on in OpenTeddy (知識庫).
+**Setting up the conversation.** Create the room (`RoomService.CreateRoom`) with metadata such as `{"datasets": ["客服 FAQ"], "agent": "品牌客戶・王經理", "instructions": "這次他很趕交期。"}`. Participant attributes of the same names also work; for `datasets` the attribute holds a JSON list. All three are optional:
+
+- `datasets`: the knowledge base the conversation answers from. It must be turned on in OpenTeddy (知識庫).
+- `agent`: an Agent defined in OpenTeddy whose role the conversation plays, for example a customer for new-staff training.
+- `instructions`: a role the app writes itself.
+
+See "Roles" and "Datasets" in `docs/api.md`. Leaving `datasets` out means the datasets the owner marked "always". For a training room where OpenTeddy plays a customer, set `"datasets": []`, so the customer doesn't quote the brand's FAQ.
 
 The LiveKit secret and the OpenTeddy key stay on servers.
 

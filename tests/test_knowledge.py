@@ -254,7 +254,7 @@ async def test_prompts() -> None:
 
     real_ask = gate.ask
 
-    async def fake_ask(orch, prompt, task_id=""):
+    async def fake_ask(orch, prompt, task_id="", **kw):
         seen["gate"] = prompt
         raise _Stop()
     gate.ask = fake_ask
