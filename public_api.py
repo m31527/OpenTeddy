@@ -4,6 +4,7 @@ like OpenAI's, so its SDKs work with base_url=<OpenTeddy>/v1 and the key.
 
   GET  /v1/models                          one model, "openteddy"
   GET  /v1/datasets                        the knowledge-base datasets `datasets` can name
+  GET  /v1/voices                          the voices `voice` can name (speech, realtime, LiveKit)
   POST /v1/chat/completions                a turn with OpenTeddy (stream too; `datasets`)
   GET  /v1/tasks/{id}                      a turn that took longer than the wait
   POST /v1/tasks/{id}/approve|reject|cancel
@@ -637,6 +638,35 @@ def _wav(pcm: bytes, rate: int) -> bytes:
     return buf.getvalue()
 
 
+async def _voice_health() -> Dict[str, Any]:
+    _voice_ready()
+    try:
+        return await voice_bridge.health()
+    except Exception as exc:  # noqa: BLE001
+        raise ApiError(502, f"The voice service didn't answer: {exc}", "server_error", "voice_unreachable")
+
+
+async def _named_voice(name: Any) -> str:
+    """A voice an app named for a call → that name; 400 for one the voice
+    service doesn't have (unlike audio/speech, which takes OpenAI's names)."""
+    if not isinstance(name, str) or not name.strip():
+        raise ApiError(400, "voice: a name from GET /v1/voices.", param="voice")
+    voices = [str(v) for v in ((await _voice_health()).get("voices") or [])]
+    if name.strip() not in voices:
+        raise ApiError(400, f"No voice named {name.strip()!r}; this OpenTeddy has: {', '.join(voices) or 'none'}.",
+                       code="voice_not_found", param="voice")
+    return name.strip()
+
+
+@router.get("/voices")
+async def voices(key: Dict[str, Any] = Depends(require_key)) -> dict:
+    """The voices an app can name in `voice` (audio/speech, the realtime hello, livekit/token)."""
+    names = [str(v) for v in ((await _voice_health()).get("voices") or [])]
+    default = voice_bridge.default_voice(names)
+    return {"object": "list", "default": default,
+            "data": [{"id": v, "object": "voice", "default": v == default} for v in names]}
+
+
 @router.post("/audio/speech")
 async def speech(request: Request, key: Dict[str, Any] = Depends(require_key_or_grant)) -> Response:
     try:
@@ -651,11 +681,7 @@ async def speech(request: Request, key: Dict[str, Any] = Depends(require_key_or_
     fmt = str(body.get("response_format") or "wav").lower()
     if fmt not in ("wav", "pcm"):
         raise ApiError(400, "response_format: wav or pcm.", param="response_format")
-    _voice_ready()
-    try:
-        h = await voice_bridge.health()
-    except Exception as exc:  # noqa: BLE001
-        raise ApiError(502, f"The voice service didn't answer: {exc}", "server_error", "voice_unreachable")
+    h = await _voice_health()
     rate = int(h.get("tts_sample_rate") or 24000)
     voice = str(body.get("voice") or "")
     voice = voice if voice in (h.get("voices") or []) else ""     # OpenAI's names ("alloy"…) → the set voice
@@ -951,8 +977,8 @@ async def _livekit(cfg: Dict[str, str], method: str, body: Dict[str, Any], video
 
 @router.post("/livekit/token")
 async def livekit_token(request: Request, key: Dict[str, Any] = Depends(require_key)) -> dict:
-    """{session_id?, agent?, instructions?, datasets?, identity?, name?} →
-    {url, token, room, identity, expires_in, session_id, datasets?, agent?, instructions?}"""
+    """{session_id?, agent?, instructions?, datasets?, voice?, identity?, name?} →
+    {url, token, room, identity, expires_in, session_id, datasets?, agent?, instructions?, voice?}"""
     cfg = _livekit_config()
     try:
         body = await request.json() if (await request.body()).strip() else {}
@@ -964,6 +990,7 @@ async def livekit_token(request: Request, key: Dict[str, Any] = Depends(require_
     if not re.fullmatch(r"[\w.@:-]{1,64}", identity):
         raise ApiError(400, "identity: up to 64 letters, digits, and . _ - @ :", param="identity")
     name = " ".join(str(body.get("name") or "").split())[:64]
+    voice = await _named_voice(body["voice"]) if body.get("voice") is not None else ""
 
     conv = await _bind_conversation(key, str(body.get("session_id") or "").strip(), body, "語音通話")
     room = f"ot-{uuid.uuid4().hex[:12]}"
@@ -975,7 +1002,8 @@ async def livekit_token(request: Request, key: Dict[str, Any] = Depends(require_
     # room's metadata, which every participant can read.
     await _livekit(cfg, "AgentDispatchService/CreateDispatch",
                    {"agent_name": cfg["agent"], "room": room,
-                    "metadata": json.dumps({"session_id": conv["session_id"], "grant": grant})},
+                    "metadata": json.dumps({"session_id": conv["session_id"], "grant": grant,
+                                            **({"voice": voice} if voice else {})})},
                    {"roomAdmin": True, "room": room})
     now = int(time.time())
     token = _jwt(cfg["secret"], {"iss": cfg["key"], "sub": identity, "nbf": now - 5, "exp": now + LK_TOKEN_TTL_S,
@@ -984,7 +1012,7 @@ async def livekit_token(request: Request, key: Dict[str, Any] = Depends(require_
                                            "canSubscribe": True, "canPublishData": True}})
     logger.info("livekit: room %s for key %s, conversation %s", room, key["id"], conv["session_id"])
     return {"url": cfg["url"], "token": token, "room": room, "identity": identity,
-            "expires_in": LK_TOKEN_TTL_S, **conv}
+            "expires_in": LK_TOKEN_TTL_S, **conv, **({"voice": voice} if voice else {})}
 
 
 # ── Wiring ───────────────────────────────────────────────────────────────────

@@ -21,9 +21,10 @@ Off unless voice_service_url is set (Settings). The voice service runs on a
 machine of its own (contrib/voice/README.md).
 
 Protocol (JSON text frames, audio as binary frames):
-  → {"type":"hello","session_id"}        ← {"type":"ready","sample_rate",…}
+  → {"type":"hello","session_id","voice"} ← {"type":"ready","sample_rate","voice","voices",…}
   → <PCM16 mono 16 kHz: one utterance>   ← {"type":"transcript","text"}
   → {"type":"text","text"}  (typed)      ← {"type":"reply","text","task_id"}
+  → {"type":"voice","voice"}             ← {"type":"voice","voice"}  (from the next sentence on)
   → {"type":"interrupt"}                 ← <PCM16 at sample_rate>… {"type":"audio_end"}
                                          ← {"type":"state","value": listening|thinking|speaking}
                                          ← {"type":"working","task_id","text"} … {"type":"done",…}
@@ -99,6 +100,19 @@ async def transcribe(pcm: bytes, client: Optional[httpx.AsyncClient] = None) -> 
     finally:
         if own:
             await c.aclose()
+
+
+def default_voice(voices: List[str]) -> str:
+    """The voice used when none is named: the one set in Settings, else the
+    voice service's first (which is what it falls back to as well)."""
+    chosen = getattr(config, "voice_name", "") or ""
+    return chosen if chosen in voices else (voices[0] if voices else chosen)
+
+
+def no_such_voice(name: str, voices: List[str]) -> ValueError:
+    exc = ValueError(f"沒有這個聲音：{name}（可用：{'、'.join(voices) or '無'}）。")
+    exc.code = "voice_not_found"                   # type: ignore[attr-defined]
+    return exc
 
 
 async def speak(text: str, client: httpx.AsyncClient, voice: str = "") -> AsyncIterator[bytes]:
@@ -265,6 +279,8 @@ class Conversation:
         self.bind_session, self.on_control = bind_session, on_control
         self.ready_extra: Dict[str, Any] = {}
         self.session_id = ""
+        self.voice = ""                            # "" = the one set in Settings
+        self.voices: List[str] = []
         self.sample_rate = 24000
         self.turn = 0                              # the latest thing the person said
         self.en = False                            # ... and whether they said it in English
@@ -317,8 +333,14 @@ class Conversation:
             await self.send({"type": "error", "code": "loading",
                              "text": f"語音服務還在準備（{h.get('stage') or '啟動中'}）。"})
             return
+        self.voices = [str(v) for v in (h.get("voices") or [])]
+        try:
+            self.voice = self.pick_voice(hello.get("voice"))
+        except ValueError as exc:
+            await self.send({"type": "error", "code": getattr(exc, "code", ""), "text": str(exc)})
+            return
         await self.send({"type": "ready", "sample_rate": self.sample_rate, "asr_rate": ASR_RATE,
-                         "voice": getattr(config, "voice_name", "") or (h.get("voices") or [""])[0],
+                         "voice": self.voice, "voices": self.voices,
                          "asr": h.get("asr"), "tts": h.get("tts"),
                          **({"session_id": self.session_id} if self.session_id else {}), **self.ready_extra})
         await self.state("listening")
@@ -337,6 +359,12 @@ class Conversation:
                         await self.state("listening")
                     elif kind == "text" and str(data.get("text") or "").strip():
                         await self.new_turn(str(data["text"]).strip(), heard=None)
+                    elif kind == "voice":
+                        try:
+                            self.voice = self.pick_voice(data.get("voice"))
+                            await self.send({"type": "voice", "voice": self.voice})
+                        except ValueError as exc:
+                            await self.send({"type": "error", "code": getattr(exc, "code", ""), "text": str(exc)})
                     elif self.on_control is not None:
                         try:
                             answer = await self.on_control(data)
@@ -352,6 +380,15 @@ class Conversation:
             for t in self.background + ([self.turn_task] if self.turn_task else []):
                 t.cancel()
             await self.http.aclose()
+
+    def pick_voice(self, name: Any) -> str:
+        """A voice the caller named ("" / None = the default) → its name."""
+        name = str(name or "").strip()
+        if not name:
+            return default_voice(self.voices)
+        if name not in self.voices:
+            raise no_such_voice(name, self.voices)
+        return name
 
     async def stop_speaking(self) -> None:
         if self.speaking and not self.speaking.done():
@@ -514,7 +551,7 @@ class Conversation:
                 if not speaking:
                     speaking = True
                     await self.state("speaking")
-                async for chunk in speak(line, self.http):
+                async for chunk in speak(line, self.http, voice=self.voice):
                     await self.send(chunk)
             if not sent_reply:
                 # Stopped early (the gist said): the screen still gets the whole answer.
@@ -572,7 +609,7 @@ class Conversation:
         await self.state("speaking")
         try:
             for piece in sentences(text):
-                async for chunk in speak(piece, self.http):
+                async for chunk in speak(piece, self.http, voice=self.voice):
                     await self.send(chunk)
         except asyncio.CancelledError:
             await self.send({"type": "audio_end", "interrupted": True})

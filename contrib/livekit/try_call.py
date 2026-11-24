@@ -5,7 +5,7 @@ person, say a question into the microphone track, and time the agent's
 voice coming back.
 
     python try_call.py [--question "請問你可以幫我做什麼？"] [--datasets 客服FAQ]
-                       [--agent 品牌客戶・王經理] [--instructions "…"] [--runs 3]
+                       [--agent 品牌客戶・王經理] [--instructions "…"] [--voice male1] [--runs 3]
 
 Env: OPENTEDDY_URL + OPENTEDDY_KEY. LIVEKIT_URL, when set, is joined instead
 of the address OpenTeddy hands out (e.g. ws://192.168.100.2:7880 on the LAN).
@@ -55,7 +55,7 @@ async def one_call(q: np.ndarray, setup: dict, hear: float = 3.0) -> Optional[fl
             raise SystemExit(f"/v1/livekit/token: {r.status_code} {r.text[:300]}")
         call = r.json()
     print(f"  room {call['room']}, conversation {call['session_id']}"
-          + "".join(f", {k} {call[k]}" for k in ("agent", "datasets") if k in call))
+          + "".join(f", {k} {call[k]}" for k in ("agent", "datasets", "voice") if k in call))
     room = rtc.Room()
     state = {"end": None, "first": None, "any": None, "agent": asyncio.Event(), "said": []}
 
@@ -129,12 +129,13 @@ async def main() -> None:
     ap.add_argument("--datasets", nargs="*")
     ap.add_argument("--agent")
     ap.add_argument("--instructions")
+    ap.add_argument("--voice", help="one of GET /v1/voices; default: the one set in OpenTeddy")
     ap.add_argument("--runs", type=int, default=3)
     ap.add_argument("--hear", type=float, default=3.0, help="seconds to keep listening after the first sound")
     a = ap.parse_args()
     q = await question_audio(a.question)
-    setup = {k: v for k, v in (("datasets", a.datasets), ("agent", a.agent), ("instructions", a.instructions))
-             if v is not None}
+    setup = {k: v for k, v in (("datasets", a.datasets), ("agent", a.agent), ("instructions", a.instructions),
+                               ("voice", a.voice)) if v is not None}
     print(f"«{a.question}» ({len(q) / RATE:.1f}s of speech), {a.runs} calls")
     times = [t for t in [await one_call(q, setup, a.hear) for _ in range(a.runs)] if t]
     if times:

@@ -125,7 +125,7 @@ OPENTEDDY_URL=http://127.0.0.1:8100/v1 OPENTEDDY_KEY=ot-… \
    ```
    POST /v1/livekit/token
    Authorization: Bearer ot-…
-   {"agent": "品牌客戶・王經理", "instructions": "這次他很趕交期。", "datasets": [], "identity": "trainee-17"}
+   {"agent": "品牌客戶・王經理", "instructions": "這次他很趕交期。", "datasets": [], "voice": "male1", "identity": "trainee-17"}
    → {"url": "wss://…", "token": "…", "room": "ot-…", "session_id": "…", "agent": "品牌客戶・王經理", …}
    ```
 
@@ -143,7 +143,7 @@ The call is the app's own: it shows in OpenTeddy's session list as `🔑 <key na
 
 ## Rooms of your own
 
-A backend that holds the LiveKit secret can still open rooms itself: create the room, then dispatch the agent (`AgentDispatchService.CreateDispatch`, agent name `openteddy`) without a grant. The agent then uses its own `OPENTEDDY_KEY`, and the room's metadata sets the conversation up, for example `{"datasets": ["客服 FAQ"], "agent": "品牌客戶・王經理", "instructions": "這次他很趕交期。"}`. Participant attributes of the same names also work; for `datasets` the attribute holds a JSON list.
+A backend that holds the LiveKit secret can still open rooms itself: create the room, then dispatch the agent (`AgentDispatchService.CreateDispatch`, agent name `openteddy`) without a grant. The agent then uses its own `OPENTEDDY_KEY`, and the room's metadata sets the conversation up, for example `{"datasets": ["客服 FAQ"], "agent": "品牌客戶・王經理", "instructions": "這次他很趕交期。", "voice": "male1"}`. Participant attributes of the same names also work; for `datasets` the attribute holds a JSON list.
 
 ## For DevOps: reaching it from outside
 

@@ -58,6 +58,7 @@ Errors come back with an HTTP status, shaped as OpenAI shapes them:
 | 404 | `session_not_found` / `task_not_found` | The session or task isn't this key's |
 | 400 | `dataset_not_found` / `knowledge_off` | A dataset name or id that doesn't exist, or the knowledge base is off |
 | 400 | `agent_not_found` | No Agent with that name or id |
+| 400 | `voice_not_found` | A `voice` that isn't in `GET /v1/voices` (realtime and LiveKit; speech falls back instead) |
 | 400 | `unsupported_audio` and others | The request itself is wrong |
 | 503 | `voice_not_configured` / `voice_off` | There is no voice service, or voice is turned off in Settings |
 | 502 | `voice_unreachable` | The voice service didn't answer |
@@ -271,7 +272,26 @@ curl https://api.example.com/v1/audio/speech \
 
 `response_format` is `wav` (the default) or `pcm`. `pcm` is raw 16-bit mono, streamed as it is made; the `X-Sample-Rate` header gives the rate, 24000 for CosyVoice 3.
 
-`voice` is one of the voice service's voices. Any other name, such as OpenAI's `alloy`, uses the voice set in Settings. Markdown, links and emoji are dropped before speaking. The limit is 4096 characters.
+`voice` is one of [the voice service's voices](#voices-get-v1voices). Any other name, such as OpenAI's `alloy`, uses the voice set in Settings. Markdown, links and emoji are dropped before speaking. The limit is 4096 characters.
+
+## Voices: `GET /v1/voices`
+
+The voices OpenTeddy can speak with, and the one it uses when a call names none:
+
+```json
+{"object": "list", "default": "male1",
+ "data": [{"id": "male1", "object": "voice", "default": true}, {"id": "sample", "object": "voice", "default": false}]}
+```
+
+| Where | How to pick one |
+|---|---|
+| Text to speech | `"voice": "sample"` in the body. |
+| Realtime voice | `"voice"` in the hello; `ready` says which voice is in use and lists them all. To change it mid-call, send `{"type": "voice", "voice": "…"}`; it applies from the next sentence. |
+| LiveKit | `"voice"` in the [`/v1/livekit/token`](#voice-through-livekit-post-v1livekittoken) body. |
+
+Leave `voice` out for the default: the one set in Settings (Voice), else the voice service's first. In realtime and LiveKit, a name that isn't in the list is refused with `voice_not_found`, so a typo doesn't go unnoticed.
+
+A voice is a short recording of someone (`contrib/voice/README.md`). Add only voices you have the right to use.
 
 ## Real-time voice: `WS /v1/realtime`
 
@@ -292,12 +312,13 @@ If the key is wrong, the handshake is refused with HTTP 403.
 
 | Direction | Message |
 |---|---|
-| → first | `{"type": "hello", "session_id": "…", "datasets": [...], "agent": "…", "instructions": "…"}`. Leave `session_id` out (or `""`) for a new conversation. Everything except `type` is optional; see [Roles](#roles-who-openteddy-plays). |
-| ← | `{"type": "ready", "session_id", "sample_rate", "asr_rate": 16000, "voice", "asr", "tts", "datasets", "agent", "instructions"}` |
+| → first | `{"type": "hello", "session_id": "…", "datasets": [...], "agent": "…", "instructions": "…", "voice": "…"}`. Leave `session_id` out (or `""`) for a new conversation. Everything except `type` is optional; see [Roles](#roles-who-openteddy-plays) and [Voices](#voices-get-v1voices). |
+| ← | `{"type": "ready", "session_id", "sample_rate", "asr_rate": 16000, "voice", "voices", "asr", "tts", "datasets", "agent", "instructions"}` |
 | → | **binary**: one utterance, PCM16 mono at 16 kHz, at most 45 s. The app decides where speech ends; the web UI waits for 0.5 s of silence. |
 | → | `{"type": "text", "text": "…"}`: a typed turn instead of a spoken one |
 | → | `{"type": "datasets", "datasets": [...]}`: answer from these from now on. The reply is ← `{"type": "datasets", "datasets": [names]}`. |
 | → | `{"type": "instructions", "instructions": "…"}`: play this role from the next turn on (`""` removes it). The reply is ← `{"type": "instructions", "set": true}`. |
+| → | `{"type": "voice", "voice": "…"}`: speak with this voice from the next sentence on. The reply is ← `{"type": "voice", "voice"}`. |
 | → | `{"type": "interrupt"}`: the person started talking, so stop speaking |
 | ← | `{"type": "state", "value": "listening" \| "thinking" \| "speaking"}` |
 | ← | `{"type": "transcript", "text", "ms"}`: what was heard |
@@ -305,7 +326,7 @@ If the key is wrong, the handshake is refused with HTTP 403.
 | ← | **binary**: the spoken answer, PCM16 mono at `sample_rate`, in chunks as it is made. Speaking starts with the answer's first sentence while the rest is still being written. `{"type": "audio_end"}` follows (`"interrupted": true` when it was cut short). |
 | ← | `{"type": "working", "task_id", "text"}`: work that takes longer than 8 s is acknowledged out loud … |
 | ← | `{"type": "done", "task_id", "text"}`: … and then spoken when it is done |
-| ← | `{"type": "error", "code", "text"}`. `code` is one of `not_enabled`, `not_configured`, `unreachable`, `loading`, `bad_session`, `dataset_not_found`, `knowledge_off` or `agent_not_found`. |
+| ← | `{"type": "error", "code", "text"}`. `code` is one of `not_enabled`, `not_configured`, `unreachable`, `loading`, `bad_session`, `dataset_not_found`, `knowledge_off`, `agent_not_found` or `voice_not_found`. |
 
 Noise that isn't speech starts nothing: the voice service checks for a voice first.
 
@@ -318,12 +339,12 @@ A phone-call style conversation over WebRTC, with OpenTeddy's agent in a LiveKit
 ```bash
 curl https://api.example.com/v1/livekit/token -H "Authorization: Bearer $OPENTEDDY_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"agent": "品牌客戶・王經理", "instructions": "這次他很趕交期。", "identity": "trainee-17", "name": "小林"}'
+  -d '{"agent": "品牌客戶・王經理", "instructions": "這次他很趕交期。", "voice": "male1", "identity": "trainee-17", "name": "小林"}'
 ```
 
 ```json
 {"url": "wss://lk.example.com", "token": "eyJ…", "room": "ot-3f9a…", "identity": "trainee-17",
- "expires_in": 900, "session_id": "…", "agent": "品牌客戶・王經理", "instructions": true}
+ "expires_in": 900, "session_id": "…", "agent": "品牌客戶・王經理", "instructions": true, "voice": "male1"}
 ```
 
 Then `Room().connect(url, token)`, turn the microphone on, and play what the agent says.
@@ -331,6 +352,7 @@ Then `Room().connect(url, token)`, turn the microphone on, and play what the age
 | Body field | |
 |---|---|
 | `agent`, `instructions`, `datasets` | The conversation's role and knowledge, as for chat and realtime ([Roles](#roles-who-openteddy-plays), [Datasets](#datasets-which-knowledge-to-answer-from)). |
+| `voice` | Which voice the agent speaks with, from [`GET /v1/voices`](#voices-get-v1voices). Left out: the default. |
 | `session_id` | Go on with an earlier conversation of this key, in a new room. |
 | `identity`, `name` | Who the app is in the room: up to 64 of letters, digits, `. _ - @ :`, and a display name. |
 

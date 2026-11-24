@@ -353,8 +353,22 @@ def test_audio(c, token):
     assert r.headers["x-sample-rate"] == "24000" and len(r.content) == 200 and spoke[-1][1] == "小美"
     assert c.post("/v1/audio/speech", headers=H, json={"input": "x", "response_format": "mp3"}).status_code == 400
     assert c.post("/v1/audio/speech", headers=H, json={"input": ""}).status_code == 400
-    vb.configured, vb.enabled, vb.transcribe, vb.health, vb.speak = saved
     print("  ✓ speech: WAV at the service's rate, markdown/links/emoji dropped, OpenAI voice names → the set voice, pcm too")
+
+    saved_name = getattr(vb.config, "voice_name", "")
+    try:
+        vb.config.voice_name = ""
+        r = c.get("/v1/voices", headers=H).json()
+        assert r["default"] == "小美" and r["data"] == [{"id": "小美", "object": "voice", "default": True}], r
+        vb.config.voice_name = "已刪除的聲音"                       # set, then gone from the service
+        assert c.get("/v1/voices", headers=H).json()["default"] == "小美"
+        assert c.get("/v1/voices").status_code == 401
+        vb.enabled = lambda: False
+        assert c.get("/v1/voices", headers=H).json()["error"]["code"] == "voice_off"
+    finally:
+        vb.config.voice_name = saved_name
+        vb.configured, vb.enabled, vb.transcribe, vb.health, vb.speak = saved
+    print("  ✓ GET /v1/voices: the service's voices and which is used when none is named")
 
 
 # ── G. realtime ──────────────────────────────────────────────────────────────
@@ -400,7 +414,54 @@ def test_realtime(c, token, token2):
         err = ws.receive_json()
         assert err["type"] == "error" and err["code"] == "bad_session", err
     print("  ✓ by header too; another key's session → bad_session")
-    vb.configured, vb.enabled, vb.health, vb.speak = saved
+
+    spoke = []
+
+    async def health2(timeout=5.0):
+        return {"ok": True, "tts_sample_rate": 24000, "voices": ["male1", "sample"], "asr": "sv", "tts": "cv"}
+
+    async def speak2(text, client, voice=""):
+        spoke.append(voice)
+        yield b"\x00\x00" * 10
+    vb.health, vb.speak = health2, speak2
+
+    def until(ws, *types):
+        while True:
+            m = ws.receive()
+            if m.get("text"):
+                d = json.loads(m["text"])
+                if d.get("type") in types:
+                    return d
+    H = {"Authorization": f"Bearer {token}"}
+    saved_name = getattr(vb.config, "voice_name", "")
+    try:
+        vb.config.voice_name = ""
+        with c.websocket_connect("/v1/realtime", headers=H) as ws:
+            ws.send_text(json.dumps({"type": "hello"}))
+            ready = until(ws, "ready")
+            assert ready["voice"] == "male1" and ready["voices"] == ["male1", "sample"], ready
+        with c.websocket_connect("/v1/realtime", headers=H) as ws:
+            ws.send_text(json.dumps({"type": "hello", "voice": "sample"}))
+            assert until(ws, "ready")["voice"] == "sample"
+            ws.send_text(json.dumps({"type": "text", "text": "你好"}))
+            until(ws, "audio_end")
+            assert spoke and set(spoke) == {"sample"}, spoke
+            ws.send_text(json.dumps({"type": "voice", "voice": "male1"}))
+            assert until(ws, "voice", "error") == {"type": "voice", "voice": "male1"}
+            spoke.clear()
+            ws.send_text(json.dumps({"type": "text", "text": "再說一次"}))
+            until(ws, "audio_end")
+            assert spoke and set(spoke) == {"male1"}, spoke
+            ws.send_text(json.dumps({"type": "voice", "voice": "alloy"}))
+            err = until(ws, "voice", "error")
+            assert err["code"] == "voice_not_found" and "male1" in err["text"], err
+        with c.websocket_connect("/v1/realtime", headers=H) as ws:
+            ws.send_text(json.dumps({"type": "hello", "voice": "不存在"}))
+            assert until(ws, "error", "ready")["code"] == "voice_not_found"
+        print("  ✓ realtime voice: named in the hello (ready says which), changed mid-call, unknown → voice_not_found")
+    finally:
+        vb.config.voice_name = saved_name
+        vb.configured, vb.enabled, vb.health, vb.speak = saved
 
 
 # ── J. streaming speech to text ──────────────────────────────────────────────
@@ -820,6 +881,27 @@ def test_livekit(c, token, token2):
         r = c.post("/v1/livekit/token", headers=H, json={"identity": "a b"})
         assert r.status_code == 400 and r.json()["error"]["param"] == "identity"
         assert len(calls) == n + 2, "nothing opened for a refused request"
+
+        vb = voice_bridge
+        vsaved = (vb.configured, vb.enabled, vb.health)
+        vb.configured, vb.enabled = (lambda: True), (lambda: True)
+
+        async def vhealth(timeout=5.0):
+            return {"ok": True, "voices": ["male1", "sample"]}
+        vb.health = vhealth
+        try:
+            r = c.post("/v1/livekit/token", headers=H, json={"voice": "male1"}).json()
+            assert r["voice"] == "male1" and json.loads(calls[-1][2]["metadata"])["voice"] == "male1"
+            n = len(calls)
+            r = c.post("/v1/livekit/token", headers=H, json={"voice": "alloy"})
+            assert r.status_code == 400 and r.json()["error"]["code"] == "voice_not_found", r.text
+            assert c.post("/v1/livekit/token", headers=H, json={"voice": 3}).status_code == 400
+            assert len(calls) == n, "no room for an unknown voice"
+            c.post("/v1/livekit/token", headers=H, json={})
+            assert "voice" not in json.loads(calls[-1][2]["metadata"]), "no voice named → the agent uses the set one"
+        finally:
+            vb.configured, vb.enabled, vb.health = vsaved
+        print("  ✓ token with a voice: checked against the voice service, sent to the agent; unknown → 400, no room")
 
         async def down(cfg, method, body, video):
             raise public_api.ApiError(502, "LiveKit is unreachable (ConnectError).", type_="api_error",

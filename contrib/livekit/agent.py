@@ -212,9 +212,10 @@ class OpenTeddyLLMStream(llm.LLMStream):
 class OpenTeddyTTS(tts.TTS):
     """One sentence per call; StreamAdapter feeds the sentences as the LLM writes them."""
 
-    def __init__(self, token: str) -> None:
+    def __init__(self, token: str, voice: str = "") -> None:
         super().__init__(capabilities=tts.TTSCapabilities(streaming=False), sample_rate=TTS_RATE, num_channels=1)
         self.token = token
+        self.voice = voice                                              # "" = the one set in OpenTeddy
 
     @property
     def model(self) -> str:
@@ -237,9 +238,10 @@ class OpenTeddyChunkedStream(tts.ChunkedStream):
         logger.info("timeline %.3f tts request (%d chars)", time.time(), len(self.input_text))
         first = True
         async with httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=5.0)) as c:
-            token = self._tts.token                                     # type: ignore[attr-defined]
+            token, voice = self._tts.token, self._tts.voice             # type: ignore[attr-defined]
             async with c.stream("POST", f"{OT_URL}/audio/speech", headers=_headers(token),
-                                json={"model": "cosyvoice", "input": self.input_text, "response_format": "pcm"}) as r:
+                                json={"model": "cosyvoice", "input": self.input_text, "response_format": "pcm",
+                                      **({"voice": voice} if voice else {})}) as r:
                 r.raise_for_status()
                 async for chunk in r.aiter_bytes():
                     if first:
@@ -295,15 +297,15 @@ class ClauseFirstTokenizer(tokenize.SentenceTokenizer):
 # ── The worker ───────────────────────────────────────────────────────────────
 
 def _room_settings(ctx: JobContext, participant: Any) -> dict:
-    """{"datasets", "agent", "instructions"} from the room's metadata (JSON),
-    else the caller's attributes of the same names (datasets as a JSON list)."""
+    """{"datasets", "agent", "instructions", "voice"} from the room's metadata
+    (JSON), else the caller's attributes of the same names (datasets as a JSON list)."""
     out: dict = {}
     try:
         meta = json.loads(ctx.room.metadata or "{}")
     except ValueError:
         meta = {}
     attrs = getattr(participant, "attributes", {}) or {}
-    for name in ("datasets", "agent", "instructions"):
+    for name in ("datasets", "agent", "instructions", "voice"):
         value = meta.get(name) if isinstance(meta, dict) else None
         if value is None and attrs.get(name):
             value = attrs[name]
@@ -326,7 +328,7 @@ def prewarm(proc: JobProcess) -> None:
 
 
 def _dispatch(ctx: JobContext) -> dict:
-    """What OpenTeddy sent with this job: {"session_id", "grant"}, or {}."""
+    """What OpenTeddy sent with this job: {"session_id", "grant", "voice"?}, or {}."""
     try:
         meta = json.loads(getattr(ctx.job, "metadata", "") or "{}")
     except ValueError:
@@ -354,11 +356,14 @@ async def entrypoint(ctx: JobContext) -> None:
         # OpenTeddy made the conversation for the app (POST /v1/livekit/token):
         # its agent, instructions and datasets are already on it.
         llm_ = OpenTeddyLLM(token, session_id=job["session_id"])
-        logger.info("room %s: a caller joined, conversation %s (from OpenTeddy)", ctx.room.name, job["session_id"])
+        voice = str(job.get("voice") or "")
+        logger.info("room %s: a caller joined, conversation %s (from OpenTeddy), voice %s", ctx.room.name,
+                    job["session_id"], voice or "(default)")
     else:
         settings = _room_settings(ctx, participant)
         llm_ = OpenTeddyLLM(token, datasets=settings.get("datasets"), agent=settings.get("agent"),
                             instructions=settings.get("instructions"))
+        voice = str(settings.get("voice") or "")
         logger.info("room %s: a caller joined, datasets %s, agent %s, instructions %s", ctx.room.name,
                     settings.get("datasets"), settings.get("agent"), "yes" if settings.get("instructions") else "no")
     session = AgentSession(
@@ -366,7 +371,7 @@ async def entrypoint(ctx: JobContext) -> None:
         stt=OpenTeddySTT(token),
         llm=llm_,
         # Speak the first clause as soon as it is written (ClauseFirstTokenizer).
-        tts=tts.StreamAdapter(tts=OpenTeddyTTS(token), sentence_tokenizer=ClauseFirstTokenizer()),
+        tts=tts.StreamAdapter(tts=OpenTeddyTTS(token, voice), sentence_tokenizer=ClauseFirstTokenizer()),
         turn_handling={"endpointing": {"min_delay": ENDPOINT_MIN_S, "max_delay": 2.0},
                        # Off: a half-finished question would become a turn in OpenTeddy's session.
                        "preemptive_generation": {"enabled": False}},
