@@ -274,7 +274,7 @@ Without LiveKit there are two ways to build it. Pick one.
 | | **A. Realtime** (`/v1/realtime`) | **B. Three HTTP calls** |
 |---|---|---|
 | Flow | One WebSocket carries the whole conversation | transcriptions → chat/completions → speech |
-| First sound | About 2 s after the person stops talking; the answer streams | Later: the whole answer is synthesised before it plays |
+| First sound | About 1 s after the utterance arrives (0.97 s on spark-a); speaking starts at the answer's first sentence | Later: the whole answer is written, then synthesised, before it plays |
 | Interrupting OpenTeddy | Yes (`interrupt`) | Stop playback yourself |
 | Effort | Audio in and out as PCM | Plain HTTP with files |
 
@@ -286,7 +286,7 @@ Without LiveKit there are two ways to build it. Pick one.
 2. **Keep** `ready.session_id` to resume the same conversation later (put it in the next hello), and `ready.sample_rate` for playback.
 3. **Record** 16 kHz mono 16-bit PCM. Android `AudioRecord` gives this directly. On iOS, `AVAudioEngine` and a converter to 16 kHz Int16 do it. A browser can create an `AudioContext({sampleRate: 16000})`.
 4. **Decide where an utterance ends.** **Push-to-talk** is the easiest: record while a button is held. **Hands-free** listening ends an utterance after about 0.5 s below a noise floor. Send each utterance as **one binary message**.
-5. **Show** `transcript`, then `reply`. **Play** the binary chunks back to back at `sample_rate` until `audio_end`.
+5. **Show** `transcript`, then `reply`. **Play** the binary chunks back to back at `sample_rate` until `audio_end`. The audio starts with the answer's first sentence, usually **before** `reply` arrives, so don't wait for `reply` to start playing.
 6. When the person starts talking over the answer, send `interrupt` and drop the queued audio.
 7. A `working` message means longer work is under way. Keep listening; `done` arrives with the result later, and it is spoken too.
 
