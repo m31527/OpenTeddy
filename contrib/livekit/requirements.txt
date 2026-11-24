@@ -1,0 +1,6 @@
+livekit-agents[silero]==1.8.13
+livekit-api==1.2.3
+livekit==1.2.1
+websockets==17.4
+httpx==0.28.1
+numpy==2.5.5

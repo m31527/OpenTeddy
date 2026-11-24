@@ -102,10 +102,12 @@ If the work waits for an approval, the status is `waiting_approval`. The message
 With `"stream": true` the answer comes as server-sent `chat.completion.chunk` events:
 
 1. The role arrives first.
-2. A `: keep-alive` comment follows every 15 s while OpenTeddy works.
-3. The answer then arrives as **one** chunk, followed by `finish_reason: "stop"` and `data: [DONE]`.
+2. Then the answer **as the model writes it**, one chunk per piece. On spark-a the first piece arrives about 0.15–0.25 s after the request.
+3. `finish_reason: "stop"` and `data: [DONE]` close the stream.
 
-The answer isn't split token by token, because not every path produces it that way. A stream waits up to 30 minutes.
+Some turns aren't written by the chat model at all. A turn that needs tools goes to the agent; a shortcut (weather, a reminder) answers directly. Such a turn sends `: keep-alive` comments every 15 s while it works, and then its result arrives in one chunk. If the model wrote a few words before handing a turn to the agent, the result follows those words after a blank line. A stream waits up to 30 minutes.
+
+**`"voice": true`** says the answer will be read aloud, by an app's own TTS or the LiveKit agent. OpenTeddy then answers in one to three plain spoken sentences in the person's language, with no lists, markdown, emoji or links. Such a turn also skips long-term memory lookup, which saves 120 ms of the first word; the conversation's recent turns still come along.
 
 Text only: image parts in `content` are ignored. `temperature`, `max_tokens` and similar fields are accepted and ignored; OpenTeddy picks its own models.
 
@@ -187,6 +189,27 @@ What it accepts:
 
 Silence or a noise gives `{"text": ""}`.
 
+## Speech to text as it is spoken: `WS /v1/audio/stt-stream`
+
+The app or agent sends audio as it records. It gets back the words heard so far (`partial`), and the whole utterance (`final`) once it ends. The key works as for `/v1/realtime`: a Bearer header, or the subprotocols `openteddy` and `openteddy-key.<key>`.
+
+| Direction | Message |
+|---|---|
+| → | **binary**: PCM16 mono 16 kHz, in small chunks (20–40 ms) |
+| → | `{"type": "config", "endpoint_ms": 600, "interim": true}`. Optional; see below. |
+| → | `{"type": "flush"}`: the utterance has ended, send the final now |
+| → | `{"type": "reset"}`: drop what was heard so far |
+| ← | `{"type": "speech_started"}`: sound loud enough to be speech |
+| ← | `{"type": "partial", "text": "請問你可以"}`: the utterance so far, about every 300 ms while the person talks |
+| ← | `{"type": "final", "text": "請問你可以幫我做什麼？"}` |
+
+An utterance ends in one of two ways:
+
+- **The app says so with `flush`.** This is what LiveKit's VAD does, and the final comes about 0.04 s later. A flush always gets a final; it is empty if nothing was said.
+- **OpenTeddy hears enough silence.** Set `endpoint_ms`, for example 600 ms. The default is 0, which means only `flush` ends an utterance.
+
+SenseVoice has no streaming mode of its own. A partial is the utterance so far transcribed again; the final is the whole utterance transcribed once more. Silence before speech starts isn't kept, except the last 0.5 s.
+
 ## Text to speech: `POST /v1/audio/speech`
 
 ```bash
@@ -226,8 +249,8 @@ If the key is wrong, the handshake is refused with HTTP 403.
 | → | `{"type": "interrupt"}`: the person started talking, so stop speaking |
 | ← | `{"type": "state", "value": "listening" \| "thinking" \| "speaking"}` |
 | ← | `{"type": "transcript", "text", "ms"}`: what was heard |
-| ← | `{"type": "reply", "text", "task_id"}`: the answer as text |
-| ← | **binary**: the spoken answer, PCM16 mono at `sample_rate`, in chunks as it is made. `{"type": "audio_end"}` follows (`"interrupted": true` when it was cut short). |
+| ← | `{"type": "reply", "text", "task_id"}`: the answer as text, once it is all written (usually while its first sentence is being spoken) |
+| ← | **binary**: the spoken answer, PCM16 mono at `sample_rate`, in chunks as it is made. Speaking starts with the answer's first sentence while the rest is still being written. `{"type": "audio_end"}` follows (`"interrupted": true` when it was cut short). |
 | ← | `{"type": "working", "task_id", "text"}`: work that takes longer than 8 s is acknowledged out loud … |
 | ← | `{"type": "done", "task_id", "text"}`: … and then spoken when it is done |
 | ← | `{"type": "error", "code", "text"}`. `code` is one of `not_enabled`, `not_configured`, `unreachable`, `loading`, `bad_session`, `dataset_not_found` or `knowledge_off`. |
@@ -238,7 +261,15 @@ The audio of the conversation travels between the app and OpenTeddy over the tun
 
 ## Building a voice app
 
-There are two ways to build it. Pick one.
+**For the quickest answers, use LiveKit.** LiveKit carries the audio over WebRTC, with echo cancellation and barge-in. OpenTeddy's agent in `contrib/livekit/` connects the three streams above to it:
+
+- `stt-stream` for listening,
+- chat with `stream` and `"voice": true` for the answer,
+- `audio/speech` for speaking, one clause at a time.
+
+On the DGX Spark pair, the first sound comes about 1.8–2.0 s after the person stops talking. The app only needs LiveKit's SDK and a room token; see `contrib/livekit/README.md`.
+
+Without LiveKit there are two ways to build it. Pick one.
 
 | | **A. Realtime** (`/v1/realtime`) | **B. Three HTTP calls** |
 |---|---|---|
