@@ -1771,7 +1771,10 @@ class Orchestrator:
         pipeline takes it (and can go to the site the person named)."""
         import weather
         try:
-            return await self._finish_direct(req, await weather.forecast(q), True)
+            # A voice conversation gets it said, not the card read out.
+            spoken = bool((req.context or {}).get("voice"))
+            return await self._finish_direct(
+                req, await (weather.spoken_forecast(q) if spoken else weather.forecast(q)), True)
         except ValueError as exc:                       # unknown place
             logger.info("Weather shortcut steps aside (%s); the agent takes it", exc)
             return None
@@ -2241,7 +2244,7 @@ class Orchestrator:
         prompt = (
             _clock_note()
             + (memory_ctx + "\n\n" if memory_ctx else "")
-            + await _kb.block_for(req.goal)
+            + await _kb.block_for(req.goal, spoken=bool((req.context or {}).get("voice")))
             + (recent + "\n\n" if recent else "")
             + f"Goal: {req.goal}\n\n"
             f"Available skills: {json.dumps(skill_names)}\n\n"
@@ -3202,7 +3205,7 @@ class Orchestrator:
         _t_prep = time.monotonic()
         memory_ctx, recent, kb_block = await asyncio.gather(
             _timed("memory", _memory()), _timed("recent", self._recent_turns_block(req)),
-            _timed("knowledge", _kb.block_for(req.goal)))
+            _timed("knowledge", _kb.block_for(req.goal, spoken=bool((req.context or {}).get("voice")))))
         logger.info("[chat lane] context in %d ms (memory %d, recent %d, knowledge %d)",
                     int((time.monotonic() - _t_prep) * 1000), took.get("memory", 0), took.get("recent", 0),
                     took.get("knowledge", 0))

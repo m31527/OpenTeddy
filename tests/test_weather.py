@@ -124,6 +124,15 @@ async def test_forecast() -> None:
     assert len(_Client.calls) == n, "cached for 10 minutes"
     print("  ✓ answer: day label, conditions, now, umbrella, tomorrow / range, English; cached")
 
+    said = await W.spoken_forecast(W.parse_weather_question("給我桃園今天的天氣"))
+    assert said == "桃園現在大約 22 度，今天較密的毛毛雨，大約 22 到 25 度，降雨機率 100%，出門記得帶傘。", said
+    said = await W.spoken_forecast(W.WeatherQuery(place="桃園", start=0, days=4))
+    assert said.count("。") == 3 and "明天" in said and "後天" in said, said
+    assert not any(ch in said for ch in "📍☁️☂️·°") and "Open-Meteo" not in said
+    en = await W.spoken_forecast(W.parse_weather_question("weather in Tokyo tomorrow"))
+    assert en.startswith("Tomorrow in Tokyo:") and "umbrella" in en and "°" not in en, en
+    print("  ✓ spoken: a sentence a person would say — no card, icons, °C or source; at most 3 days; English")
+
 
 # ── C ────────────────────────────────────────────────────────────────────────
 

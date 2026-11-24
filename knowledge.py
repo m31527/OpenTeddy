@@ -735,13 +735,13 @@ def current() -> Tuple[str, ...]:
     return _scope.get() or ()
 
 
-def format_hits(hits: List[Hit], limit: int = BLOCK_CHARS) -> str:
+def format_hits(hits: List[Hit], limit: int = BLOCK_CHARS, sources: bool = True) -> str:
     lines: List[str] = []
     used = 0
     for n, h in enumerate(hits, start=1):
         body = h.body if len(h.body) <= ENTRY_CHARS else h.body[:ENTRY_CHARS] + "…"
         entry = (f"[{n}] " + (f"問：{h.title}\n    答：" if h.title and h.title != body else "")
-                 + body.replace("\n", "\n    ") + f"\n    （{h.dataset} · {h.source} {h.ref}）")
+                 + body.replace("\n", "\n    ") + (f"\n    （{h.dataset} · {h.source} {h.ref}）" if sources else ""))
         if lines and used + len(entry) > limit:
             break
         lines.append(entry)
@@ -755,6 +755,18 @@ RULE = ("Where the question is about these entries, answer from them and name th
         "cover (the owner can add it). Questions that have nothing to do with them are handled as usual.")
 
 
+# A spoken answer is said by a person who knows the material: 「這是來自編號
+# M-016 的資訊」 and 「這些內容都可以在知識庫的編號 M-130 中找到詳細說明喔」
+# read aloud like a machine (the owner, 11/24). So no sources in the entries
+# and a rule to put it in its own words.
+RULE_SPOKEN = ("Where the question is about these entries, answer from them in your own words, the way a person who "
+               "knows this would say it out loud: never mention the knowledge base, entry numbers or codes (like "
+               "M-016), file names or where the information came from. For the owner's own policies, prices, times "
+               "and procedures they are the only source: never fill a gap with what is usual elsewhere or a guess — "
+               "if they don't cover something, say simply that you'll check that part. Questions that have nothing "
+               "to do with them are handled as usual.")
+
+
 # Last in the executor's message, where it is read last: in the 11/20 trial
 # qwen said 「知識庫沒有退貨運費的規定」 and then drafted the reply with
 # "the usual" policy anyway, 2 runs in 3.
@@ -763,8 +775,10 @@ REMINDER = ("\n\nReminder — the owner's knowledge base: anything you write abo
             "confirmed; it never states a policy it doesn't contain, not even as \"usually\" or a suggestion.")
 
 
-async def block_for(query: str, datasets: Optional[Sequence[str]] = None, k: int = 4) -> str:
-    """The prompt block for this question, or "" when nothing matches."""
+async def block_for(query: str, datasets: Optional[Sequence[str]] = None, k: int = 4,
+                    spoken: bool = False) -> str:
+    """The prompt block for this question, or "" when nothing matches.
+    `spoken`: the answer is read aloud — no sources, said in its own words."""
     ids = tuple(datasets) if datasets is not None else current()
     if not ids or not (query or "").strip():
         return ""
@@ -775,4 +789,5 @@ async def block_for(query: str, datasets: Optional[Sequence[str]] = None, k: int
         return ""
     if not hits:
         return ""
-    return "【知識庫：以這裡為準】\n" + format_hits(hits) + "\n" + RULE + "\n\n"
+    return ("【知識庫：以這裡為準】\n" + format_hits(hits, sources=not spoken) + "\n"
+            + (RULE_SPOKEN if spoken else RULE) + "\n\n")

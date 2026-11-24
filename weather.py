@@ -205,6 +205,37 @@ async def brief(place: str = "") -> str:
     return f"{name}：{head}" + ("，☂️ 記得帶傘" if pop >= 50 else "")
 
 
+async def spoken_forecast(q: WeatherQuery) -> str:
+    """The forecast as a person would say it, for a voice conversation: the
+    card (📍 · ☁️ · 資料來源：Open-Meteo) read aloud like a machine (the owner,
+    11/24). 「台北明天陰天，大約 16 到 19 度，不太會下雨。」"""
+    lat, lon, name = await resolve(q.place, q.zh)
+    data = await _fetch(lat, lon, max(q.start + q.days, 2))
+    daily = data["daily"]
+    days = [datetime.strptime(x, "%Y-%m-%d").date() for x in daily["time"]]
+    zh, out = q.zh, []
+    cur = data.get("current") or {}
+    for k, i in enumerate(range(q.start, min(q.start + max(q.days, 1), len(days), q.start + 3))):
+        _, zh_text, en_text = _CODES.get(int(daily["weather_code"][i]), ("", "天氣", "weather"))
+        lo, hi = round(daily["temperature_2m_min"][i]), round(daily["temperature_2m_max"][i])
+        pop = daily.get("precipitation_probability_max", [None] * (i + 1))[i]
+        pop = int(pop) if pop is not None else -1
+        if zh:
+            when = ["今天", "明天", "後天"][i] if i < 3 else f"{days[i].month}月{days[i].day}號"
+            now = f"現在大約 {cur['temperature_2m']:.0f} 度，" if i == 0 and k == 0 and cur else ""
+            rain = ("" if pop < 0 else "，不太會下雨" if pop < 20 else f"，降雨機率大約 {pop}%" if pop < 50
+                    else f"，降雨機率 {pop}%，出門記得帶傘")
+            out.append(f"{name if k == 0 else ''}{now}{when}{zh_text}，大約 {lo} 到 {hi} 度{rain}。")
+        else:
+            when = ["today", "tomorrow"][i] if i < 2 else days[i].strftime("%A")
+            now = f"It's about {cur['temperature_2m']:.0f} degrees now. " if i == 0 and k == 0 and cur else ""
+            rain = ("" if pop < 0 else ", and rain is unlikely" if pop < 20 else f", with a {pop}% chance of rain"
+                    if pop < 50 else f", with a {pop}% chance of rain, so take an umbrella")
+            where = f" in {name}" if k == 0 else ""
+            out.append(f"{now}{when.capitalize()}{where}: {en_text}, {lo} to {hi} degrees{rain}.")
+    return ("" if zh else " ").join(out)
+
+
 async def forecast(q: WeatherQuery) -> str:
     lat, lon, name = await resolve(q.place, q.zh)
     total = max(q.start + q.days, 2)

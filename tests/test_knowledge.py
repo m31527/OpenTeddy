@@ -266,9 +266,20 @@ async def test_prompts() -> None:
             except _Stop:
                 pass
             assert ("【知識庫" in seen["gate"]) == has, (goal, seen["gate"])
+        # Spoken: no sources to read out, and told to say it in its own words
+        # (「這是來自編號 M-016 的資訊」 sounded like a machine, 11/24).
+        try:
+            await Orchestrator._fast_chat_response(
+                o, TaskRequest(goal="退貨期限是幾天", session_id="s", context={"gate": "code", "voice": True}), "chat", {})
+        except _Stop:
+            pass
+        sp = seen["gate"]
+        assert "收到商品後 7 天內" in sp and "faq.csv" not in sp and "第 2 列" not in sp, sp
+        assert K.RULE_SPOKEN in sp and K.RULE not in sp
     finally:
         gate.ask = real_ask
-    print("  ✓ chat lane and gate: matching entries above the question with the rule; none for small talk")
+    print("  ✓ chat lane and gate: matching entries above the question with the rule; none for small talk; "
+          "spoken: no sources, said in its own words")
 
     import executor as EX
     from tool_registry import tool_registry

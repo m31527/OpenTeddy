@@ -146,6 +146,14 @@ def test_spoken() -> None:
         "Returns, Deadline: 7 days, Shipping: free over $30", V.spoken("## Returns\n- **Deadline**: 7 days (source: faq.csv row 2)\n- Shipping: free over $30")
     long_en = V.spoken("The key point is first. " + "More detail follows here. " * 20, V.SPOKEN_MAX_CHARS)
     assert long_en.startswith("The key point is first.") and long_en.endswith(V.EN[V.DONE_MORE]), long_en
+    # A citation said as a clause is dropped (the owner's examples, 11/24); a product code isn't one.
+    assert V.spoken("尺寸需要依您的包裝空間來評估，這是來自編號 M-016 的資訊。") == "尺寸需要依您的包裝空間來評估。"
+    assert V.spoken("我們可以提供到廠稽核、教育訓練，這些內容都可以在知識庫的編號 M-130 中找到詳細說明喔。") == \
+        "我們可以提供到廠稽核、教育訓練。"
+    assert V.spoken("根據知識庫，退貨期限是七天。") == "退貨期限是七天。"
+    assert V.spoken("型號 A-100 的價格是 1200 元。") == "型號 A-100 的價格是 1200 元。"
+    assert V.spoken("The deadline is 7 days, according to entry M-016. Shipping is free.") == \
+        "The deadline is 7 days. Shipping is free."
     assert V.english("What can you do for me?") and not V.english("退貨幾天？") and not V.english("OpenTeddy 是什麼")
     assert V.phrase(V.ACK, True) == V.EN[V.ACK] and V.phrase(V.ACK, False) == V.ACK
     print("  ✓ read aloud: no markdown, tables, links, emoji or citations; long results cut to the gist; sentences "

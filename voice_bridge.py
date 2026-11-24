@@ -122,6 +122,24 @@ async def speak(text: str, client: httpx.AsyncClient, voice: str = "") -> AsyncI
 
 _CJK = re.compile(r"[㐀-鿿豈-﫿　-〿＀-￯]")
 _CITE = re.compile(r"[（(](?:[^（）()]*?(?:知識庫|來源|參考|資料來源|source)[^（）()]*?)[）)]", re.I)
+# A citation said as a clause: 「這是來自編號 M-016 的資訊」, 「這些內容都可以在知識庫
+# 的編號 M-130 中找到詳細說明喔」 (the owner, 11/24: reads like a machine). Dropped
+# only when the clause names a source AND points at it, so 「型號 A-100 的價格」 stays.
+_CITE_WHERE = re.compile(r"知識庫|資料庫|資料來源|出處|編號\s*[A-Za-z]{0,3}-?\d|knowledge base|\bsource\b|\bentry [A-Z]?-?\d", re.I)
+_CITE_POINT = re.compile(r"找到|來自|根據|依據|參考|查到|記載|來源|出處|according to|\bfind\b|found in|comes from|\bsee\b", re.I)
+
+
+def _drop_citations(t: str) -> str:
+    parts = re.split(r"([，,。！？!?；;]|\.(?=\s|$))", t)          # an English full stop too, not "3.5"
+    kept: List[List[str]] = []
+    for i in range(0, len(parts), 2):
+        clause, mark = parts[i], (parts[i + 1] if i + 1 < len(parts) else "")
+        if _CITE_WHERE.search(clause) and _CITE_POINT.search(clause):
+            if mark in "。！？!?." and mark and kept:
+                kept[-1][1] = mark                     # the sentence still ends where it did
+            continue
+        kept.append([clause, mark])
+    return "".join(c + m for c, m in kept)
 _URL = re.compile(r"https?://\S+")
 _EMOJI = re.compile("[\U0001F000-\U0001FAFF☀-➿️‍]")
 
@@ -146,6 +164,7 @@ def spoken(text: str, limit: int = 0) -> str:
             t += "，" if _CJK.search(t[-1]) or _CJK.search(line[0]) else ","
         t = _join(t, line)
     t = _CITE.sub("", t)
+    t = _drop_citations(t)
     t = _URL.sub("連結" if _CJK.search(t) else "a link", t)
     t = re.sub(r"[*_`#~]+", "", t)
     t = _EMOJI.sub("", t)
