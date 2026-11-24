@@ -79,7 +79,10 @@ async def one_call(q: np.ndarray, setup: dict, hear: float = 3.0) -> Optional[fl
         state["agent"].set()
 
     async def transcript(reader, participant_identity) -> None:
-        text = await reader.read_all()
+        try:
+            text = await reader.read_all()
+        except Exception:  # noqa: BLE001 — cut off by hanging up
+            return
         state["said"].append(("you: " if participant_identity == "tester" else "agent: ") + text)
     try:
         room.register_text_stream_handler("lk.transcription", lambda r, pid: asyncio.ensure_future(transcript(r, pid)))

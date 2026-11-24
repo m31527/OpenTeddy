@@ -103,7 +103,7 @@ Each turn logs a timeline: flush, final, LLM request and first piece, TTS reques
 OpenTeddy opens the rooms. Add these to its `.env` and restart it:
 
 ```
-LIVEKIT_URL=wss://lk.example.com              # what apps connect to (ws://192.168.100.2:7880 on the LAN)
+LIVEKIT_URL=wss://lk.example.com              # what apps connect to (the Spark pair: ws://10.255.128.99:7880, NetBird)
 LIVEKIT_API_URL=http://192.168.100.2:7880     # where OpenTeddy reaches LiveKit's server API
 LIVEKIT_API_KEY=…                              # the same pair as in livekit.yaml
 LIVEKIT_API_SECRET=…
