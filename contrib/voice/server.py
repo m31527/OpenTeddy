@@ -56,6 +56,16 @@ ZH_VARIANT = os.environ.get("ZH_VARIANT", "tw")          # tw → Traditional (T
 # The flow's ODE steps (CosyVoice: 10). First sound on demo2 (11/21): 10 steps
 # 1.21 s, 6 steps 0.91 s, 4 steps 0.84 s — speech recognised right at all of them.
 FLOW_STEPS = int(os.environ.get("FLOW_STEPS", "4") or 0)        # the owner chose 4 by ear (11/21)
+# How soon the first sound comes. CosyVoice streams a chunk once it has
+# TTS_FIRST_HOP speech tokens (25 = 1 s of audio) and doubles the chunk each
+# time (TTS_HOP_SCALE). Its speech model makes ~40 tokens/s in float32 — not
+# far above the 25/s audio needs — so a smaller first chunk only pays off
+# with a faster model: TTS_FP16=1 (half precision) or TTS_VLLM=1 (CosyVoice's
+# vLLM path). Unset, all four keep CosyVoice's own behaviour.
+TTS_FIRST_HOP = int(os.environ.get("TTS_FIRST_HOP", "0") or 0)
+TTS_HOP_SCALE = int(os.environ.get("TTS_HOP_SCALE", "0") or 0)
+TTS_FP16 = os.environ.get("TTS_FP16", "").strip() in {"1", "true", "yes"}
+TTS_VLLM = os.environ.get("TTS_VLLM", "").strip() in {"1", "true", "yes"}
 ASR_RATE = 16000
 CV3_PREFIX = "You are a helpful assistant.<|endofprompt|>"   # Fun-CosyVoice3's prompt text starts with this
 
@@ -137,17 +147,25 @@ def load() -> None:
     _stub_training_only()
     from cosyvoice.cli.cosyvoice import AutoModel as CosyModel
     t0 = time.time()
-    _tts = CosyModel(model_dir=_local(TTS_MODEL))
+    _tts = CosyModel(model_dir=_local(TTS_MODEL), **({"fp16": True} if TTS_FP16 else {}),
+                     **({"load_vllm": True} if TTS_VLLM else {}))
     # Newer transformers load the Qwen2 inside CosyVoice in the checkpoint's
     # bfloat16 while CosyVoice feeds it float32 ("mat1 and mat2 must have the
-    # same dtype", demo2 11/20): run it in float32 as CosyVoice expects.
+    # same dtype", demo2 11/20): run it in float32 as CosyVoice expects —
+    # or in half precision throughout with TTS_FP16.
     llm = getattr(getattr(_tts, "model", None), "llm", None)
-    if llm is not None:
-        llm.float()
+    if llm is not None and not TTS_VLLM:
+        llm.half() if TTS_FP16 else llm.float()
+    if TTS_FIRST_HOP:
+        _tts.model.token_hop_len = TTS_FIRST_HOP
+    if TTS_HOP_SCALE:
+        _tts.model.stream_scale_factor = TTS_HOP_SCALE
     _STREAM_HOP[0] = int(getattr(_tts.model, "token_hop_len", 25) or 25)
     _quicker()
-    log.info("TTS %s ready in %.1fs (rate %d, flow steps %s)", TTS_MODEL, time.time() - t0, _tts.sample_rate,
-             FLOW_STEPS or "default")
+    log.info("TTS %s ready in %.1fs (rate %d, flow steps %s, first chunk %d tokens, ×%s, %s)", TTS_MODEL,
+             time.time() - t0, _tts.sample_rate, FLOW_STEPS or "default", _STREAM_HOP[0],
+             getattr(_tts.model, "stream_scale_factor", "?"),
+             "vLLM" if TTS_VLLM else "fp16" if TTS_FP16 else "float32")
     from funasr import AutoModel as AsrModel
     t0 = time.time()
     _asr = AsrModel(model=_local(ASR_MODEL), trust_remote_code=False, disable_update=True,
@@ -320,12 +338,20 @@ def _speak(text: str, voice: str, speed: float) -> Iterator[bytes]:
         raise HTTPException(503, "no reference voice: put name.wav + name.txt in VOICES_DIR")
 
     def work() -> None:
+        t0, first, samples, chunks = time.time(), 0.0, 0, 0
         try:
             with _tts_lock:
+                t0 = time.time()
                 _tts.model.token_hop_len = _STREAM_HOP[0]          # see _STREAM_HOP
                 for out in _tts.inference_zero_shot(text, "", "", zero_shot_spk_id=spk, stream=True, speed=speed):
                     wav = out["tts_speech"].squeeze(0).float().cpu().numpy()
+                    first = first or time.time() - t0
+                    samples += len(wav)
+                    chunks += 1
                     q.put((np.clip(wav, -1.0, 1.0) * 32767.0).astype("<i2").tobytes())
+            took, audio = time.time() - t0, samples / float(_tts.sample_rate)
+            log.info("tts: first sound %.2fs, %d chunks, %.2fs for %.2fs of audio (RTF %.2f): %s",
+                     first, chunks, took, audio, took / audio if audio else 0.0, text[:40])
         except Exception as exc:  # noqa: BLE001
             log.exception("tts failed: %s", exc)
         finally:

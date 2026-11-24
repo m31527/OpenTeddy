@@ -13,6 +13,7 @@ Memory integration:
 from __future__ import annotations
 
 import asyncio
+import time
 import hashlib
 import json
 import logging
@@ -728,6 +729,10 @@ class Orchestrator:
 
     async def run(self, req: TaskRequest) -> TaskResult:
         """Full lifecycle: plan → execute → escalate → summarise."""
+        self._t_run = getattr(self, "_t_run", None) or {}       # task → when it started (chat lane timing)
+        if len(self._t_run) > 200:                                 # work tasks never reach the chat lane
+            self._t_run.clear()
+        self._t_run[req.id] = time.monotonic()
         import idle
         idle.begin()   # background chores wait until no task is running
         try:
@@ -1117,7 +1122,8 @@ class Orchestrator:
             session_mode = _to_work_lane()
         if session_mode == "chat":
             _gated = bool((req.context or {}).get("gate"))
-            logger.info("Chat lane (%s): task=%s", "gate" if _gated else "chat session", req.id)
+            logger.info("Chat lane (%s): task=%s, %d ms after it started", "gate" if _gated else "chat session",
+                        req.id, int((time.monotonic() - (getattr(self, "_t_run", {}) or {}).pop(req.id, time.monotonic())) * 1000))
             try:
                 _res = await self._fast_chat_response(
                     req, session_mode,
@@ -3164,15 +3170,37 @@ class Orchestrator:
         # the word "memory": both pulled 「目前機器記憶體還剩下多少」 into a
         # chat about the model's own memory (memory.get_context_for_task).
         gated = bool((req.context or {}).get("gate"))
-        memory_ctx = ""
-        if self.memory is not None and self.memory.is_available:
+        took: Dict[str, int] = {}
+
+        async def _timed(name: str, coro: Any) -> Any:
+            t = time.monotonic()
             try:
-                memory_ctx = await self.memory.get_context_for_task(
+                return await coro
+            finally:
+                took[name] = int((time.monotonic() - t) * 1000)
+
+        async def _memory() -> str:
+            if self.memory is None or not self.memory.is_available:
+                return ""
+            try:
+                return await self.memory.get_context_for_task(
                     req.goal, session_id=req.session_id,
                     **({"lessons": False, "heading": "【之前的筆記，僅供參考】"} if gated else {}),
                 )
             except Exception:  # noqa: BLE001
-                pass
+                return ""
+
+        # Memory, the conversation so far and the knowledge base don't depend
+        # on each other: fetched together, the first word comes that much
+        # sooner (they ran one after another before the model was asked).
+        import knowledge as _kb
+        _t_prep = time.monotonic()
+        memory_ctx, recent, kb_block = await asyncio.gather(
+            _timed("memory", _memory()), _timed("recent", self._recent_turns_block(req)),
+            _timed("knowledge", _kb.block_for(req.goal)))
+        logger.info("[chat lane] context in %d ms (memory %d, recent %d, knowledge %d)",
+                    int((time.monotonic() - _t_prep) * 1000), took.get("memory", 0), took.get("recent", 0),
+                    took.get("knowledge", 0))
 
         # The clock goes in the message so a "today / 今天 / 現在 / what year"
         # question on this fast path doesn't fall back to the model's
@@ -3186,11 +3214,6 @@ class Orchestrator:
         )
         mem_block = ((memory_ctx if gated else "--- Relevant memory ---\n" + memory_ctx) + "\n\n") if memory_ctx else ""
 
-        # Stream so the user gets tokens as they generate — same UX as
-        # the full-loop chat-mode finalize step.
-        recent = await self._recent_turns_block(req)
-        import knowledge as _kb
-        kb_block = await _kb.block_for(req.goal)
         # The 🎙 voice mode reads the answer aloud (voice_bridge.py).
         # In the person's own language: written in Chinese, it turned an
         # English question's answer Chinese (demo2, 11/21).
