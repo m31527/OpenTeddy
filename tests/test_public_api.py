@@ -46,13 +46,18 @@ class FakeTracker:
     def __init__(self):
         self.sessions, self.tasks = {}, {}
         self.agents = {"ag1": {"id": "ag1", "name": "品牌客戶・王經理", "mode": "chat",
-                               "system_prompt": "你是品牌客戶王經理，在意價格與交期。"}}
+                               "system_prompt": "你是品牌客戶王經理，在意價格與交期。"},
+                       "ag2": {"id": "ag2", "name": "客服・小美", "mode": "chat",
+                               "system_prompt": "你是品牌客服小美。", "knowledge_datasets": '["ds1"]'}}
 
     async def create_session(self, sid, title, mode="code"):
         self.sessions[sid] = {"title": title, "mode": mode, "state": "pending"}
 
     async def get_agent(self, aid):
         return self.agents.get(aid)
+
+    async def get_session(self, sid):
+        return self.sessions.get(sid)
 
     async def list_agents(self):
         return list(self.agents.values())
@@ -616,6 +621,25 @@ def test_datasets(c, token, token2):
         assert CALLS[-1]["datasets"] == ["ds1"], "naming datasets again ends the [] choice"
         print("  ✓ chat: [] = no knowledge base, \"always\" datasets included, for the rest of the conversation")
 
+        r = c.post("/v1/chat/completions", headers=H,
+                   json={"messages": [{"role": "user", "content": "退貨"}], "agent": "客服・小美"}).json()
+        sid = r["session_id"]
+        assert CALLS[-1]["datasets"] == ["ds1"] and r["datasets"] == ["客服 FAQ"], r
+        r = c.post("/v1/chat/completions", headers=H,
+                   json={"messages": [{"role": "user", "content": "運費"}], "session_id": sid}).json()
+        assert CALLS[-1]["datasets"] == ["ds1"] and r["datasets"] == ["客服 FAQ"], "later turns: the session's agent"
+        r = c.post("/v1/chat/completions", headers=H,
+                   json={"messages": [{"role": "user", "content": "x"}], "agent": "ag2", "datasets": ["產品手冊"]}).json()
+        assert CALLS[-1]["datasets"] == ["ds2"], "the app's own datasets come before the agent's"
+        r = c.post("/v1/chat/completions", headers=H,
+                   json={"messages": [{"role": "user", "content": "x"}], "agent": "ag2", "datasets": []}).json()
+        c.post("/v1/chat/completions", headers=H, json={"messages": [{"role": "user", "content": "y"}], "session_id": r["session_id"]})
+        assert CALLS[-1]["datasets"] == [], "[] too, for the whole conversation"
+        r = c.post("/v1/chat/completions", headers=H,
+                   json={"messages": [{"role": "user", "content": "x"}], "agent": "品牌客戶・王經理"}).json()
+        assert "datasets" not in CALLS[-1] and "datasets" not in r, "an agent that sets none: the owner's defaults"
+        print("  ✓ chat: an agent brings its datasets; the app's datasets (or []) come first")
+
         n = len(TR.sessions)
         r = c.post("/v1/chat/completions", headers=H, json={"messages": [{"role": "user", "content": "x"}], "datasets": ["不存在"]})
         assert r.status_code == 400 and r.json()["error"]["code"] == "dataset_not_found" and len(TR.sessions) == n
@@ -662,6 +686,12 @@ def test_datasets(c, token, token2):
             ws.send_text(json.dumps({"type": "datasets", "datasets": ["沒有這個"]}))
             got = until(ws, "error", "datasets")
             assert got["type"] == "error" and got["code"] == "dataset_not_found", got
+        with c.websocket_connect("/v1/realtime", headers=H) as ws:
+            ws.send_text(json.dumps({"type": "hello", "agent": "客服・小美"}))
+            assert until(ws, "ready")["datasets"] == ["客服 FAQ"]
+            ws.send_text(json.dumps({"type": "text", "text": "退貨"}))
+            until(ws, "reply")
+            assert CALLS[-1]["datasets"] == ["ds1"], "realtime: the agent's datasets each turn"
         with c.websocket_connect("/v1/realtime", headers=H) as ws:
             ws.send_text(json.dumps({"type": "hello", "datasets": []}))
             assert until(ws, "ready")["datasets"] == []

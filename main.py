@@ -1012,12 +1012,23 @@ async def _session_knowledge(session_id: str) -> dict:
     picked = await K.session_datasets(session_id)
     every = await K.list_datasets()
     brief = lambda d: {"id": d["id"], "name": d["name"], "items": d["items"]}  # noqa: E731
-    return {"session_id": session_id, "enabled": K.enabled(),
-            "note": "" if K.enabled() else ("The knowledge base is off, so these datasets aren't used yet: "
-                                            "POST /settings {\"knowledge_enabled\": \"true\"}."),
-            "datasets": [brief(d) for d in every if d["id"] in picked],
-            # Marked "always": in this session too, whatever it picked.
-            "always": [brief(d) for d in every if d["always"] and d["id"] not in picked]}
+    out = {"session_id": session_id, "enabled": K.enabled(),
+           "note": "" if K.enabled() else ("The knowledge base is off, so these datasets aren't used yet: "
+                                           "POST /settings {\"knowledge_enabled\": \"true\"}."),
+           "datasets": [brief(d) for d in every if d["id"] in picked],
+           # Marked "always": in this session too, whatever it picked.
+           "always": [brief(d) for d in every if d["always"] and d["id"] not in picked]}
+    # A session made from an Agent that sets datasets uses exactly those
+    # until it picks its own (knowledge.scope_for), "always" ones not added.
+    sess = await tracker.get_session(session_id)
+    agent = await tracker.get_agent(sess["agent_id"]) if sess and sess.get("agent_id") else None
+    ids = K.agent_datasets(agent)
+    if ids is not None:
+        out["agent"] = {"id": agent["id"], "name": agent.get("name", ""), "in_use": not picked,
+                        "datasets": [brief(d) for d in every if d["id"] in ids]}
+        if not picked:
+            out["always"] = []
+    return out
 
 
 @app.get("/sessions/{session_id}/knowledge")
@@ -2408,6 +2419,7 @@ async def _start_task(
     # Whose task this is comes from the door it came through, never from
     # what a caller put in its context.
     ctx.pop("api_key_id", None)
+    ctx.pop("agent_datasets", None)       # only the session's Agent sets these (orchestrator)
     if api_key_id:
         ctx["api_key_id"] = api_key_id
         origin = origin or "api_key"
@@ -2930,7 +2942,21 @@ def _agent_public(row: dict) -> dict:
         out["allowed_tools"] = json.loads(row.get("allowed_tools") or "[]")
     except Exception:  # noqa: BLE001
         out["allowed_tools"] = []
+    import knowledge as _K
+    out["knowledge_datasets"] = _K.agent_datasets(row)     # None = the owner's defaults, [] = none
     return out
+
+
+async def _agent_datasets_in(refs: Optional[List[str]]) -> Optional[List[str]]:
+    """An agent's `knowledge_datasets` as sent (names or ids) → ids; None stays
+    None (the owner's defaults). An unknown name is a 400."""
+    if refs is None:
+        return None
+    import knowledge as K
+    try:
+        return await K.resolve(refs)
+    except Exception as exc:  # noqa: BLE001
+        raise _kb_http(exc)
 
 
 async def _capture_agent_schema(agent_id: str) -> bool:
@@ -2968,6 +2994,7 @@ async def list_agents() -> dict:
 async def create_agent(body: CreateAgentRequest) -> dict:
     data = body.model_dump()
     data["allowed_tools"] = _validate_tool_scope(data.get("allowed_tools") or [])
+    data["knowledge_datasets"] = await _agent_datasets_in(data.get("knowledge_datasets"))
     if data.get("api_docs"):
         import api_docs as _ad
         data["api_docs"] = _ad.condense(data["api_docs"])
@@ -3025,6 +3052,14 @@ async def update_agent(agent_id: str, body: UpdateAgentRequest) -> dict:
         import api_docs as _ad
         _docs = _ad.condense(body.api_docs)
 
+    # Datasets: left out keeps them; null sends the agent back to the
+    # owner's defaults; a list (names or ids, [] = none) replaces them.
+    if "knowledge_datasets" in body.model_fields_set:
+        _kb = await _agent_datasets_in(body.knowledge_datasets)
+    else:
+        import knowledge as _K
+        _kb = _K.agent_datasets(row)
+
     agent = AgentDefinition(
         **{k: merged[k] for k in (
             "id", "name", "description", "system_prompt", "mode",
@@ -3035,6 +3070,7 @@ async def update_agent(agent_id: str, body: UpdateAgentRequest) -> dict:
         allowed_domains=_domains,
         api_docs=_docs,
         allowed_tools=_tool_scope,
+        knowledge_datasets=_kb,
         created_at=datetime.fromisoformat(row["created_at"]),
     )
     # Clearing the DB binding clears the snapshot too.

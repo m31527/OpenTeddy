@@ -209,6 +209,23 @@ async def test_scope() -> None:
     assert await K.scope_for({}, "s-shop") == (faq["id"], internal["id"])
     await K.update_dataset(internal["id"], always=False)
     assert await K.set_session_datasets("s-shop", []) == [] and await K.scope_for({}, "s-shop") == ()
+    # An Agent's datasets (knowledge_datasets: NULL / '[]' / ids), read live.
+    assert K.agent_datasets(None) is None and K.agent_datasets({"knowledge_datasets": None}) is None
+    assert K.agent_datasets({"knowledge_datasets": "[]"}) == []
+    assert K.agent_datasets({"knowledge_datasets": f'["{faq["id"]}"]'}) == [faq["id"]]
+    assert K.agent_datasets({"knowledge_datasets": "not json"}) is None
+    await K.update_dataset(internal["id"], always=True)
+    assert await K.scope_for({"agent_datasets": [faq["id"], "kb-gone"]}, "s-agent") == (faq["id"],), \
+        "the agent's datasets, existing ones only, not the always ones"
+    assert await K.scope_for({"agent_datasets": []}, "s-agent") == (), "an agent with no knowledge base: none at all"
+    assert await K.scope_for({}, "s-agent") == (internal["id"],), "no agent datasets: the always ones"
+    await K.set_session_datasets("s-agent", [faq["id"]])
+    assert await K.scope_for({"agent_datasets": []}, "s-agent") == (faq["id"], internal["id"]), \
+        "the session's own pick comes before its agent's"
+    assert await K.scope_for({"agent_datasets": [faq["id"]], "knowledge_datasets": [internal["id"]]}, "s-agent") \
+        == (internal["id"],), "a task's own datasets come first of all"
+    await K.set_session_datasets("s-agent", [])
+    await K.update_dataset(internal["id"], always=False)
     tmp = await K.create_dataset("暫時")
     await K.set_session_datasets("s-tmp", [tmp["id"]])
     await K.delete_dataset(tmp["id"])

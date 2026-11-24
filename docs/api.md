@@ -124,7 +124,7 @@ The main use is training. In new-staff training, OpenTeddy plays a brand's custo
 
 There are two ways to give a role, and they can be combined:
 
-- **`agent`**: the name or id of an **Agent** defined in OpenTeddy's web UI (Agent tab). Its persona is the role. This suits fixed roles used again and again, such as five typical customers. Edit the Agent and every new conversation with it changes, with no app release.
+- **`agent`**: the name or id of an **Agent** defined in OpenTeddy's web UI (Agent tab). Its persona is the role, and its 知識庫 setting picks the datasets it answers from (see [Datasets](#datasets-which-knowledge-to-answer-from)). This suits fixed roles used again and again, such as five typical customers. Edit the Agent and its conversations change, with no app release.
 - **`instructions`**: a role the app writes itself, for example a scenario made up for this one session. It is kept for the whole conversation until the app changes it; `""` removes it.
 
 With both, the Agent's persona comes first and the instructions add to it ("this time the customer wants a discount").
@@ -138,12 +138,13 @@ With both, the Agent's persona comes first and the instructions add to it ("this
 Writing a good role:
 
 - Say **who** it is, **what** it wants, and **how** it talks. For example: 「你是連鎖烘焙品牌的採購王經理，正在比較三家包材供應商。你在意單價和交期，說話直接、不客套。你是客戶，不是業務：不要推銷、不要問對方想了解哪項服務；就你的立場認真回應，該追問就追問。」
-- A role that plays a **customer** shouldn't answer from the brand's knowledge base: send `"datasets": []` with it, and the whole conversation stays off the knowledge base. A role that speaks for the brand names its datasets instead. See [Datasets](#datasets-which-knowledge-to-answer-from).
+- A role that plays a **customer** shouldn't answer from the brand's knowledge base. Set its Agent's 知識庫 to 不使用知識庫, or send `"datasets": []`; either way the whole conversation stays off the knowledge base. A role that speaks for the brand answers from the brand's datasets instead. See [Datasets](#datasets-which-knowledge-to-answer-from).
 - The length and plain style of a spoken answer still apply with `"voice": true`.
 
 ```python
+# The Agent 品牌客戶・王經理 is set to 不使用知識庫 in the Agent tab, so "datasets" isn't needed.
 r = client.chat.completions.create(model="openteddy", messages=[{"role": "user", "content": "王經理您好，我是業務小林。"}],
-    extra_body={"agent": "品牌客戶・王經理", "instructions": "這次他很趕交期。", "datasets": [], "voice": True})
+    extra_body={"agent": "品牌客戶・王經理", "instructions": "這次他很趕交期。", "voice": True})
 ```
 
 An unknown agent gives `agent_not_found`, and no conversation is started.
@@ -180,11 +181,18 @@ A conversation **keeps** the datasets it named. Later turns use them until the a
 |---|---|
 | `["客服 FAQ", "產品手冊"]` | exactly these datasets, from now on |
 | `[]` | **no** knowledge base at all, from now on, "always" datasets included |
+| nothing, ever, with an `agent` whose 知識庫 is set | the Agent's datasets (or none, when the Agent is set to 不使用知識庫) |
 | nothing, ever | the datasets the owner marked "always" (`always: true`) |
 
-The answer (chat) or `ready` (voice) lists the datasets in effect, by name; `[]` there means none.
+The app's own `datasets` always win over the Agent's. The answer (chat) or `ready` (voice) lists the datasets in effect, by name; `[]` there means none.
 
-Datasets and [roles](#roles-who-openteddy-plays) go together: a role that **speaks for the brand** (a support agent, a sales rep) names the brand's datasets, while a role that **plays a customer** sends `[]`, because a customer doesn't know the brand's FAQ. An Agent named with `agent` brings no datasets of its own, so name them alongside it.
+Datasets and [roles](#roles-who-openteddy-plays) go together: a role that **speaks for the brand** (a support agent, a sales rep) answers from the brand's datasets, while a role that **plays a customer** answers from none, because a customer doesn't know the brand's FAQ. The simplest way is to set this on the Agent, in the Agent tab under 知識庫:
+
+- 預設: the datasets marked "always", as in any conversation;
+- 只用下面勾選的資料集: exactly the ones ticked;
+- 不使用知識庫: none.
+
+Then the app only sends `agent`. An app that builds its roles with `instructions` sends `datasets` itself.
 
 ```python
 r = client.chat.completions.create(

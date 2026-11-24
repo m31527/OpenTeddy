@@ -245,6 +245,12 @@ class AgentDefinition(BaseModel):
     # reach shell/python to route around the domain allowlist. A scoped
     # agent is also the precondition for unattended auto-approval.
     allowed_tools: List[str] = Field(default_factory=list)
+    # The knowledge-base datasets this agent answers from (knowledge.py),
+    # read live like the persona. None = it sets none: the owner's
+    # "always" datasets, as in any session. [] = no knowledge base at all
+    # (a role that plays a customer). Ids = exactly these. A conversation's
+    # own pick (the web UI's, or an app's `datasets`) still comes first.
+    knowledge_datasets: Optional[List[str]] = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
@@ -263,6 +269,7 @@ class CreateAgentRequest(BaseModel):
     allowed_domains: List[str] = Field(default_factory=list)
     api_docs: str = ""
     allowed_tools: List[str] = Field(default_factory=list)
+    knowledge_datasets: Optional[List[str]] = None      # names or ids
 
 
 class UpdateAgentRequest(BaseModel):
@@ -281,6 +288,8 @@ class UpdateAgentRequest(BaseModel):
     allowed_domains: Optional[List[str]] = None
     api_docs: Optional[str] = None
     allowed_tools: Optional[List[str]] = None
+    # Left out = keep; null = back to the owner's defaults; [] = none.
+    knowledge_datasets: Optional[List[str]] = None
 
 
 class CreateSessionRequest(BaseModel):
@@ -442,6 +451,7 @@ CREATE TABLE IF NOT EXISTS agents (
     allowed_domains TEXT NOT NULL DEFAULT '[]',
     api_docs      TEXT NOT NULL DEFAULT '',
     allowed_tools TEXT NOT NULL DEFAULT '[]',
+    knowledge_datasets TEXT,
     created_at    TEXT NOT NULL,
     updated_at    TEXT NOT NULL
 );

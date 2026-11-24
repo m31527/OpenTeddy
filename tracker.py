@@ -165,6 +165,9 @@ class Tracker:
             "ALTER TABLE agents ADD COLUMN api_docs TEXT NOT NULL DEFAULT ''",
             # Tool scope (permission boundary). '[]' = unrestricted.
             "ALTER TABLE agents ADD COLUMN allowed_tools TEXT NOT NULL DEFAULT '[]'",
+            # The agent's knowledge-base datasets, a JSON list of ids; NULL =
+            # it sets none (the owner's "always" datasets), '[]' = no KB.
+            "ALTER TABLE agents ADD COLUMN knowledge_datasets TEXT",
             # ── Scheduled tasks (cron-driven recurring runs) ──────────────
             # Each row is "this session runs this goal on this cron". The
             # session binding gives the schedule continuity of memory /
@@ -480,8 +483,8 @@ class Tracker:
             "INSERT INTO agents(id, name, description, system_prompt, mode, "
             "workspace_dir, local_only, db_kind, db_url, db_label, "
             "schema_summary, api_credentials, allowed_domains, api_docs, allowed_tools, "
-            "created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "knowledge_datasets, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(id) DO UPDATE SET "
             "name=excluded.name, description=excluded.description, "
             "system_prompt=excluded.system_prompt, mode=excluded.mode, "
@@ -492,6 +495,7 @@ class Tracker:
             "allowed_domains=excluded.allowed_domains, "
             "api_docs=excluded.api_docs, "
             "allowed_tools=excluded.allowed_tools, "
+            "knowledge_datasets=excluded.knowledge_datasets, "
             "updated_at=excluded.updated_at",
             (
                 agent.id, agent.name, agent.description, agent.system_prompt,
@@ -503,6 +507,8 @@ class Tracker:
                 json.dumps(getattr(agent, "allowed_domains", []) or []),
                 getattr(agent, "api_docs", "") or "",
                 json.dumps(getattr(agent, "allowed_tools", []) or []),
+                (None if getattr(agent, "knowledge_datasets", None) is None
+                 else json.dumps(list(agent.knowledge_datasets))),
                 agent.created_at.isoformat(), now,
             ),
         )

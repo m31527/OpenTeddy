@@ -133,14 +133,31 @@ def _status(s: Any) -> str:
 # {"type":"datasets"} message mid-conversation — and they stay the session's
 # pick until it names others. Each turn then reads exactly those. `[]` is a
 # pick too: no knowledge at all, for the rest of the conversation (a role
-# that plays a customer). A session that never picked reads the owner's
-# "always" datasets.
+# that plays a customer). A session that never picked reads its Agent's
+# datasets when the Agent sets some, else the owner's "always" datasets.
 
-async def _pick_datasets(session_id: str, requested: Any) -> Optional[List[str]]:
+async def _agent_datasets(session_id: str, agent: Optional[Dict[str, Any]]) -> Optional[List[str]]:
+    """The datasets the conversation's Agent brings (`agent`, or the session's
+    own), existing ones only; None when it has no Agent or the Agent sets none."""
+    import knowledge
+    if agent is None and session_id:
+        sess = await H.tracker().get_session(session_id)
+        aid = (sess or {}).get("agent_id") or ""
+        agent = await H.tracker().get_agent(aid) if aid else None
+    ids = knowledge.agent_datasets(agent)
+    if ids is None:
+        return None
+    known = {d["id"] for d in await knowledge.list_datasets()}
+    return [i for i in ids if i in known]
+
+
+async def _pick_datasets(session_id: str, requested: Any,
+                         agent: Optional[Dict[str, Any]] = None) -> Optional[List[str]]:
     """Save `requested` (names or ids; None = keep the session's pick) as the
     session's datasets; return the ids each turn passes on ([] = none), or
-    None to leave the choice to knowledge.scope_for (no pick, or the
-    knowledge base off)."""
+    None to leave the choice to knowledge.scope_for (no pick and no Agent
+    datasets, or the knowledge base off). `agent`: a new session's Agent,
+    before the session exists."""
     import knowledge
     if requested is not None:
         if not isinstance(requested, list) or not all(isinstance(x, str) and x.strip() for x in requested):
@@ -166,7 +183,9 @@ async def _pick_datasets(session_id: str, requested: Any) -> Optional[List[str]]
         return None
     if picked:
         return picked
-    return [] if await api_keys.no_datasets(session_id) else None
+    if await api_keys.no_datasets(session_id):
+        return []
+    return await _agent_datasets(session_id, agent)
 
 
 async def _dataset_names(ids: Optional[List[str]]) -> List[str]:
@@ -310,7 +329,7 @@ async def chat_completions(request: Request, key: Dict[str, Any] = Depends(requi
         # wrong name leaves no empty session behind.
         agent = await _resolve_agent(body["agent"]) if body.get("agent") is not None else None
         new_id = str(uuid.uuid4())
-        ds = await _pick_datasets(new_id, body.get("datasets"))
+        ds = await _pick_datasets(new_id, body.get("datasets"), agent)
         session_id = await _new_session(key, goal, sid=new_id, agent=agent)
         history = [{"role": m.get("role"), "content": _text_of(m.get("content"))}
                    for m in messages[:last] if isinstance(m, dict)]
@@ -803,7 +822,7 @@ async def realtime(ws: WebSocket) -> None:
                                param="agent")
             agent = await _resolve_agent(hello["agent"]) if hello.get("agent") is not None and not sid else None
             role = _instructions(hello.get("instructions"))
-            ds = await _pick_datasets(new_id, hello.get("datasets"))
+            ds = await _pick_datasets(new_id, hello.get("datasets"), agent)
         except ApiError as exc:
             raise refuse(exc)
         if not sid:

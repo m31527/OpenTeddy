@@ -31,6 +31,7 @@ from __future__ import annotations
 import contextvars
 import csv
 import io
+import json
 import logging
 import math
 import re
@@ -710,10 +711,30 @@ async def set_session_datasets(session_id: str, refs: Iterable[str]) -> List[str
     return ids
 
 
+def agent_datasets(agent: Optional[Dict[str, Any]]) -> Optional[List[str]]:
+    """The datasets an Agent brings (its `knowledge_datasets` column): None =
+    it sets none, so the owner's "always" datasets apply; [] = no knowledge
+    base; else exactly these ids."""
+    raw = (agent or {}).get("knowledge_datasets")
+    if raw is None:
+        return None
+    try:
+        ids = json.loads(raw) if isinstance(raw, str) else raw
+    except ValueError:
+        return None
+    return [str(x) for x in ids] if isinstance(ids, list) else None
+
+
 async def scope_for(context: Optional[Dict[str, Any]], session_id: str = "") -> Tuple[str, ...]:
-    """The datasets this task may read. An API call's own `datasets` decide
-    for that task alone; otherwise the session's picks plus any dataset
-    marked "always". None at all while the knowledge base is off."""
+    """The datasets this task may read, first rule that applies:
+
+    1. the task's own `datasets` (an API call, POST /tasks) — exactly those;
+    2. the session's picks, plus any dataset marked "always";
+    3. the session's Agent's datasets (`agent_datasets` in the context, put
+       there by the orchestrator) — exactly those, [] = none;
+    4. the datasets marked "always".
+
+    None at all while the knowledge base is off."""
     if not enabled():
         return ()
     ctx = context or {}
@@ -721,9 +742,14 @@ async def scope_for(context: Optional[Dict[str, Any]], session_id: str = "") -> 
         return tuple(str(x) for x in (ctx.get("knowledge_datasets") or []))
     try:
         picked = await session_datasets(session_id)
-        always = [d["id"] for d in await list_datasets() if d["always"]]
+        every = await list_datasets()
     except RuntimeError:                              # not started (tests, CLI)
         return ()
+    agent = ctx.get("agent_datasets")
+    if not picked and isinstance(agent, list):
+        known = {d["id"] for d in every}
+        return tuple(dict.fromkeys(str(i) for i in agent if str(i) in known))
+    always = [d["id"] for d in every if d["always"]]
     return tuple(dict.fromkeys(picked + always))
 
 

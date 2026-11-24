@@ -17,6 +17,7 @@ import logging
 import os
 import sys
 import tempfile
+import uuid
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 logging.disable(logging.WARNING)
@@ -226,6 +227,38 @@ async def test_http() -> None:
             r = await c.post("/agents", json={"name": "open", "mode": "analytic"})
             open_agent = r.json()["agent"]
             print("  ✓ agents: unknown tool → 400, scope stored and returned")
+
+            # An agent's own knowledge-base datasets.
+            r = await c.post("/knowledge/datasets", json={"name": f"測試 agent-kb {uuid.uuid4().hex[:6]}"})
+            assert r.status_code == 201, r.text
+            kb = r.json()
+            try:
+                r = await c.post("/agents", json={"name": "kb-bad", "mode": "chat", "knowledge_datasets": ["沒有這個"]})
+                assert r.status_code == 400, r.text
+                r = await c.post("/agents", json={"name": "kb", "mode": "chat", "knowledge_datasets": [kb["name"]]})
+                kb_agent = r.json()["agent"]
+                assert kb_agent["knowledge_datasets"] == [kb["id"]], kb_agent
+                assert open_agent["knowledge_datasets"] is None, "an agent that sets none: the owner's defaults"
+                r = await c.patch(f"/agents/{kb_agent['id']}", json={"description": "x"})
+                assert r.json()["agent"]["knowledge_datasets"] == [kb["id"]], "left out → kept"
+                r = await c.patch(f"/agents/{kb_agent['id']}", json={"knowledge_datasets": []})
+                assert r.json()["agent"]["knowledge_datasets"] == [], "[] → no knowledge base"
+                r = await c.patch(f"/agents/{kb_agent['id']}", json={"knowledge_datasets": None})
+                assert r.json()["agent"]["knowledge_datasets"] is None, "null → back to the defaults"
+                await c.patch(f"/agents/{kb_agent['id']}", json={"knowledge_datasets": [kb["id"]]})
+                sess = (await c.post(f"/agents/{kb_agent['id']}/sessions", json={})).json()
+                created_sessions.append(sess["id"])
+                d = (await c.get(f"/sessions/{sess['id']}/knowledge")).json()
+                assert d["agent"]["in_use"] and [x["id"] for x in d["agent"]["datasets"]] == [kb["id"]], d
+                assert d["always"] == [], "an agent's datasets are exactly those"
+                await c.put(f"/sessions/{sess['id']}/knowledge", json={"datasets": [kb["id"]]})
+                d = (await c.get(f"/sessions/{sess['id']}/knowledge")).json()
+                assert not d["agent"]["in_use"] and [x["id"] for x in d["datasets"]] == [kb["id"]], d
+                print("  ✓ agents: datasets by name → ids; kept / [] / null; a session shows its agent's until it picks")
+            finally:
+                if "kb_agent" in locals():
+                    await c.delete(f"/agents/{kb_agent['id']}")
+                await c.delete(f"/knowledge/datasets/{kb['id']}")
 
             r = await c.post("/tasks", json={"intent": "x", "agent_id": open_agent["id"],
                                              "require_approval": False})

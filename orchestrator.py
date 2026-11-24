@@ -773,6 +773,11 @@ class Orchestrator:
                     if agent_id:
                         try:
                             agent = await self.tracker.get_agent(agent_id)
+                            # Its knowledge-base datasets, live too (knowledge.scope_for).
+                            import knowledge as _kb_agent
+                            _agent_kb = _kb_agent.agent_datasets(agent)
+                            if _agent_kb is not None:
+                                req.context["agent_datasets"] = _agent_kb
                             if agent and (agent.get("system_prompt") or "").strip():
                                 # An app's own `instructions` for this conversation
                                 # (/v1, public_api.py) follow the agent's, more specific.
@@ -933,7 +938,8 @@ class Orchestrator:
             _person = None
         _privacy.begin(req.id, _person)
         # The knowledge-base datasets this task answers from (knowledge.py):
-        # the API call's own, else the session's picks (+ any marked always).
+        # the API call's own, else the session's picks (+ any marked always),
+        # else its Agent's, else the ones marked always.
         try:
             import knowledge as _kb
             _kb.begin(await _kb.scope_for(req.context, req.session_id or ""))

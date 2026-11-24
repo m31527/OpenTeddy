@@ -2049,6 +2049,7 @@
     .kb-session-row input { margin-top: 0.2rem; accent-color: var(--text-primary); }
     .kb-session-row .kb-meta { display: block; color: var(--text-muted); font-size: 0.75rem; margin-top: 0.1rem; }
     .kb-session-row.locked { cursor: default; opacity: 0.8; }
+    .agent-kb-list { margin-top: 0.5rem; }
 
     /* ── 🎙 Voice mode ── */
     .voice-btn { margin-right: 2px; }
@@ -4439,6 +4440,19 @@
               <textarea id="agentPersona" rows="5" placeholder="你是財務資料分析師。回答一律附上查詢依據；金額用千分位；發現異常主動標記。"></textarea>
               <div style="font-size:0.7rem;color:var(--text-muted);margin-top:0.25rem" data-i18n="agent_persona_hint">Injected into every plan + execution step for sessions created from this agent.</div>
             </div>
+            <!-- Knowledge base: the datasets this agent's sessions answer from
+                 (knowledge.scope_for). Read live, like the persona. -->
+            <div class="field">
+              <label data-i18n="agent_kb_label">Knowledge base</label>
+              <select id="agentKbMode" onchange="onAgentKbModeChange()">
+                <option value="default" data-i18n="agent_kb_default">Default (the datasets marked "always")</option>
+                <option value="pick" data-i18n="agent_kb_pick">Only the datasets picked below</option>
+                <option value="none" data-i18n="agent_kb_none">No knowledge base</option>
+              </select>
+              <div id="agentKbList" class="kb-session-list agent-kb-list" hidden></div>
+              <div id="agentKbOff" class="kb-note" hidden data-i18n="agent_kb_off">The knowledge base is off — turn it on in the Knowledge tab for these to be used.</div>
+              <div style="font-size:0.7rem;color:var(--text-muted);margin-top:0.25rem" data-i18n="agent_kb_hint">Sessions made from this agent — in the web UI or through the API with "agent" — answer from these. A session's own pick, or an app's "datasets", still comes first. For a role that plays a customer, pick "No knowledge base".</div>
+            </div>
             <!-- Database binding. Pick a type → the matching fields appear;
                  the SQLAlchemy URL is assembled from them (shared
                  buildDbUrlFromFields), so users never hand-write a URL. -->
@@ -5853,6 +5867,7 @@
       <h2 class="db-connect-dialog-title" data-i18n="kb_session_title">Knowledge base for this session</h2>
       <p class="db-connect-dialog-body" data-i18n="kb_session_body">Pick the datasets this session answers from. Other sessions aren't affected.</p>
       <div id="kbSessionNote" class="kb-note" hidden></div>
+      <p id="kbSessionAgent" class="kb-hint" hidden></p>
       <div id="kbSessionList" class="kb-session-list"></div>
       <div style="display:flex; gap:0.5rem; justify-content:space-between; align-items:center; margin-top:1rem;">
         <button class="btn-ghost" type="button" onclick="closeKbSessionModal(); switchTab('knowledge')" data-i18n="kb_manage">Manage datasets</button>
@@ -8533,6 +8548,7 @@
               <span style="font-size:0.7rem;color:var(--text-muted);border:1px solid var(--border);border-radius:6px;padding:0 0.4rem">${escHtml(a.mode)}</span>
               ${a.has_db ? `<span style="font-size:0.7rem;color:var(--text-muted)">🗄 ${escHtml(a.db_label || a.db_kind || 'db')}</span>` : ''}
               ${a.local_only ? `<span style="font-size:0.7rem;color:var(--text-muted)">🔒 local only</span>` : ''}
+              ${a.knowledge_datasets ? `<span style="font-size:0.7rem;color:var(--text-muted)">📚 ${escHtml(a.knowledge_datasets.length ? t('agent_kb_badge', { n: a.knowledge_datasets.length }) : t('agent_kb_badge_none'))}</span>` : ''}
             </div>
             ${a.description ? `<div style="font-size:0.82rem;color:var(--text-muted);margin-top:0.2rem">${escHtml(a.description)}</div>` : ''}
             ${a.system_prompt ? `<div style="font-size:0.75rem;color:var(--text-muted);margin-top:0.35rem;white-space:pre-wrap;max-height:3.6em;overflow:hidden">${escHtml(a.system_prompt)}</div>` : ''}
@@ -8603,9 +8619,36 @@
         a && a.credential_names ? a.credential_names.map(n => `${n}=`).join('\n') : '';
       document.getElementById('agentWorkspace').value = a ? (a.workspace_dir || '') : '';
       document.getElementById('agentLocalOnly').checked = !!(a && a.local_only);
+      _loadAgentKb(a);
       const card = document.getElementById('agentFormCard');
       card.hidden = false;
       card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+
+    // The agent's knowledge base: default (null) / these datasets / none ([]).
+    let _agentKbLoad = 0;
+    async function _loadAgentKb(a) {
+      const ids = a ? a.knowledge_datasets : null;
+      const mode = document.getElementById('agentKbMode');
+      const list = document.getElementById('agentKbList');
+      const off = document.getElementById('agentKbOff');
+      mode.value = ids == null ? 'default' : (ids.length ? 'pick' : 'none');
+      list.innerHTML = ''; off.hidden = true;
+      onAgentKbModeChange();
+      const load = ++_agentKbLoad;
+      let all;
+      try { all = await _kbJson('/knowledge'); } catch (e) { all = { enabled: false, datasets: [] }; }
+      if (load !== _agentKbLoad) return;                 // another agent opened meanwhile
+      const picked = new Set(ids || []);
+      list.innerHTML = all.datasets.length ? all.datasets.map(ds => `<label class="kb-session-row">
+          <input type="checkbox" value="${escHtml(ds.id)}" ${picked.has(ds.id) ? 'checked' : ''} />
+          <span><b>${escHtml(ds.name)}</b><span class="kb-meta">${escHtml(t('kb_count', { n: ds.items }) + (ds.description ? ' · ' + ds.description : ''))}</span></span>
+        </label>`).join('') : `<p class="kb-hint">${escHtml(t('kb_session_none'))}</p>`;
+      off.hidden = !!all.enabled;
+    }
+
+    function onAgentKbModeChange() {
+      document.getElementById('agentKbList').hidden = document.getElementById('agentKbMode').value !== 'pick';
     }
 
     // Import API docs from a URL or an uploaded file. Both hit the
@@ -8651,7 +8694,15 @@
       if (!name) { toast(t('agent_name_required') || 'Name is required', true); return; }
       const kind = document.getElementById('agentDbKind').value;
       const meta = _DB_KIND_META[kind];
+      const kbMode = document.getElementById('agentKbMode').value;
+      let kb = null;                                       // default: the datasets marked "always"
+      if (kbMode === 'none') kb = [];
+      if (kbMode === 'pick') {
+        kb = [...document.querySelectorAll('#agentKbList input[type=checkbox]:checked')].map(x => x.value);
+        if (!kb.length) { toast(t('agent_kb_pick_one'), true); return; }
+      }
       const payload = {
+        knowledge_datasets: kb,
         name,
         mode:          document.getElementById('agentMode').value,
         description:   document.getElementById('agentDesc').value.trim(),
@@ -11323,7 +11374,8 @@
         if (!r.ok) { chip.hidden = true; return; }
         const d = await r.json();
         if (sid !== currentSessionId()) return;          // switched meanwhile
-        const names = [...d.datasets, ...d.always].map(x => x.name);
+        const fromAgent = d.agent && d.agent.in_use;     // the session's Agent decides (no pick of its own)
+        const names = (fromAgent ? d.agent.datasets : [...d.datasets, ...d.always]).map(x => x.name);
         chip.hidden = !names.length;
         label.textContent = (names.length > 1 ? `${names[0]} +${names.length - 1}` : (names[0] || ''))
                           + (d.enabled ? '' : ' ' + t('kb_chip_off_suffix'));
@@ -11343,6 +11395,7 @@
       const sid = currentSessionId();
       overlay.hidden = false;
       note.hidden = true;
+      document.getElementById('kbSessionAgent').hidden = true;
       list.innerHTML = `<p class="kb-hint">${escHtml(t('kb_searching'))}</p>`;
       if (!sid) {
         list.innerHTML = '';
@@ -11361,6 +11414,16 @@
       }
       save.disabled = !all.datasets.length;
       overlay.dataset.enabled = all.enabled ? '1' : '';
+      // A session made from an Agent that sets datasets: say what it uses now,
+      // and that a pick here is the session's own (none picked = the Agent's).
+      const agentNote = document.getElementById('kbSessionAgent');
+      agentNote.hidden = !mine.agent;
+      if (mine.agent) {
+        const used = mine.agent.datasets.map(x => x.name).join('、') || t('agent_kb_none');
+        agentNote.textContent = mine.agent.in_use
+          ? t('kb_session_agent_in_use', { name: mine.agent.name, datasets: used })
+          : t('kb_session_agent_own', { name: mine.agent.name });
+      }
       if (!all.enabled) {
         // 11/20: a session picked its FAQ, the switch was off, and nothing
         // happened. Saving a pick turns the switch on — only sessions that

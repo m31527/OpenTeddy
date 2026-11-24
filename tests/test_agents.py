@@ -80,6 +80,19 @@ async def main():
         assert sess["db_url"].endswith("/finance"), "session keeps its copied config"
         print("5) delete agent detaches (not deletes) session OK")
 
+        # 6) knowledge datasets: None (the owner's defaults) / [] (none) / ids
+        import knowledge as K
+        kb_agent = AgentDefinition(name="客戶角色", knowledge_datasets=[])
+        await t.upsert_agent(kb_agent)
+        assert K.agent_datasets(await t.get_agent(kb_agent.id)) == []
+        kb_agent.knowledge_datasets = ["kb-1", "kb-2"]
+        await t.upsert_agent(kb_agent)
+        assert K.agent_datasets(await t.get_agent(kb_agent.id)) == ["kb-1", "kb-2"]
+        kb_agent.knowledge_datasets = None
+        await t.upsert_agent(kb_agent)
+        assert K.agent_datasets(await t.get_agent(kb_agent.id)) is None
+        print("6) agent datasets: default / none / ids stored OK")
+
         print("\nALL AGENT TESTS PASS")
     finally:
         await t.close()
