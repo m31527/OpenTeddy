@@ -20,10 +20,10 @@ These are times from the end of the person's speech to the first sound of the an
 | First working version | 2.82 s |
 | + 20 ms audio frames, VAD 0.3 s, endpointing 0.05 s | 2.5 s |
 | + the first clause goes to TTS as soon as it is written | 1.9–2.3 s |
-| + spoken turns skip long-term memory (LLM first token 0.30 → 0.15 s) | **1.8–2.0 s** |
-| + CosyVoice in fp16 with a 12-token first chunk (needs your OK on the voice) | about 1.6–1.7 s |
+| + spoken turns skip long-term memory (LLM first token 0.30 → 0.15 s) | 1.8–2.0 s |
+| + CosyVoice in fp16 with a 12-token first chunk (`TTS_FP16=1 TTS_FIRST_HOP=12`) | **1.54–1.86 s, median 1.58 s** |
 
-Here is where a turn's time goes on the agent side, with float32 TTS:
+Here is where a turn's time goes on the agent side:
 
 | Step | Time |
 |---|---|
@@ -31,7 +31,7 @@ Here is where a turn's time goes on the agent side, with float32 TTS:
 | STT final | 0.05 s |
 | LLM first token | 0.15 s |
 | First clause written | 0.15–0.25 s |
-| TTS first audio | 0.75 s (0.53 s with fp16) |
+| TTS first audio | 0.75 s float32 → 0.38–0.44 s with fp16 (live on spark B since 11/24) |
 | WebRTC to the app | ~0.2 s |
 
 The spec's target is under 1.5 s. What is left to win:

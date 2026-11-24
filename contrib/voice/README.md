@@ -102,3 +102,9 @@ enough: `ssh -L 8000:127.0.0.1:8000 <server>`, then open
 | `ASR_MODEL` | `FunAudioLLM/SenseVoiceSmall` | |
 | `VAD_MODEL` | `funasr/fsmn-vad` | checks a sound has speech in it before ASR (SenseVoice turns a breath into "Yeah."); empty turns it off |
 | `ZH_VARIANT` | `tw` | `tw` converts recognised Chinese to Traditional (Taiwan); `cn` leaves it as is |
+| `FLOW_STEPS` | `4` | the flow's ODE steps (CosyVoice's own: 10); fewer is a sooner first sound |
+| `TTS_FP16` | off | `1` runs CosyVoice in half precision: first sound 0.72 → 0.52 s on a DGX Spark, the same words heard back |
+| `TTS_FIRST_HOP` | 25 | speech tokens in the first chunk; `12` with `TTS_FP16=1` gave 0.44 s and no stalls (without fp16 it stalls) |
+| `TTS_HOP_SCALE` / `TTS_VLLM` | 2 / off | how fast later chunks grow; CosyVoice's vLLM path (doesn't load with this image's transformers) |
+
+spark B runs `TTS_FP16=1 TTS_FIRST_HOP=12` (11/24, the owner listened and chose it).

@@ -267,7 +267,7 @@ The audio of the conversation travels between the app and OpenTeddy over the tun
 - chat with `stream` and `"voice": true` for the answer,
 - `audio/speech` for speaking, one clause at a time.
 
-On the DGX Spark pair, the first sound comes about 1.8–2.0 s after the person stops talking. The app only needs LiveKit's SDK and a room token; see `contrib/livekit/README.md`.
+On the DGX Spark pair, the first sound comes about 1.6 s after the person stops talking (median of 5 calls, 11/24). The app only needs LiveKit's SDK and a room token; see `contrib/livekit/README.md`.
 
 Without LiveKit there are two ways to build it. Pick one.
 
