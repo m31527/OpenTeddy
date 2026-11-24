@@ -3182,6 +3182,11 @@ class Orchestrator:
         async def _memory() -> str:
             if self.memory is None or not self.memory.is_available:
                 return ""
+            # A spoken turn skips it: memory here is this session's older
+            # results (the last turns come in `recent` anyway), and finding
+            # them took 120 ms of a 250 ms first word (spark-a, 11/24).
+            if (req.context or {}).get("voice"):
+                return ""
             try:
                 return await self.memory.get_context_for_task(
                     req.goal, session_id=req.session_id,

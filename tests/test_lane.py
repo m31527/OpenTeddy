@@ -231,11 +231,17 @@ def test_gate() -> None:
         fake.memory = types.SimpleNamespace(is_available=True, get_context_for_task=mem_ctx, summarize_and_store=_noop)
         fake._maybe_promote_pattern_to_skill = _noop
         r = await O.Orchestrator._fast_chat_response(fake, req, "chat", {"confidence": 0.9})
-        fake.memory = None
         assert r.status == TaskStatus.COMPLETED and r.summary == "今天是星期四。", r
         assert asked_memory == [{"lessons": False, "heading": "【之前的筆記，僅供參考】"}], asked_memory
         user_msg = sent[-1][1]["messages"][1]["content"]
         assert "上週查過天氣" in user_msg and "memory" not in user_msg.lower(), user_msg
+        # A spoken turn doesn't wait for memory (120 ms of the first word); the
+        # conversation so far still comes in through the recent turns.
+        spoken = TaskRequest(goal="今天星期幾", session_id="s", mode="chat",
+                             context={"mode_override": True, "gate": "code", "voice": True})
+        await O.Orchestrator._fast_chat_response(fake, spoken, "chat", {"confidence": 0.9})
+        assert len(asked_memory) == 1 and "上週查過天氣" not in sent[-1][1]["messages"][1]["content"]
+        fake.memory = None
         reply.clear()
         reply.update({"content": "好的，我去 momo 幫你查，請稍候…"})
         try:
