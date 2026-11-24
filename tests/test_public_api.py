@@ -15,6 +15,9 @@ API keys and the /v1 API (api_keys.py, public_api.py).
   G. Realtime: key by header or subprotocol, a session made and named in
      "ready", turns run as the key, another key's session refused.
   H. privacy.resolve: the key's person only through the api_key door.
+  L. LiveKit: /v1/livekit/token makes the key's conversation and a room, sends
+     the agent with a grant, signs the app's join token; a grant acts as its
+     key in that one conversation only, and dies with expiry or the key.
 
     .venv/bin/python tests/test_public_api.py
 """
@@ -717,6 +720,123 @@ def test_datasets(c, token, token2):
             setattr(knowledge, n, v)
 
 
+# ── L. LiveKit ───────────────────────────────────────────────────────────────
+
+def _jwt_claims(tok, secret):
+    import base64, hashlib, hmac
+    head, body, sig = tok.split(".")
+    good = base64.urlsafe_b64encode(hmac.new(secret.encode(), f"{head}.{body}".encode(),
+                                             hashlib.sha256).digest()).rstrip(b"=").decode()
+    assert sig == good, "signed with the LiveKit secret"
+    assert json.loads(base64.urlsafe_b64decode(head + "==")) == {"alg": "HS256", "typ": "JWT"}
+    return json.loads(base64.urlsafe_b64decode(body + "=" * (-len(body) % 4)))
+
+
+def test_livekit(c, token, token2):
+    import time
+    H = {"Authorization": f"Bearer {token}"}
+    CHAT = "/v1/chat/completions"
+    kid = run(api_keys.verify(token))["id"]
+    r = c.post("/v1/livekit/token", headers=H, json={})
+    assert r.status_code == 503 and r.json()["error"]["code"] == "not_configured", r.text
+    env = {"LIVEKIT_URL": "wss://lk.example.com", "LIVEKIT_API_URL": "http://lk.internal:7880",
+           "LIVEKIT_API_KEY": "APIk", "LIVEKIT_API_SECRET": "s" * 40}
+    saved_env = {k: os.environ.get(k) for k in env}
+    os.environ.update(env)
+    calls, real = [], public_api._livekit
+
+    async def fake(cfg, method, body, video):
+        calls.append((cfg["api"], method, body, video))
+        return {}
+    public_api._livekit = fake
+    try:
+        r = c.post("/v1/livekit/token", headers=H,
+                   json={"agent": "品牌客戶・王經理", "instructions": "很趕交期", "identity": "trainee-1", "name": "小林"})
+        assert r.status_code == 200, r.text
+        d = r.json()
+        sid, room = d["session_id"], d["room"]
+        assert d["url"] == "wss://lk.example.com" and d["agent"] == "品牌客戶・王經理" and d["instructions"] is True
+        assert d["identity"] == "trainee-1" and d["expires_in"] == 900 and TR.sessions[sid]["agent_id"] == "ag1"
+        claims = _jwt_claims(d["token"], env["LIVEKIT_API_SECRET"])
+        assert claims["iss"] == "APIk" and claims["sub"] == "trainee-1" and claims["name"] == "小林"
+        assert claims["video"] == {"room": room, "roomJoin": True, "canPublish": True, "canSubscribe": True,
+                                   "canPublishData": True}, claims
+        assert 0 < claims["exp"] - time.time() <= 900
+        (api1, m1, b1, v1), (api2, m2, b2, v2) = calls
+        assert api1 == "http://lk.internal:7880" and m1 == "RoomService/CreateRoom" and b1["name"] == room
+        assert v1 == {"roomCreate": True}
+        assert m2 == "AgentDispatchService/CreateDispatch" and b2["agent_name"] == "openteddy" and b2["room"] == room
+        assert v2 == {"roomAdmin": True, "room": room}
+        meta = json.loads(b2["metadata"])
+        grant = meta["grant"]
+        assert meta["session_id"] == sid and grant.startswith("otg-") and grant not in d["token"] + json.dumps(b1)
+        print("  ✓ token: the key's conversation (agent, instructions), a room, the agent sent with a grant only it sees, a signed join token")
+
+        G = {"Authorization": f"Bearer {grant}"}
+        PLAN.update(message="交期能多快？", delay=0.0, shortcut=None, words=None)
+        r = c.post(CHAT, headers=G, json={"messages": [{"role": "user", "content": "您好"}], "session_id": sid})
+        assert r.status_code == 200 and r.json()["session_id"] == sid, r.text
+        assert CALLS[-1]["api_key_id"] == kid and CALLS[-1]["context"]["agent_persona"] == "很趕交期"
+        r = c.post(CHAT, headers=G, json={"messages": [{"role": "user", "content": "x"}]})
+        assert r.status_code == 403 and r.json()["error"]["code"] == "grant_scope"
+        other = c.post(CHAT, headers=H, json={"messages": [{"role": "user", "content": "別的"}]}).json()["session_id"]
+        r = c.post(CHAT, headers=G, json={"messages": [{"role": "user", "content": "x"}], "session_id": other})
+        assert r.status_code == 403, "a grant is for its one conversation, not the key's others"
+        assert c.get("/v1/models", headers=G).status_code == 401, "a grant is no key"
+        assert c.post("/v1/livekit/token", headers=G, json={}).status_code == 401
+        assert run(public_api._key_or_grant(grant))["grant_session"] == sid
+        print("  ✓ a grant acts as the key in its conversation only; anywhere else it is refused")
+
+        bad = grant[:-3] + ("AAA" if not grant.endswith("AAA") else "BBB")
+        assert c.post(CHAT, headers={"Authorization": f"Bearer {bad}"},
+                      json={"messages": [{"role": "user", "content": "x"}], "session_id": sid}).status_code == 401
+        old = run(api_keys.issue_grant(kid, sid, -1))
+        assert c.post(CHAT, headers={"Authorization": f"Bearer {old}"},
+                      json={"messages": [{"role": "user", "content": "x"}], "session_id": sid}).status_code == 401
+        k2 = run(api_keys.verify(token2))["id"]
+        stray = run(api_keys.issue_grant(k2, sid, 60))                # a grant of another key, for this session
+        r = c.post(CHAT, headers={"Authorization": f"Bearer {stray}"},
+                   json={"messages": [{"role": "user", "content": "x"}], "session_id": sid})
+        assert r.status_code == 404, "a grant never reaches past its own key"
+        tmp_row, tmp = run(api_keys.create("暫時 App"))
+        t = c.post("/v1/livekit/token", headers={"Authorization": f"Bearer {tmp}"}, json={}).json()
+        tg = json.loads(calls[-1][2]["metadata"])["grant"]
+        ok = c.post(CHAT, headers={"Authorization": f"Bearer {tg}"},
+                    json={"messages": [{"role": "user", "content": "x"}], "session_id": t["session_id"]})
+        assert ok.status_code == 200
+        run(api_keys.revoke(tmp_row["id"]))
+        r = c.post(CHAT, headers={"Authorization": f"Bearer {tg}"},
+                   json={"messages": [{"role": "user", "content": "x"}], "session_id": t["session_id"]})
+        assert r.status_code == 401, "revoking the key ends its calls"
+        print("  ✓ a tampered or expired grant, another key's grant, a revoked key's grant: refused")
+
+        n = len(calls)
+        r = c.post("/v1/livekit/token", headers=H, json={"session_id": sid}).json()
+        assert r["session_id"] == sid and json.loads(calls[-1][2]["metadata"])["session_id"] == sid
+        r = c.post("/v1/livekit/token", headers=H, json={"session_id": sid, "agent": "ag1"})
+        assert r.status_code == 400 and r.json()["error"]["param"] == "agent"
+        r = c.post("/v1/livekit/token", headers={"Authorization": f"Bearer {token2}"}, json={"session_id": sid})
+        assert r.status_code == 404
+        r = c.post("/v1/livekit/token", headers=H, json={"identity": "a b"})
+        assert r.status_code == 400 and r.json()["error"]["param"] == "identity"
+        assert len(calls) == n + 2, "nothing opened for a refused request"
+
+        async def down(cfg, method, body, video):
+            raise public_api.ApiError(502, "LiveKit is unreachable (ConnectError).", type_="api_error",
+                                      code="livekit_unreachable")
+        public_api._livekit = down
+        r = c.post("/v1/livekit/token", headers=H, json={})
+        assert r.status_code == 502 and r.json()["error"]["code"] == "livekit_unreachable"
+        print("  ✓ an earlier conversation goes on in a new room; another key's / agent on it / bad identity → refused; LiveKit down → 502")
+    finally:
+        public_api._livekit = real
+        for k, v in saved_env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+
 # ── H. privacy ───────────────────────────────────────────────────────────────
 
 def test_privacy():
@@ -743,6 +863,7 @@ if __name__ == "__main__":
         print("I. datasets"); test_datasets(client, TOKEN, TOKEN2)
         print("J. streaming speech to text"); test_stt_stream(client, TOKEN)
         print("K. roles"); test_roles(client, TOKEN)
+        print("L. livekit"); test_livekit(client, TOKEN, TOKEN2)
     print("E. api-only port"); test_only_v1(TOKEN)
     print("H. privacy"); test_privacy()
     print("\nALL PUBLIC API TESTS PASS")

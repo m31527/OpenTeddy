@@ -11,6 +11,8 @@ like OpenAI's, so its SDKs work with base_url=<OpenTeddy>/v1 and the key.
   WS   /v1/audio/stt-stream                speech → text as it is spoken (partial / final)
   POST /v1/audio/speech                    text → speech (wav or raw pcm)
   WS   /v1/realtime                        a spoken conversation (voice_bridge.py's protocol)
+  POST /v1/livekit/token                   a LiveKit room with OpenTeddy's agent in it, and the
+                                           app's token to join it (contrib/livekit/)
 
 Every route needs a key; errors come back the OpenAI way ({"error": {…}}).
 A turn runs exactly like one typed in the web UI (gate, knowledge base,
@@ -93,6 +95,24 @@ async def require_key(request: Request) -> Dict[str, Any]:
         raise ApiError(401, "Missing API key: send Authorization: Bearer ot-… (Settings → API 金鑰).",
                        code="missing_api_key")
     key = await api_keys.verify(token)
+    if key is None:
+        raise ApiError(401, "Incorrect API key provided, or it was revoked.", code="invalid_api_key")
+    return key
+
+
+async def _key_or_grant(token: str) -> Optional[Dict[str, Any]]:
+    """A key, or a grant (api_keys.issue_grant) acting as one: a LiveKit
+    room's agent listening, speaking and answering in its one conversation."""
+    if token.startswith(api_keys.GRANT_PREFIX):
+        return await api_keys.verify_grant(token)
+    return await api_keys.verify(token)
+
+
+async def require_key_or_grant(request: Request) -> Dict[str, Any]:
+    token = api_keys.token_from(request.headers)
+    if not token:
+        return await require_key(request)               # the missing-key error
+    key = await _key_or_grant(token)
     if key is None:
         raise ApiError(401, "Incorrect API key provided, or it was revoked.", code="invalid_api_key")
     return key
@@ -290,7 +310,7 @@ async def _pending(task_id: str) -> List[dict]:
 
 
 @router.post("/chat/completions")
-async def chat_completions(request: Request, key: Dict[str, Any] = Depends(require_key)) -> Response:
+async def chat_completions(request: Request, key: Dict[str, Any] = Depends(require_key_or_grant)) -> Response:
     try:
         body = await request.json()
     except ValueError:
@@ -310,6 +330,9 @@ async def chat_completions(request: Request, key: Dict[str, Any] = Depends(requi
     # OpenTeddy keeps the conversation itself: name a session to go on in
     # it, or leave it out and the earlier messages come along this once.
     session_id = str(body.get("session_id") or request.headers.get("x-openteddy-session") or "").strip()
+    if key.get("grant_session") is not None and session_id != key["grant_session"]:
+        raise ApiError(403, "This grant is for one conversation: send its session_id.", code="grant_scope",
+                       param="session_id")
     context: Dict[str, Any] = {"api": True}
     if body.get("voice"):
         # The answer will be read aloud (a LiveKit agent, an app's own TTS): the
@@ -576,7 +599,7 @@ async def _to_pcm(data: bytes, content_type: str, filename: str) -> bytes:
 @router.post("/audio/transcriptions")
 async def transcriptions(file: UploadFile = File(...), model: str = Form("sensevoice"),
                          language: Optional[str] = Form(None), response_format: str = Form("json"),
-                         key: Dict[str, Any] = Depends(require_key)) -> Response:
+                         key: Dict[str, Any] = Depends(require_key_or_grant)) -> Response:
     fmt = (response_format or "json").lower()
     if fmt not in ("json", "text", "verbose_json"):
         raise ApiError(400, "response_format: json, text or verbose_json.", param="response_format")
@@ -615,7 +638,7 @@ def _wav(pcm: bytes, rate: int) -> bytes:
 
 
 @router.post("/audio/speech")
-async def speech(request: Request, key: Dict[str, Any] = Depends(require_key)) -> Response:
+async def speech(request: Request, key: Dict[str, Any] = Depends(require_key_or_grant)) -> Response:
     try:
         body = await request.json()
     except ValueError:
@@ -677,9 +700,9 @@ async def stt_stream(ws: WebSocket) -> None:
     """→ binary PCM16 mono 16 kHz in small chunks (20–40 ms), and optionally
     {"type":"config","endpoint_ms":600,"interim":true}, {"type":"flush"},
     {"type":"reset"}. ← {"type":"speech_started"}, {"type":"partial","text"},
-    {"type":"final","text"}. The key as for /v1/realtime."""
+    {"type":"final","text"}. The key as for /v1/realtime (or a room's grant)."""
     token = api_keys.token_from(ws.headers)
-    key = await api_keys.verify(token) if token else None
+    key = await _key_or_grant(token) if token else None
     if key is None:
         await ws.close(code=4401)
         return
@@ -791,6 +814,30 @@ async def stt_stream(ws: WebSocket) -> None:
 
 # ── Realtime: a spoken conversation ──────────────────────────────────────────
 
+async def _bind_conversation(key: Dict[str, Any], sid: str, opts: Dict[str, Any], first: str) -> Dict[str, Any]:
+    """A spoken conversation's session: `sid` (the key's own) or a new one —
+    from `agent` when one is named — with its datasets and role
+    (`instructions`). What the app is told back: session_id, and datasets /
+    agent / instructions when set. Everything is checked before a new
+    session is made."""
+    if sid and not await api_keys.owns_session(key["id"], sid):
+        raise ApiError(404, f"No session {sid} for this key.", code="session_not_found", param="session_id")
+    if sid and opts.get("agent") is not None:
+        raise ApiError(400, "agent sets the role of a new conversation: leave session_id out to start one.",
+                       param="agent")
+    new_id = sid or str(uuid.uuid4())
+    agent = await _resolve_agent(opts["agent"]) if opts.get("agent") is not None and not sid else None
+    role = _instructions(opts.get("instructions"))
+    ds = await _pick_datasets(new_id, opts.get("datasets"), agent)
+    if not sid:
+        await _new_session(key, first, sid=new_id, agent=agent)
+    if role is not None:
+        await api_keys.set_instructions(new_id, role)
+    return {"session_id": new_id, **({"datasets": await _dataset_names(ds)} if ds is not None else {}),
+            **({"agent": agent.get("name", "")} if agent else {}),
+            **({"instructions": True} if await api_keys.get_instructions(new_id) else {})}
+
+
 @router.websocket("/realtime")
 async def realtime(ws: WebSocket) -> None:
     """voice_bridge.py's conversation for an app. The key comes as
@@ -811,27 +858,12 @@ async def realtime(ws: WebSocket) -> None:
         return err
 
     async def bind(sid: str, hello: Dict[str, Any]) -> Dict[str, Any]:
-        """The hello's session (the key's own) or a new one — from `agent` when
-        one is named — with its datasets and role (`instructions`)."""
-        if sid and not await api_keys.owns_session(key["id"], sid):
-            raise ValueError(f"No session {sid} for this key.")
-        new_id = sid or str(uuid.uuid4())
         try:
-            if sid and hello.get("agent") is not None:
-                raise ApiError(400, "agent sets the role of a new conversation: leave session_id out to start one.",
-                               param="agent")
-            agent = await _resolve_agent(hello["agent"]) if hello.get("agent") is not None and not sid else None
-            role = _instructions(hello.get("instructions"))
-            ds = await _pick_datasets(new_id, hello.get("datasets"), agent)
+            return await _bind_conversation(key, sid, hello, "語音對話")
         except ApiError as exc:
+            if exc.code == "session_not_found":
+                raise ValueError(exc.message)
             raise refuse(exc)
-        if not sid:
-            await _new_session(key, "語音對話", sid=new_id, agent=agent)
-        if role is not None:
-            await api_keys.set_instructions(new_id, role)
-        return {"session_id": new_id, **({"datasets": await _dataset_names(ds)} if ds is not None else {}),
-                **({"agent": agent.get("name", "")} if agent else {}),
-                **({"instructions": True} if await api_keys.get_instructions(new_id) else {})}
 
     async def control(data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         kind = data.get("type")
@@ -859,6 +891,100 @@ async def realtime(ws: WebSocket) -> None:
     await conv.run()
     with contextlib.suppress(Exception):
         await ws.close()
+
+
+# ── LiveKit: a room with OpenTeddy's agent in it ─────────────────────────────
+#
+# An app with its key asks for a call; OpenTeddy makes the conversation (as
+# for /v1/realtime: agent, instructions, datasets), opens a LiveKit room,
+# sends its agent (contrib/livekit/agent.py) into it with a grant for that
+# one conversation, and hands the app a token to join. The app needs no
+# LiveKit secret and no server of its own for it.
+#
+#   LIVEKIT_URL         what the app connects to (wss://lk.example.com)
+#   LIVEKIT_API_URL     where OpenTeddy reaches LiveKit's server API
+#                       (default: LIVEKIT_URL as http)
+#   LIVEKIT_API_KEY, LIVEKIT_API_SECRET   the LiveKit server's key pair
+#   LIVEKIT_AGENT_NAME  the agent's name (its AGENT_NAME), default "openteddy"
+
+LK_TOKEN_TTL_S = 900          # time to join; LiveKit refreshes it while the app stays connected
+GRANT_TTL_S = 6 * 3600        # the longest call
+LK_EMPTY_TIMEOUT_S = 120      # a room nobody joins closes after this
+
+
+def _livekit_config() -> Dict[str, str]:
+    url = os.environ.get("LIVEKIT_URL", "").strip()
+    key, secret = os.environ.get("LIVEKIT_API_KEY", "").strip(), os.environ.get("LIVEKIT_API_SECRET", "").strip()
+    if not (url and key and secret):
+        raise ApiError(503, "LiveKit isn't set up on this OpenTeddy (LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET).",
+                       type_="api_error", code="not_configured")
+    api = os.environ.get("LIVEKIT_API_URL", "").strip() or re.sub(r"^ws", "http", url)
+    return {"url": url, "api": api.rstrip("/"), "key": key, "secret": secret,
+            "agent": os.environ.get("LIVEKIT_AGENT_NAME", "").strip() or "openteddy"}
+
+
+def _jwt(secret: str, claims: Dict[str, Any]) -> str:
+    """An HS256 JWT, the kind LiveKit takes for joining and for its server API."""
+    import base64, hashlib, hmac  # noqa: E401
+    b64 = lambda raw: base64.urlsafe_b64encode(raw).rstrip(b"=").decode()  # noqa: E731
+    head = b64(json.dumps({"alg": "HS256", "typ": "JWT"}, separators=(",", ":")).encode())
+    body = b64(json.dumps(claims, separators=(",", ":"), ensure_ascii=False).encode())
+    sig = b64(hmac.new(secret.encode(), f"{head}.{body}".encode(), hashlib.sha256).digest())
+    return f"{head}.{body}.{sig}"
+
+
+async def _livekit(cfg: Dict[str, str], method: str, body: Dict[str, Any], video: Dict[str, Any]) -> Dict[str, Any]:
+    """One call to LiveKit's server API (Twirp, JSON), e.g. "RoomService/CreateRoom"."""
+    now = int(time.time())
+    token = _jwt(cfg["secret"], {"iss": cfg["key"], "nbf": now - 5, "exp": now + 60, "video": video})
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(10.0, connect=3.0)) as c:
+            r = await c.post(f"{cfg['api']}/twirp/livekit.{method}", json=body,
+                             headers={"Authorization": f"Bearer {token}"})
+    except httpx.HTTPError as exc:
+        raise ApiError(502, f"LiveKit is unreachable ({type(exc).__name__}).", type_="api_error",
+                       code="livekit_unreachable")
+    if r.status_code >= 400:
+        raise ApiError(502, f"LiveKit refused {method}: {r.text[:200]}", type_="api_error", code="livekit_error")
+    return r.json() if r.content else {}
+
+
+@router.post("/livekit/token")
+async def livekit_token(request: Request, key: Dict[str, Any] = Depends(require_key)) -> dict:
+    """{session_id?, agent?, instructions?, datasets?, identity?, name?} →
+    {url, token, room, identity, expires_in, session_id, datasets?, agent?, instructions?}"""
+    cfg = _livekit_config()
+    try:
+        body = await request.json() if (await request.body()).strip() else {}
+    except ValueError:
+        raise ApiError(400, "The body must be JSON.")
+    if not isinstance(body, dict):
+        raise ApiError(400, "The body must be a JSON object.")
+    identity = str(body.get("identity") or f"app-{uuid.uuid4().hex[:8]}")
+    if not re.fullmatch(r"[\w.@:-]{1,64}", identity):
+        raise ApiError(400, "identity: up to 64 letters, digits, and . _ - @ :", param="identity")
+    name = " ".join(str(body.get("name") or "").split())[:64]
+
+    conv = await _bind_conversation(key, str(body.get("session_id") or "").strip(), body, "語音通話")
+    room = f"ot-{uuid.uuid4().hex[:12]}"
+    await _livekit(cfg, "RoomService/CreateRoom",
+                   {"name": room, "empty_timeout": LK_EMPTY_TIMEOUT_S, "departure_timeout": 20, "max_participants": 4},
+                   {"roomCreate": True})
+    grant = await api_keys.issue_grant(key["id"], conv["session_id"], GRANT_TTL_S)
+    # The grant rides in the dispatch, which only the agent sees — not in the
+    # room's metadata, which every participant can read.
+    await _livekit(cfg, "AgentDispatchService/CreateDispatch",
+                   {"agent_name": cfg["agent"], "room": room,
+                    "metadata": json.dumps({"session_id": conv["session_id"], "grant": grant})},
+                   {"roomAdmin": True, "room": room})
+    now = int(time.time())
+    token = _jwt(cfg["secret"], {"iss": cfg["key"], "sub": identity, "nbf": now - 5, "exp": now + LK_TOKEN_TTL_S,
+                                 **({"name": name} if name else {}),
+                                 "video": {"room": room, "roomJoin": True, "canPublish": True,
+                                           "canSubscribe": True, "canPublishData": True}})
+    logger.info("livekit: room %s for key %s, conversation %s", room, key["id"], conv["session_id"])
+    return {"url": cfg["url"], "token": token, "room": room, "identity": identity,
+            "expires_in": LK_TOKEN_TTL_S, **conv}
 
 
 # ── Wiring ───────────────────────────────────────────────────────────────────

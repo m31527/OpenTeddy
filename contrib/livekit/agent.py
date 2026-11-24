@@ -16,16 +16,21 @@ through the three streaming interfaces of its /v1 API (docs/api.md):
 
 Run (README.md):
 
-    OPENTEDDY_URL=http://192.168.100.1:8000/v1  OPENTEDDY_KEY=ot-…
+    OPENTEDDY_URL=http://192.168.100.1:8000/v1
     LIVEKIT_URL=ws://127.0.0.1:7880  LIVEKIT_API_KEY=…  LIVEKIT_API_SECRET=…
     python agent.py start
 
-The room's metadata (JSON) sets the conversation up, or the caller's
-participant attributes of the same names:
+The agent goes where it is sent (explicit dispatch, AGENT_NAME, default
+"openteddy"). Usually OpenTeddy sends it: an app asks POST /v1/livekit/token
+with its key, OpenTeddy makes the conversation and the room, and dispatches
+the agent with {"session_id", "grant"} — a grant that acts as the app's key
+in that one conversation, so the call is the app's own, with its agent,
+instructions and datasets. One room = one OpenTeddy conversation.
+
+A room made some other way (your own server, with the LiveKit secret, and a
+dispatch without a grant) uses OPENTEDDY_KEY, and its metadata (JSON), or the
+caller's attributes of the same names, sets the conversation up:
     {"datasets": ["客服 FAQ"], "agent": "品牌客戶・王經理", "instructions": "…"}
-— the knowledge base to answer from, an Agent defined in OpenTeddy whose
-role it plays, and a role the app writes itself (docs/api.md). One room =
-one OpenTeddy session, remembered for as long as the room lives.
 """
 from __future__ import annotations
 
@@ -59,8 +64,8 @@ VAD_SILENCE_S = float(os.environ.get("VAD_SILENCE_S", "0.3"))
 ENDPOINT_MIN_S = float(os.environ.get("ENDPOINT_MIN_S", "0.05"))
 
 
-def _headers() -> dict:
-    return {"Authorization": f"Bearer {OT_KEY}"}
+def _headers(token: str) -> dict:
+    return {"Authorization": f"Bearer {token}"}
 
 
 # ── STT: WS /v1/audio/stt-stream ─────────────────────────────────────────────
@@ -69,8 +74,9 @@ class OpenTeddySTT(stt.STT):
     """SenseVoice through OpenTeddy. manual_flush: at the end of speech LiveKit
     flushes the stream, and OpenTeddy answers with the final (~40 ms)."""
 
-    def __init__(self) -> None:
+    def __init__(self, token: str) -> None:
         super().__init__(capabilities=stt.STTCapabilities(streaming=True, interim_results=True, manual_flush=True))
+        self.token = token                          # a key, or the room's grant
 
     @property
     def model(self) -> str:
@@ -85,7 +91,7 @@ class OpenTeddySTT(stt.STT):
         from livekit import rtc
         frame = rtc.combine_audio_frames(buffer) if isinstance(buffer, list) else buffer
         async with httpx.AsyncClient(timeout=conn_options.timeout) as c:
-            r = await c.post(f"{OT_URL}/audio/transcriptions", headers=_headers(),
+            r = await c.post(f"{OT_URL}/audio/transcriptions", headers=_headers(self.token),
                              files={"file": ("speech.wav", frame.to_wav_bytes(), "audio/wav")})
             r.raise_for_status()
         return _event(stt.SpeechEventType.FINAL_TRANSCRIPT, r.json().get("text", ""))
@@ -105,7 +111,8 @@ class OpenTeddySpeechStream(stt.SpeechStream):
 
     async def _run(self) -> None:
         url = OT_URL.replace("http", "ws", 1) + "/audio/stt-stream"
-        async with websockets.connect(url, additional_headers=_headers(), max_size=None) as ws:
+        token = self._stt.token                                         # type: ignore[attr-defined]
+        async with websockets.connect(url, additional_headers=_headers(token), max_size=None) as ws:
             await ws.send(json.dumps({"type": "config", "endpoint_ms": 0, "interim": True}))
 
             async def send() -> None:
@@ -138,10 +145,11 @@ class OpenTeddyLLM(llm.LLM):
     """OpenTeddy keeps the conversation (its session: memory, knowledge base,
     datasets), so only the newest user message is sent each turn."""
 
-    def __init__(self, datasets: Optional[List[str]] = None, agent: Optional[str] = None,
-                 instructions: Optional[str] = None) -> None:
+    def __init__(self, token: str, session_id: Optional[str] = None, datasets: Optional[List[str]] = None,
+                 agent: Optional[str] = None, instructions: Optional[str] = None) -> None:
         super().__init__()
-        self.session_id: Optional[str] = None
+        self.token = token
+        self.session_id: Optional[str] = session_id         # set up by OpenTeddy already, or made on the first turn
         self.datasets, self.agent, self.instructions = datasets, agent, instructions
 
     @property
@@ -182,7 +190,7 @@ class OpenTeddyLLMStream(llm.LLMStream):
         logger.info("timeline %.3f llm request (%d chars)", time.time(), len(said))
         first = True
         async with httpx.AsyncClient(timeout=httpx.Timeout(300.0, connect=5.0)) as c:
-            async with c.stream("POST", f"{OT_URL}/chat/completions", headers=_headers(), json=body) as r:
+            async with c.stream("POST", f"{OT_URL}/chat/completions", headers=_headers(ot.token), json=body) as r:
                 r.raise_for_status()
                 async for line in r.aiter_lines():
                     if not line.startswith("data: ") or line == "data: [DONE]":
@@ -204,8 +212,9 @@ class OpenTeddyLLMStream(llm.LLMStream):
 class OpenTeddyTTS(tts.TTS):
     """One sentence per call; StreamAdapter feeds the sentences as the LLM writes them."""
 
-    def __init__(self) -> None:
+    def __init__(self, token: str) -> None:
         super().__init__(capabilities=tts.TTSCapabilities(streaming=False), sample_rate=TTS_RATE, num_channels=1)
+        self.token = token
 
     @property
     def model(self) -> str:
@@ -228,7 +237,8 @@ class OpenTeddyChunkedStream(tts.ChunkedStream):
         logger.info("timeline %.3f tts request (%d chars)", time.time(), len(self.input_text))
         first = True
         async with httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=5.0)) as c:
-            async with c.stream("POST", f"{OT_URL}/audio/speech", headers=_headers(),
+            token = self._tts.token                                     # type: ignore[attr-defined]
+            async with c.stream("POST", f"{OT_URL}/audio/speech", headers=_headers(token),
                                 json={"model": "cosyvoice", "input": self.input_text, "response_format": "pcm"}) as r:
                 r.raise_for_status()
                 async for chunk in r.aiter_bytes():
@@ -315,18 +325,48 @@ def prewarm(proc: JobProcess) -> None:
     proc.userdata["vad"] = silero.VAD.load(min_silence_duration=VAD_SILENCE_S)
 
 
+def _dispatch(ctx: JobContext) -> dict:
+    """What OpenTeddy sent with this job: {"session_id", "grant"}, or {}."""
+    try:
+        meta = json.loads(getattr(ctx.job, "metadata", "") or "{}")
+    except ValueError:
+        return {}
+    return meta if isinstance(meta, dict) and meta.get("grant") and meta.get("session_id") else {}
+
+
+JOIN_WAIT_S = float(os.environ.get("AGENT_JOIN_WAIT_S", "120"))
+
+
 async def entrypoint(ctx: JobContext) -> None:
+    job = _dispatch(ctx)
+    token = job.get("grant") or OT_KEY
+    if not token:
+        logger.error("room %s: no grant in the dispatch and no OPENTEDDY_KEY — leaving", ctx.job.room.name)
+        return
     await ctx.connect()
-    participant = await ctx.wait_for_participant()
-    settings = _room_settings(ctx, participant)
-    logger.info("room %s: a caller joined, datasets %s, agent %s, instructions %s", ctx.room.name,
-                settings.get("datasets"), settings.get("agent"), "yes" if settings.get("instructions") else "no")
+    try:
+        participant = await asyncio.wait_for(ctx.wait_for_participant(), JOIN_WAIT_S)
+    except asyncio.TimeoutError:
+        logger.info("room %s: nobody joined in %.0f s — leaving", ctx.room.name, JOIN_WAIT_S)
+        ctx.shutdown("nobody joined")
+        return
+    if job:
+        # OpenTeddy made the conversation for the app (POST /v1/livekit/token):
+        # its agent, instructions and datasets are already on it.
+        llm_ = OpenTeddyLLM(token, session_id=job["session_id"])
+        logger.info("room %s: a caller joined, conversation %s (from OpenTeddy)", ctx.room.name, job["session_id"])
+    else:
+        settings = _room_settings(ctx, participant)
+        llm_ = OpenTeddyLLM(token, datasets=settings.get("datasets"), agent=settings.get("agent"),
+                            instructions=settings.get("instructions"))
+        logger.info("room %s: a caller joined, datasets %s, agent %s, instructions %s", ctx.room.name,
+                    settings.get("datasets"), settings.get("agent"), "yes" if settings.get("instructions") else "no")
     session = AgentSession(
         vad=ctx.proc.userdata.get("vad") or silero.VAD.load(min_silence_duration=VAD_SILENCE_S),
-        stt=OpenTeddySTT(),
-        llm=OpenTeddyLLM(settings.get("datasets"), settings.get("agent"), settings.get("instructions")),
+        stt=OpenTeddySTT(token),
+        llm=llm_,
         # Speak the first clause as soon as it is written (ClauseFirstTokenizer).
-        tts=tts.StreamAdapter(tts=OpenTeddyTTS(), sentence_tokenizer=ClauseFirstTokenizer()),
+        tts=tts.StreamAdapter(tts=OpenTeddyTTS(token), sentence_tokenizer=ClauseFirstTokenizer()),
         turn_handling={"endpointing": {"min_delay": ENDPOINT_MIN_S, "max_delay": 2.0},
                        # Off: a half-finished question would become a turn in OpenTeddy's session.
                        "preemptive_generation": {"enabled": False}},
@@ -345,7 +385,9 @@ async def entrypoint(ctx: JobContext) -> None:
 
 if __name__ == "__main__":
     if not OT_KEY:
-        raise SystemExit("OPENTEDDY_KEY is not set (Settings → 🔑 API 金鑰)")
+        logger.warning("OPENTEDDY_KEY is not set: only rooms OpenTeddy opens (with a grant) will work")
     cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, prewarm_fnc=prewarm,
+                              # Explicit dispatch: it joins the rooms it is sent to, not every room.
+                              agent_name=os.environ.get("AGENT_NAME", "openteddy"),
                               num_idle_processes=int(os.environ.get("AGENT_IDLE_PROCESSES", "1")),
                               host=os.environ.get("AGENT_HTTP_HOST", "127.0.0.1")))     # its health check, local only

@@ -5,6 +5,7 @@ This is the LiveKit voice integration spec (`docs/LiveKit 語音整合規格.md`
 LiveKit carries the audio between the app and the agent: WebRTC, echo cancellation, jitter buffering, turn-taking and barge-in. OpenTeddy listens, answers and speaks. It keeps the CosyVoice voice, SenseVoice and the knowledge base.
 
 ```
+App ──POST /v1/livekit/token (its ot- key)──▶ OpenTeddy: conversation + room + agent dispatched → {url, token}
 App (livekit_client) ──WebRTC──▶ LiveKit Server ◀──▶ agent.py ──▶ OpenTeddy /v1
                                                      Silero VAD     ├ WS   /audio/stt-stream   SenseVoice: partial / final
                                                      turn-taking    ├ POST /chat/completions   stream, voice: word by word, KB + session + datasets
@@ -73,7 +74,7 @@ LIVEKIT_URL=ws://127.0.0.1:7880
 LIVEKIT_API_KEY=…
 LIVEKIT_API_SECRET=…
 OPENTEDDY_URL=http://192.168.100.1:8000/v1     # spark A over the link
-OPENTEDDY_KEY=ot-…                              # its own key: Settings → 🔑 API 金鑰
+OPENTEDDY_KEY=ot-…                              # optional: only for rooms made without OpenTeddy (below)
 ```
 
 ```bash
@@ -82,7 +83,7 @@ docker run -d --name openteddy-livekit-agent --restart unless-stopped --network 
   --env-file ~/livekit-agent/agent.env openteddy-livekit-agent
 ```
 
-The agent joins every new room. Each room is one OpenTeddy session, so OpenTeddy remembers the conversation for as long as the room lasts. The agent's conversations show in OpenTeddy's session list as `🔑 <key name> · 語音對話`.
+The agent joins the rooms it is **sent** to (LiveKit's explicit dispatch, under the name `AGENT_NAME`, default `openteddy`), not every room. Each room is one OpenTeddy conversation.
 
 You can tune it with these environment variables:
 
@@ -92,49 +93,57 @@ You can tune it with these environment variables:
 | `ENDPOINT_MIN_S` | 0.05 | Extra wait after the VAD before the turn is committed. |
 | `OPENTEDDY_TTS_RATE` | 24000 | CosyVoice 3's output sample rate. |
 | `AGENT_IDLE_PROCESSES` | 1 | Warm worker processes. Add one for each call you expect at the same time. |
+| `AGENT_NAME` | openteddy | The name OpenTeddy dispatches it by (`LIVEKIT_AGENT_NAME` on OpenTeddy's side). |
+| `AGENT_JOIN_WAIT_S` | 120 | How long it waits in a room for the caller before it leaves. |
 
 Each turn logs a timeline: flush, final, LLM request and first piece, TTS request and first audio. It logs character counts, never the words.
 
-### 3. Try a call
+### 3. OpenTeddy (spark A)
 
-```bash
-set -a; . ~/livekit-agent/agent.env; set +a
-python try_call.py --runs 3 [--datasets 客服FAQ]
+OpenTeddy opens the rooms. Add these to its `.env` and restart it:
+
+```
+LIVEKIT_URL=wss://lk.example.com              # what apps connect to (ws://192.168.100.2:7880 on the LAN)
+LIVEKIT_API_URL=http://192.168.100.2:7880     # where OpenTeddy reaches LiveKit's server API
+LIVEKIT_API_KEY=…                              # the same pair as in livekit.yaml
+LIVEKIT_API_SECRET=…
 ```
 
-`try_call.py` joins a room as a person, says a question into the microphone track, and times the first sound of the answer.
+### 4. Try a call
+
+```bash
+OPENTEDDY_URL=http://127.0.0.1:8100/v1 OPENTEDDY_KEY=ot-… \
+  python try_call.py --runs 3 [--agent 品牌客戶・王經理] [--datasets 客服FAQ]
+```
+
+`try_call.py` asks for a room the way an app does, joins it as a person, says a question into the microphone track, and times the first sound of the answer. Set `LIVEKIT_URL` to join a different address than the one OpenTeddy hands out.
 
 ## For the app team (Flutter, `livekit_client`)
 
-1. Get a room token from your backend (next section), never from the app itself.
-2. Connect: `Room().connect(url, token)`.
+1. **Ask OpenTeddy for a call** with the app's OpenTeddy key, the same `ot-…` key as for the rest of the API:
+
+   ```
+   POST /v1/livekit/token
+   Authorization: Bearer ot-…
+   {"agent": "品牌客戶・王經理", "instructions": "這次他很趕交期。", "datasets": [], "identity": "trainee-17"}
+   → {"url": "wss://…", "token": "…", "room": "ot-…", "session_id": "…", "agent": "品牌客戶・王經理", …}
+   ```
+
+   Everything in the body is optional (`docs/api.md`, "Voice through LiveKit"). Send `session_id` to go on with an earlier conversation.
+2. Connect: `Room().connect(url, token)`. Join within 15 minutes.
 3. Publish the microphone: `room.localParticipant.setMicrophoneEnabled(true)`.
 4. Play the agent's audio track. The SDK subscribes automatically.
 5. Show the transcripts, if you want them. The person's words arrive on the `lk.transcription` text stream as they are recognised; this was seen in `try_call.py`. The agent's own answer text did **not** arrive there in our tests. That is open: the agent can publish it on a topic of its own if the app needs it.
 
-Nothing else is needed. There is no OpenTeddy protocol to speak and no PCM to handle. Barge-in works by itself: talk over the agent and it stops.
+Nothing else is needed. There is no OpenTeddy protocol to speak and no PCM to handle, and no LiveKit secret anywhere near the app. Barge-in works by itself: talk over the agent and it stops.
 
-## For the backend: room tokens
+The call is the app's own: it shows in OpenTeddy's session list as `🔑 <key name> · …`, the key's own conversation, and `session_id` continues it later in chat or in another call. The agent never holds the key. OpenTeddy hands it a grant that acts as the key in that one conversation, for at most six hours, and that ends when the key is revoked.
 
-The app logs in with Firebase as it does now. Your backend checks the ID token, then signs a LiveKit token, for example with `livekit-api` (Python):
+**The key in a customer's app.** As for the rest of the API, an app that customers install shouldn't carry the key (`docs/api.md`, "Keeping the key safe"). Its server calls `/v1/livekit/token` and passes `url` and `token` on. The token is only good for joining that one room.
 
-```python
-from livekit import api
-token = (api.AccessToken(LIVEKIT_API_KEY, LIVEKIT_API_SECRET)
-         .with_identity(firebase_uid)
-         .with_grants(api.VideoGrants(room_join=True, room=f"call-{firebase_uid}-{uuid4().hex[:6]}"))
-         .to_jwt())
-```
+## Rooms of your own
 
-**Setting up the conversation.** Create the room (`RoomService.CreateRoom`) with metadata such as `{"datasets": ["客服 FAQ"], "agent": "品牌客戶・王經理", "instructions": "這次他很趕交期。"}`. Participant attributes of the same names also work; for `datasets` the attribute holds a JSON list. All three are optional:
-
-- `datasets`: the knowledge base the conversation answers from. It must be turned on in OpenTeddy (知識庫).
-- `agent`: an Agent defined in OpenTeddy whose role the conversation plays, for example a customer for new-staff training. Its 知識庫 setting applies when the room names no `datasets`.
-- `instructions`: a role the app writes itself.
-
-See "Roles" and "Datasets" in `docs/api.md`. Leaving `datasets` out means the datasets the owner marked "always". For a training room where OpenTeddy plays a customer, set that Agent to 不使用知識庫 or the room to `"datasets": []`, so the customer doesn't quote the brand's FAQ.
-
-The LiveKit secret and the OpenTeddy key stay on servers.
+A backend that holds the LiveKit secret can still open rooms itself: create the room, then dispatch the agent (`AgentDispatchService.CreateDispatch`, agent name `openteddy`) without a grant. The agent then uses its own `OPENTEDDY_KEY`, and the room's metadata sets the conversation up, for example `{"datasets": ["客服 FAQ"], "agent": "品牌客戶・王經理", "instructions": "這次他很趕交期。"}`. Participant attributes of the same names also work; for `datasets` the attribute holds a JSON list.
 
 ## For DevOps: reaching it from outside
 

@@ -4,7 +4,7 @@ The `/v1` API lets an app talk to OpenTeddy. An app can:
 
 - chat,
 - turn speech into text and text into speech,
-- hold a spoken conversation in real time,
+- hold a spoken conversation in real time, over its WebSocket or as a LiveKit call,
 - answer from the knowledge-base datasets it names.
 
 Building a voice app? Read [Building a voice app](#building-a-voice-app) at the end.
@@ -61,6 +61,9 @@ Errors come back with an HTTP status, shaped as OpenAI shapes them:
 | 400 | `unsupported_audio` and others | The request itself is wrong |
 | 503 | `voice_not_configured` / `voice_off` | There is no voice service, or voice is turned off in Settings |
 | 502 | `voice_unreachable` | The voice service didn't answer |
+| 503 | `not_configured` | LiveKit isn't set up on this OpenTeddy (`/v1/livekit/token`) |
+| 502 | `livekit_unreachable` / `livekit_error` | The LiveKit server didn't answer, or refused |
+| 403 | `grant_scope` | A LiveKit room's grant used outside its one conversation |
 
 ## Chat: `POST /v1/chat/completions`
 
@@ -133,7 +136,7 @@ With both, the Agent's persona comes first and the instructions add to it ("this
 |---|---|
 | Chat | Body fields `agent` and `instructions`. `agent` only applies when starting a conversation (no `session_id`); `instructions` can be sent with any turn. With the OpenAI SDK, put them in `extra_body`. |
 | Realtime voice | Put `agent` and `instructions` in the hello; `ready` names the agent and says `"instructions": true`. To change the role mid-call, send `{"type": "instructions", "instructions": "…"}`. |
-| LiveKit | Room metadata `{"agent": "…", "instructions": "…"}`, next to `datasets`. |
+| LiveKit | `agent` and `instructions` in the [`/v1/livekit/token`](#voice-through-livekit-post-v1livekittoken) body, next to `datasets`. |
 
 Writing a good role:
 
@@ -173,7 +176,7 @@ The list gives names and sizes, not contents. `enabled: false` means the knowled
 
 - **In chat:** `datasets` in the body. With the OpenAI SDK, use `extra_body={"datasets": ["客服 FAQ"]}`.
 - **In realtime voice:** `datasets` in the hello. To change them mid-conversation, send `{"type": "datasets", "datasets": [...]}`.
-- **Through LiveKit:** `datasets` in the room's metadata (`contrib/livekit/README.md`).
+- **Through LiveKit:** `datasets` in the [`/v1/livekit/token`](#voice-through-livekit-post-v1livekittoken) body.
 
 A conversation **keeps** the datasets it named. Later turns use them until the app names others; there is no need to send them every time.
 
@@ -308,15 +311,45 @@ Noise that isn't speech starts nothing: the voice service checks for a voice fir
 
 The audio of the conversation travels between the app and OpenTeddy over the tunnel. Between OpenTeddy and its voice service it stays on the local network.
 
+## Voice through LiveKit: `POST /v1/livekit/token`
+
+A phone-call style conversation over WebRTC, with OpenTeddy's agent in a LiveKit room (`contrib/livekit/`). The app asks with its key, as for everything else here, and gets back what LiveKit's SDK needs to join:
+
+```bash
+curl https://api.example.com/v1/livekit/token -H "Authorization: Bearer $OPENTEDDY_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"agent": "品牌客戶・王經理", "instructions": "這次他很趕交期。", "identity": "trainee-17", "name": "小林"}'
+```
+
+```json
+{"url": "wss://lk.example.com", "token": "eyJ…", "room": "ot-3f9a…", "identity": "trainee-17",
+ "expires_in": 900, "session_id": "…", "agent": "品牌客戶・王經理", "instructions": true}
+```
+
+Then `Room().connect(url, token)`, turn the microphone on, and play what the agent says.
+
+| Body field | |
+|---|---|
+| `agent`, `instructions`, `datasets` | The conversation's role and knowledge, as for chat and realtime ([Roles](#roles-who-openteddy-plays), [Datasets](#datasets-which-knowledge-to-answer-from)). |
+| `session_id` | Go on with an earlier conversation of this key, in a new room. |
+| `identity`, `name` | Who the app is in the room: up to 64 of letters, digits, `. _ - @ :`, and a display name. |
+
+- Each call is a new room, and the room is one conversation of this key: in OpenTeddy's session list as `🔑 <key name> · …`, and `session_id` goes on with it in chat or another call.
+- The token is good for joining that one room. Join within `expires_in` seconds; LiveKit keeps it fresh while the app stays connected. A room nobody joins closes after two minutes.
+- The agent never holds the key. OpenTeddy gives it a grant that acts as the key in that one conversation, for at most six hours, and that ends when the key is revoked.
+- An app customers install shouldn't carry the key: its server asks for the token and passes `url` and `token` on (see [Keeping the key safe](#keeping-the-key-safe)).
+
+`not_configured` means this OpenTeddy has no LiveKit set up (`contrib/livekit/README.md`, "OpenTeddy").
+
 ## Building a voice app
 
-**For the quickest answers, use LiveKit.** LiveKit carries the audio over WebRTC, with echo cancellation and barge-in. OpenTeddy's agent in `contrib/livekit/` connects the three streams above to it:
+**For the quickest answers, use LiveKit** ([above](#voice-through-livekit-post-v1livekittoken)). LiveKit carries the audio over WebRTC, with echo cancellation and barge-in. OpenTeddy's agent in `contrib/livekit/` connects the three streams above to it:
 
 - `stt-stream` for listening,
 - chat with `stream` and `"voice": true` for the answer,
 - `audio/speech` for speaking, one clause at a time.
 
-On the DGX Spark pair, the first sound comes about 1.6 s after the person stops talking (median of 5 calls, 11/24). The app only needs LiveKit's SDK and a room token; see `contrib/livekit/README.md`.
+On the DGX Spark pair, the first sound comes about 1.6 s after the person stops talking (median of 5 calls, 11/24). The app only needs LiveKit's SDK and a token from `POST /v1/livekit/token`; see `contrib/livekit/README.md`.
 
 Without LiveKit there are two ways to build it. Pick one.
 

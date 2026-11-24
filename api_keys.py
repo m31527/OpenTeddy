@@ -18,8 +18,12 @@ opens, and every one of them needs a key.
 """
 from __future__ import annotations
 
+import base64
 import hashlib
+import hmac
+import json
 import secrets
+import time
 import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Mapping, Optional, Tuple
@@ -44,6 +48,8 @@ _TABLES = (
     "CREATE TABLE IF NOT EXISTS api_session_settings ("
     " session_id TEXT PRIMARY KEY, instructions TEXT NOT NULL DEFAULT '',"
     " no_datasets INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL)",
+    # OpenTeddy's own secrets (the key that signs conversation grants).
+    "CREATE TABLE IF NOT EXISTS api_meta (name TEXT PRIMARY KEY, value TEXT NOT NULL)",
 )
 _ready_for: Optional[str] = None          # the db path the tables were made in
 
@@ -213,3 +219,70 @@ async def set_no_datasets(session_id: str, none: bool) -> None:
 
 async def no_datasets(session_id: str) -> bool:
     return bool(await _get(session_id, "no_datasets"))
+
+
+# ── Grants: a key, for one conversation, for a while ─────────────────────────
+#
+# A LiveKit room's agent speaks for the app that opened the room
+# (POST /v1/livekit/token): it needs to act as that app's key, in that one
+# conversation, without ever holding the key. OpenTeddy hands it a grant
+# instead — "otg-<payload>.<signature>", signed with a secret of its own —
+# that /v1 takes in place of the key for listening, speaking and the turns
+# of that conversation. It ends when it expires or the key is revoked.
+
+GRANT_PREFIX = "otg-"
+
+
+async def _grant_secret() -> bytes:
+    await _ensure()
+    async with aiosqlite.connect(_db()) as db:
+        async with db.execute("SELECT value FROM api_meta WHERE name='grant_secret'") as cur:
+            row = await cur.fetchone()
+        if row is None:
+            await db.execute("INSERT OR IGNORE INTO api_meta (name, value) VALUES ('grant_secret', ?)",
+                             (secrets.token_hex(32),))
+            await db.commit()
+            async with db.execute("SELECT value FROM api_meta WHERE name='grant_secret'") as cur:
+                row = await cur.fetchone()
+    return bytes.fromhex(row[0])
+
+
+def _b64(raw: bytes) -> str:
+    return base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
+
+
+def _unb64(text: str) -> bytes:
+    return base64.urlsafe_b64decode(text + "=" * (-len(text) % 4))
+
+
+async def issue_grant(key_id: str, session_id: str, ttl_s: int) -> str:
+    payload = _b64(json.dumps({"k": key_id, "s": session_id, "e": int(time.time()) + int(ttl_s)},
+                              separators=(",", ":")).encode())
+    sig = _b64(hmac.new(await _grant_secret(), payload.encode(), hashlib.sha256).digest())
+    return f"{GRANT_PREFIX}{payload}.{sig}"
+
+
+async def verify_grant(token: str) -> Optional[Dict[str, Any]]:
+    """The key's record, with "grant_session", when `token` is a live grant
+    of a live key."""
+    token = (token or "").strip()
+    if not token.startswith(GRANT_PREFIX) or len(token) > 1000 or "." not in token:
+        return None
+    payload, _, sig = token[len(GRANT_PREFIX):].partition(".")
+    good = _b64(hmac.new(await _grant_secret(), payload.encode(), hashlib.sha256).digest())
+    if not hmac.compare_digest(sig, good):
+        return None
+    try:
+        claims = json.loads(_unb64(payload))
+    except ValueError:
+        return None
+    if not isinstance(claims, dict) or int(claims.get("e") or 0) < time.time():
+        return None
+    async with aiosqlite.connect(_db()) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT * FROM api_keys WHERE id=? AND revoked_at IS NULL",
+                              (str(claims.get("k") or ""),)) as cur:
+            row = await cur.fetchone()
+    if row is None:
+        return None
+    return {**_public(row), "grant_session": str(claims.get("s") or "")}
