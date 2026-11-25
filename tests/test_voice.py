@@ -15,6 +15,12 @@ The 🎙 voice mode (voice_bridge.py) against a fake voice service.
      install — build when missing or older than contrib/voice, start or
      replace the container, follow the download, turn voice mode on at the
      end; failures said with their reason; turning it off stops the service
+  E. speaking while the answer is being written
+  F. the voices in Settings: the list with which one speaks, hearing one,
+     the words in a recording, adding a voice (only with the person's word
+     that it is theirs to use; the voice that spoke until then keeps
+     speaking), removing one (the choice falls back), a voice service from
+     before voices could be added
 
     .venv/bin/python tests/test_voice.py
 """
@@ -719,12 +725,150 @@ async def test_streamed_speech() -> None:
             await t
 
 
+# ── F. the voices in Settings ────────────────────────────────────────────────
+
+def fake_voice_library(state: dict) -> FastAPI:
+    """A voice service with voices that can be added and removed (POST/DELETE /voices)."""
+    import base64
+    from fastapi import HTTPException
+    app = FastAPI()
+
+    def names():
+        return sorted(state["voices"]) + ["sample"]
+
+    @app.get("/health")
+    async def health():
+        return {"ok": True, "tts_sample_rate": RATE, "voices": names()}
+
+    @app.get("/voices")
+    async def voices():
+        out = {"voices": names()}
+        if not state.get("old"):
+            out["details"] = [{"name": n, "builtin": n == "sample", "seconds": 7.0,
+                               "text": state["voices"].get(n, "希望你以后能够做的比我还好呦。")} for n in names()]
+        return out
+
+    @app.post("/voices")
+    async def add(request: Request):
+        body = await request.json()
+        state["got"] = {**body, "wav": base64.b64decode(body["wav"])}
+        if body["name"] in names():
+            raise HTTPException(409, f"there is already a voice named {body['name']}")
+        state["voices"][body["name"]] = body["text"]
+        return {"voice": body["name"], "voices": names()}
+
+    @app.delete("/voices/{name}")
+    async def remove(name: str):
+        if name == "sample":
+            raise HTTPException(400, "sample is built in and can't be removed")
+        if name not in state["voices"]:
+            raise HTTPException(404, f"no voice named {name}")
+        del state["voices"][name]
+        return {"voices": names()}
+
+    @app.post("/asr")
+    async def asr(request: Request):
+        state["asr"] = (request.headers.get("content-type"), await request.body())
+        return {"text": "來自日本東京生物科技。", "language": "zh"}
+
+    @app.post("/tts")
+    async def tts(request: Request):
+        state.setdefault("spoken", []).append(await request.json())
+
+        async def chunks():
+            for _ in range(3):
+                yield b"\x01\x00" * 480
+        return StreamingResponse(chunks(), media_type=f"audio/L16; rate={RATE}")
+    return app
+
+
+async def test_voice_library() -> None:
+    import tempfile
+    import httpx
+    import main as M
+    M.settings_store._db_path = os.path.join(tempfile.mkdtemp(), "settings.db")
+    await M.settings_store.init()
+    app = FastAPI()
+    app.router.routes.extend(r for r in M.app.routes if getattr(r, "path", "").startswith(
+        ("/voice/voices", "/voice/transcribe", "/voice/preview")))
+    state: dict = {"voices": {"female1": "來自日本東京生物科技。", "male1": "例如王經理用男聲。"}}
+    svc, svc_task, svc_port = await serve(fake_voice_library(state))
+    saved = (config.voice_service_url, config.voice_enabled, getattr(config, "voice_name", ""))
+    await M.settings_store.update_many({"voice_service_url": f"http://127.0.0.1:{svc_port}", "voice_enabled": "true",
+                                        "voice_name": ""})
+    await config.reload_from_store(M.settings_store)
+    wav = V.wav(b"\x00\x10" * RATE * 5, RATE)                      # 5 s
+    try:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://ot") as c:
+            d = (await c.get("/voice/voices")).json()
+            assert [v["name"] for v in d["voices"]] == ["female1", "male1", "sample"], d
+            assert d["selected"] == "" and d["default"] == "female1" and d["can_add"], d
+            assert d["voices"][0]["text"] == "來自日本東京生物科技。" and d["voices"][2]["builtin"]
+            print("  ✓ the list: each voice's words and length, which one speaks (none chosen: the first)")
+
+            r = await c.post("/voice/preview", json={"voice": "male1", "text": "你好。"})
+            assert r.status_code == 200 and r.headers["content-type"] == "audio/wav" and r.content[:4] == b"RIFF", r
+            assert state["spoken"][-1] == {"text": "你好。", "voice": "male1"}, state["spoken"]
+            await c.post("/voice/preview", json={"voice": "sample"})
+            assert state["spoken"][-1]["text"] == M.VOICE_PREVIEW_TEXT
+            assert (await c.post("/voice/preview", json={"voice": "nobody"})).status_code == 404
+            print("  ✓ ▶ a sentence in the voice asked for, as a WAV; an unknown voice → 404")
+
+            r = await c.post("/voice/transcribe", content=wav, headers={"Content-Type": "audio/wav"})
+            assert r.json()["text"] == "來自日本東京生物科技。" and state["asr"] == ("audio/wav", wav), r.json()
+            assert (await c.post("/voice/transcribe", content=b"")).status_code == 400
+            print("  ✓ the words in a recording, from the voice service's speech recognition")
+
+            form = {"name": "aaa", "text": "來自日本東京生物科技。"}
+            files = {"file": ("voice.wav", wav, "audio/wav")}
+            r = await c.post("/voice/voices", data=form, files=files)
+            assert r.status_code == 400 and "consent" in r.json()["detail"] and "aaa" not in state["voices"], r.text
+            r = await c.post("/voice/voices", data={**form, "consent": "true"}, files=files)
+            assert r.status_code == 200, r.text
+            d = r.json()
+            assert state["got"] == {"name": "aaa", "text": "來自日本東京生物科技。", "wav": wav}, "the recording as sent"
+            assert [v["name"] for v in d["voices"]] == ["aaa", "female1", "male1", "sample"], d
+            assert d["selected"] == d["default"] == "female1" and config.voice_name == "female1", \
+                "a new voice that sorts first doesn't take over: the one that spoke keeps speaking"
+            r = await c.post("/voice/voices", data={**form, "consent": "true"}, files=files)
+            assert r.status_code == 409 and "already" in r.json()["detail"], r.text
+            r = await c.post("/voice/voices", data={**form, "consent": "true"},
+                             files={"file": ("big.wav", b"0" * (M.MAX_VOICE_UPLOAD + 1), "audio/wav")})
+            assert r.status_code == 413, r.text
+            print("  ✓ adding: only with the person's word; the service's refusal passed on; too large → 413")
+
+            await M.settings_store.update_many({"voice_name": "aaa"})
+            await config.reload_from_store(M.settings_store)
+            d = (await c.delete("/voice/voices/aaa")).json()
+            assert "aaa" not in state["voices"] and d["selected"] == "" and d["default"] == "female1", d
+            assert config.voice_name == "", "the chosen voice is gone: back to the first"
+            r = await c.delete("/voice/voices/sample")
+            assert r.status_code == 400 and "built in" in r.json()["detail"], r.text
+            assert (await c.delete("/voice/voices/nobody")).status_code == 404
+            print("  ✓ removing: the choice falls back when its voice goes; built-in ones stay")
+
+            state["old"] = True
+            d = (await c.get("/voice/voices")).json()
+            assert not d["can_add"] and [v["name"] for v in d["voices"]] == ["female1", "male1", "sample"], d
+            state["old"] = False
+            await M.settings_store.update_many({"voice_service_url": "http://127.0.0.1:1"})
+            await config.reload_from_store(M.settings_store)
+            r = await c.get("/voice/voices")
+            assert r.status_code == 502 and "didn't answer" in r.json()["detail"], r.text
+            print("  ✓ a voice service from before can't add (said so); one that doesn't answer → 502")
+    finally:
+        svc.should_exit = True
+        await svc_task
+        config.voice_service_url, config.voice_enabled, config.voice_name = saved
+
+
 async def main() -> None:
     print("A. read aloud"); test_spoken()
     print("B. a conversation"); await test_conversation()
     print("C. guards"); await test_guards()
     print("D. turning it on"); await test_setup()
     print("E. speaking while the answer is written"); test_next_sentence(); await test_streamed_speech()
+    print("F. the voices in Settings"); await test_voice_library()
     print("\nALL VOICE TESTS PASS")
 
 

@@ -33,10 +33,14 @@ Protocol (JSON text frames, audio as binary frames):
 from __future__ import annotations
 
 import asyncio
+import base64
+import io
 import json
 import logging
 import re
 import time
+import urllib.parse
+import wave
 from typing import Any, AsyncIterator, Awaitable, Callable, Dict, List, Optional, Tuple
 
 import httpx
@@ -130,6 +134,62 @@ async def speak(text: str, client: httpx.AsyncClient, voice: str = "") -> AsyncI
                 carry = b""
             if chunk:
                 yield chunk
+
+
+def wav(pcm: bytes, rate: int) -> bytes:
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        w.writeframes(pcm)
+    return buf.getvalue()
+
+
+# ── The voices (Settings → Voice) ────────────────────────────────────────────
+
+class ServiceError(Exception):
+    """The voice service said no (its words), or didn't answer (502)."""
+
+    def __init__(self, status: int, message: str) -> None:
+        super().__init__(message)
+        self.status = status
+
+
+async def _call(method: str, path: str, **kw: Any) -> Dict[str, Any]:
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(90.0, connect=5.0)) as c:
+            r = await c.request(method, f"{_base()}{path}", **kw)
+    except httpx.HTTPError as exc:
+        raise ServiceError(502, f"the voice service didn't answer: {type(exc).__name__}: {exc}")
+    if r.status_code >= 400:
+        try:
+            detail = r.json().get("detail")
+        except ValueError:
+            detail = None
+        raise ServiceError(r.status_code if r.status_code < 500 else 502,
+                           str(detail or r.text[:300] or f"HTTP {r.status_code}"))
+    return r.json()
+
+
+async def library() -> Dict[str, Any]:
+    """{"voices": names, "details": [{name, builtin, seconds, text}]} — a
+    voice service from before voices could be added has no "details"."""
+    return await _call("GET", "/voices")
+
+
+async def add_voice(name: str, text: str, recording: bytes) -> Dict[str, Any]:
+    """A new voice from a WAV recording and what is said in it, word for word."""
+    return await _call("POST", "/voices", json={"name": name, "text": text,
+                                                "wav": base64.b64encode(recording).decode()})
+
+
+async def remove_voice(name: str) -> Dict[str, Any]:
+    return await _call("DELETE", f"/voices/{urllib.parse.quote(name, safe='')}")
+
+
+async def transcribe_wav(recording: bytes) -> Dict[str, Any]:
+    return await _call("POST", "/asr", content=recording, headers={"Content-Type": "audio/wav"})
 
 
 # ── Text that is read aloud ──────────────────────────────────────────────────

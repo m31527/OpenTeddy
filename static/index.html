@@ -1441,6 +1441,16 @@
     .btn-ghost:hover { background: var(--bg-secondary); }
 
     .btn-sm { padding: 0.32rem 0.7rem; font-size: 0.8rem; }
+    /* Settings → 🎙 the voices */
+    .voice-row { display: flex; align-items: center; gap: 0.5rem; padding: 0.45rem 0.55rem; border: 1px solid var(--border);
+                 border-radius: 8px; margin-bottom: 0.35rem; min-width: 0; }
+    .voice-row .mem-btn { flex-shrink: 0; }
+    .voice-row.on { border-color: var(--accent-border); background: var(--accent-faint); }
+    .voice-pick { flex: 1; min-width: 0; display: flex; align-items: flex-start; gap: 0.5rem; cursor: pointer; }
+    .voice-pick input { margin-top: 3px; accent-color: var(--accent); flex-shrink: 0; }
+    .voice-name { color: var(--text-primary); font-weight: 500; }
+    .voice-meta { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden;
+                  overflow-wrap: anywhere; color: var(--text-muted); font-size: 0.72rem; line-height: 1.45; }
 
     /* ── Status Badges ───────────────────────────────────────────────────── */
     .status-badge {
@@ -5651,14 +5661,76 @@
                 <span data-i18n="voice_enable_label">Voice conversation on</span>
               </label>
               <div id="voiceSettingsStatus" style="font-size:0.78rem;color:var(--text-secondary);line-height:1.6;margin-bottom:0.8rem"></div>
-              <div class="row" style="margin-bottom:0.6rem;align-items:flex-end;gap:0.6rem;flex-wrap:wrap">
-                <div class="field" style="flex:1;min-width:180px">
-                  <label data-i18n="voice_name_label">Voice</label>
-                  <select id="sel_voice_name" onchange="saveVoiceName(this.value)"></select>
+              <!-- The voices: pick the one OpenTeddy speaks with, hear each,
+                   add one from a recording (POST /voice/voices). -->
+              <div style="margin-bottom:0.8rem">
+                <div style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;margin-bottom:0.35rem">
+                  <div style="flex:1;font-size:0.75rem;color:var(--text-muted);font-weight:500" data-i18n="voice_name_label">Voice</div>
+                  <button type="button" class="mem-btn" id="voiceAddBtn" onclick="openVoiceAdd()" style="font-size:0.74rem" hidden>
+                    <span>＋</span><span data-i18n="voice_add_btn">Add a voice</span>
+                  </button>
+                  <button type="button" class="mem-btn" id="voiceUpdateBtn" onclick="openVoiceSetup()" style="font-size:0.74rem" hidden>
+                    <span data-i18n="voice_update_btn">Update the voice service</span>
+                  </button>
                 </div>
-                <button type="button" class="mem-btn" id="voiceUpdateBtn" onclick="openVoiceSetup()" style="font-size:0.78rem" hidden>
-                  <span data-i18n="voice_update_btn">Update the voice service</span>
-                </button>
+                <div id="voiceList" style="font-size:0.8rem"></div>
+                <div id="voiceAddOld" hidden style="font-size:0.74rem;color:var(--text-muted);margin-top:0.35rem" data-i18n="voice_add_old">
+                  This voice service can't add voices yet — update it to the latest contrib/voice.
+                </div>
+              </div>
+              <div id="voiceAdd" hidden style="border:1px solid var(--border-strong);border-radius:10px;padding:0.8rem;margin-bottom:0.9rem">
+                <div style="font-weight:600;color:var(--text-primary);margin-bottom:0.25rem" data-i18n="voice_add_title">Add a voice</div>
+                <div style="font-size:0.76rem;color:var(--text-secondary);line-height:1.55;margin-bottom:0.7rem" data-i18n="voice_add_desc">
+                  A clear recording of one person speaking, no music or other voices. OpenTeddy imitates 3–10 seconds of it — no training needed.
+                </div>
+                <div style="display:flex;gap:0.5rem;flex-wrap:wrap;align-items:center;margin-bottom:0.7rem">
+                  <button type="button" class="mem-btn" onclick="document.getElementById('voiceAddFile').click()" style="font-size:0.76rem">
+                    <span>📁</span><span data-i18n="voice_add_file">Choose a recording</span>
+                  </button>
+                  <input type="file" id="voiceAddFile" hidden accept="audio/*,.m4a,.mp3,.wav,.aac,.ogg,.webm,.flac" onchange="voiceAddFromFile(this)" />
+                  <button type="button" class="mem-btn" id="voiceRecBtn" onclick="voiceAddRecord()" style="font-size:0.76rem">
+                    <span id="voiceRecIcon">⏺</span><span id="voiceRecLabel" data-i18n="voice_add_record">Record</span>
+                  </button>
+                  <span id="voiceAddSrc" style="flex:1 1 160px;min-width:0;font-size:0.74rem;color:var(--text-muted);overflow-wrap:anywhere"></span>
+                </div>
+                <div id="voiceAddEdit" hidden>
+                  <canvas id="voiceAddWave" height="64" onclick="voiceAddSeek(event)"
+                          style="width:100%;height:64px;display:block;border-radius:8px;background:var(--bg-secondary);cursor:pointer"></canvas>
+                  <div style="display:flex;gap:0.9rem;flex-wrap:wrap;align-items:center;margin:0.55rem 0 0.75rem">
+                    <label style="flex:1;min-width:150px;font-size:0.74rem;color:var(--text-secondary)">
+                      <span data-i18n="voice_add_start">Starts at</span> <span id="voiceAddStartLbl"></span>
+                      <input type="range" id="voiceAddStart" min="0" max="0" step="0.1" value="0" oninput="voiceAddRange()" style="width:100%" />
+                    </label>
+                    <label style="flex:1;min-width:150px;font-size:0.74rem;color:var(--text-secondary)">
+                      <span data-i18n="voice_add_len">Length</span> <span id="voiceAddLenLbl"></span>
+                      <input type="range" id="voiceAddLen" min="3" max="10" step="0.1" value="8" oninput="voiceAddRange()" style="width:100%" />
+                    </label>
+                    <button type="button" class="mem-btn" id="voiceAddPlayBtn" onclick="voiceAddPlay()" style="font-size:0.76rem">
+                      <span>▶</span><span data-i18n="voice_add_play">Play this part</span>
+                    </button>
+                  </div>
+                  <div class="field" style="margin-bottom:0.6rem">
+                    <label for="voiceAddText" data-i18n="voice_add_text">What is said in it, word for word</label>
+                    <textarea id="voiceAddText" rows="2" maxlength="300" style="min-height:56px" oninput="VADD.edited = true"></textarea>
+                    <div style="display:flex;gap:0.6rem;align-items:center;margin-top:0.3rem;font-size:0.72rem;color:var(--text-muted)">
+                      <span id="voiceAddTextNote" style="flex:1" data-i18n="voice_add_text_hint">Filled in by speech recognition — correct it so it matches the recording exactly.</span>
+                      <button type="button" class="mem-btn" onclick="voiceAddHear(true)" style="font-size:0.72rem" data-i18n="voice_add_rehear">Recognise again</button>
+                    </div>
+                  </div>
+                  <div class="field" style="margin-bottom:0.6rem">
+                    <label for="voiceAddName" data-i18n="voice_add_name">Name</label>
+                    <input type="text" id="voiceAddName" maxlength="32" autocomplete="off" spellcheck="false"
+                           data-i18n-placeholder="voice_add_name_ph" placeholder="e.g. alex, or 王經理" />
+                  </div>
+                  <label style="display:flex;align-items:flex-start;gap:0.5rem;cursor:pointer;font-size:0.76rem;color:var(--text-secondary);line-height:1.5;margin-bottom:0.75rem">
+                    <input type="checkbox" id="voiceAddConsent" style="margin-top:3px" />
+                    <span data-i18n="voice_add_consent">This is my voice, or I have the right to use it. A voice belongs to a person.</span>
+                  </label>
+                </div>
+                <div style="display:flex;gap:0.5rem;justify-content:flex-end">
+                  <button type="button" class="mem-btn" onclick="closeVoiceAdd()" style="font-size:0.76rem" data-i18n="btn_cancel">Cancel</button>
+                  <button type="button" class="btn-primary btn-sm" id="voiceAddSaveBtn" onclick="voiceAddSave()" hidden data-i18n="voice_add_save">Add this voice</button>
+                </div>
               </div>
               <details style="font-size:0.78rem;color:var(--text-secondary)">
                 <summary style="cursor:pointer" data-i18n="voice_advanced">Voice service on another machine</summary>
@@ -11240,23 +11312,15 @@
       box.textContent = line;
       const url = document.getElementById('inp_voice_service_url');
       if (url && document.activeElement !== url) url.value = st.url || '';
-      const sel = document.getElementById('sel_voice_name');
-      if (sel) {
-        const cur = (window.__voiceName ?? '');
-        const names = Array.from(new Set([...(st.voices || []), ...(cur ? [cur] : [])]));
-        sel.innerHTML = `<option value="">${escHtml(t('voice_name_default'))}</option>`
-          + names.map(n => `<option value="${escHtml(n)}">${escHtml(n)}</option>`).join('');
-        sel.value = cur;
-      }
+      if (st.ok) { if (!VLIB.ok && !VLIB.loading) refreshVoiceLibrary(); }
+      else if (VLIB.ok || !document.getElementById('voiceList').childElementCount) { VLIB.ok = false; _voiceLibRender(); }
       document.getElementById('voiceUpdateBtn').hidden = !(s.outdated && s.installable && job.state !== 'running');
     }
 
     async function refreshVoiceSettings() {
-      try {
-        const d = await (await fetch(`${API}/settings`)).json();
-        window.__voiceName = d?.data?.voice_name?.value || '';
-      } catch {}
-      try { _vsUpdate(await _voiceStatusFetch()); } catch (e) { console.warn('[voice] status failed:', e); }
+      let st = null;
+      try { st = await _voiceStatusFetch(); _vsUpdate(st); } catch (e) { console.warn('[voice] status failed:', e); }
+      if (st && st.ok && !VLIB.loading) refreshVoiceLibrary();
     }
 
     async function toggleVoiceEnabled(el) {
@@ -11276,9 +11340,370 @@
       refreshVoiceSettings();
     }
 
-    async function saveVoiceName(v) {
-      try { await _kbSetting({ voice_name: v }); window.__voiceName = v; toast(t('voice_name_saved')); }
+    // ── Settings → the voices: pick, hear, remove (GET/DELETE /voice/voices) ──
+    const VLIB = { ok: false, loading: false, voices: [], selected: '', def: '', canAdd: false };
+    let _vlAudio = null;
+
+    function _vlApply(d) {
+      Object.assign(VLIB, { ok: true, voices: d.voices || [], selected: d.selected || '',
+                            def: d.default || '', canAdd: !!d.can_add });
+      _voiceLibRender();
+    }
+
+    async function refreshVoiceLibrary() {
+      VLIB.loading = true;
+      try {
+        const r = await fetch(`${API}/voice/voices`);
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.detail || r.statusText);
+        _vlApply(d);
+      } catch (e) { VLIB.ok = false; console.warn('[voice] voices failed:', e); _voiceLibRender(); }
+      finally { VLIB.loading = false; }
+    }
+
+    function _voiceLibRender() {
+      const box = document.getElementById('voiceList');
+      if (!box) return;
+      document.getElementById('voiceAddBtn').hidden = !(VLIB.ok && VLIB.canAdd);
+      document.getElementById('voiceAddOld').hidden = !(VLIB.ok && !VLIB.canAdd);
+      if (!VLIB.ok) {
+        box.innerHTML = `<div style="color:var(--text-muted);font-size:0.76rem">${escHtml(t('voice_list_off'))}</div>`;
+        return;
+      }
+      const rows = VLIB.voices.map(v => {
+        const on = v.name === VLIB.def;
+        const meta = [v.text ? `「${v.text}」` : '', v.seconds ? t('voice_seconds', { s: v.seconds }) : '',
+                      v.builtin ? t('voice_builtin') : ''].filter(Boolean).join(' · ');
+        return `<div class="voice-row${on ? ' on' : ''}">
+          <label class="voice-pick">
+            <input type="radio" name="voicePick" value="${escHtml(v.name)}" ${on ? 'checked' : ''} onchange="pickVoice(this.value)" />
+            <span style="min-width:0">
+              <span class="voice-name">${escHtml(v.name)}</span>
+              ${meta ? `<span class="voice-meta">${escHtml(meta)}</span>` : ''}
+            </span>
+          </label>
+          <button type="button" class="mem-btn" style="font-size:0.72rem" data-v="${escHtml(v.name)}"
+                  onclick="previewVoice(this.dataset.v, this)"><span>▶</span><span>${escHtml(t('voice_preview'))}</span></button>
+          ${v.builtin ? '' : `<button type="button" class="mem-btn" style="font-size:0.72rem" data-v="${escHtml(v.name)}"
+                  title="${escHtml(t('voice_remove'))}" aria-label="${escHtml(t('voice_remove'))}"
+                  onclick="removeVoice(this.dataset.v)">🗑</button>`}
+        </div>`;
+      }).join('');
+      const note = VLIB.selected && VLIB.selected === VLIB.def ? t('voice_list_hint')
+                 : t('voice_list_first', { name: VLIB.def || '—' });
+      box.innerHTML = (rows || `<div style="color:var(--text-muted)">${escHtml(t('voice_list_none'))}</div>`)
+        + `<div style="font-size:0.72rem;color:var(--text-muted);margin-top:0.4rem;line-height:1.5">${escHtml(note)}</div>`;
+    }
+
+    async function pickVoice(v) {
+      try { await _kbSetting({ voice_name: v }); VLIB.selected = VLIB.def = v; toast(t('voice_name_saved')); }
       catch (e) { toast(e.message, true); }
+      _voiceLibRender();
+    }
+
+    async function previewVoice(name, btn) {
+      if (_vlAudio) { _vlAudio.pause(); _vlAudio = null; }
+      const label = btn ? btn.innerHTML : '';
+      if (btn) { btn.disabled = true; btn.innerHTML = `<span>…</span><span>${escHtml(t('voice_preview_making'))}</span>`; }
+      try {
+        const r = await fetch(`${API}/voice/preview`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                                       body: JSON.stringify({ voice: name, text: t('voice_preview_text') }) });
+        if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.statusText);
+        const url = URL.createObjectURL(await r.blob());
+        const a = new Audio(url);
+        a.onended = () => URL.revokeObjectURL(url);
+        _vlAudio = a;
+        await a.play();
+      } catch (e) { toast(e.message, true); }
+      finally { if (btn) { btn.disabled = false; btn.innerHTML = label; } }
+    }
+
+    async function removeVoice(name) {
+      if (!confirm(t('voice_remove_confirm', { name }))) return;
+      try {
+        const r = await fetch(`${API}/voice/voices/${encodeURIComponent(name)}`, { method: 'DELETE' });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.detail || r.statusText);
+        _vlApply(d);
+        toast(t('voice_removed', { name }));
+      } catch (e) { toast(e.message, true); }
+    }
+
+    // ── Settings → add a voice: a file or a recording, decoded and cut here
+    //    (any format the browser plays → 24 kHz mono WAV), its words heard by
+    //    the voice service, sent with the person's word that they may use it.
+    const VADD_RATE = 24000, VADD_MIN = 3, VADD_MAX = 10, VADD_FPS = 50;
+    const VADD = { buf: null, peak: 1, start: 0, len: 8, edited: false, hearSeq: 0, hearTimer: 0,
+                   rec: null, recTimer: 0, ctx: null, play: null };
+
+    function openVoiceAdd() {
+      closeVoiceAdd();
+      Object.assign(VADD, { buf: null, start: 0, len: 8, edited: false });
+      for (const id of ['voiceAddText', 'voiceAddName']) document.getElementById(id).value = '';
+      document.getElementById('voiceAddConsent').checked = false;
+      document.getElementById('voiceAddSrc').textContent = '';
+      document.getElementById('voiceAddEdit').hidden = true;
+      document.getElementById('voiceAddSaveBtn').hidden = true;
+      document.getElementById('voiceAdd').hidden = false;
+    }
+
+    function closeVoiceAdd() {
+      if (VADD.rec) { VADD.rec.onstop = VADD.rec._cleanup; VADD.rec.stop(); }
+      _vaddStopPlay();
+      clearTimeout(VADD.hearTimer);
+      VADD.hearSeq++;
+      document.getElementById('voiceAdd').hidden = true;
+    }
+
+    async function voiceAddFromFile(inp) {
+      const f = inp.files && inp.files[0];
+      inp.value = '';
+      if (!f) return;
+      document.getElementById('voiceAddSrc').textContent = f.name;
+      try { await _vaddLoad(await f.arrayBuffer()); }
+      catch (e) { console.warn('[voice] decode failed:', e); toast(t('voice_add_cant_read'), true); }
+    }
+
+    function _vaddRecUi(on, secs) {
+      document.getElementById('voiceRecIcon').textContent = on ? '⏹' : '⏺';
+      document.getElementById('voiceRecLabel').textContent = on ? t('voice_add_stop', { s: secs || 0 }) : t('voice_add_record');
+    }
+
+    async function voiceAddRecord() {
+      if (VADD.rec) { VADD.rec.stop(); return; }
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || !window.MediaRecorder) {
+        toast(t('voice_need_https'), true);
+        return;
+      }
+      let stream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, autoGainControl: false, noiseSuppression: true } });
+      } catch { toast(t('voice_mic_denied'), true); return; }
+      _vaddStopPlay();
+      const rec = new MediaRecorder(stream), parts = [], at = Date.now();
+      rec._cleanup = () => {
+        stream.getTracks().forEach(tr => tr.stop());
+        clearInterval(VADD.recTimer);
+        VADD.rec = null;
+        _vaddRecUi(false);
+      };
+      rec.ondataavailable = (e) => { if (e.data && e.data.size) parts.push(e.data); };
+      rec.onstop = async () => {
+        rec._cleanup();
+        document.getElementById('voiceAddSrc').textContent = t('voice_add_recorded');
+        try { await _vaddLoad(await new Blob(parts, { type: rec.mimeType || 'audio/webm' }).arrayBuffer()); }
+        catch (e) { console.warn('[voice] decode failed:', e); toast(t('voice_add_cant_read'), true); }
+      };
+      rec.start();
+      VADD.rec = rec;
+      document.getElementById('voiceAddSrc').textContent = t('voice_add_recording_hint');
+      _vaddRecUi(true, 0);
+      VADD.recTimer = setInterval(() => {
+        const secs = Math.floor((Date.now() - at) / 1000);
+        _vaddRecUi(true, secs);
+        if (secs >= 30) rec.stop();
+      }, 250);
+    }
+
+    async function _vaddLoad(arrayBuf) {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      const ctx = new AC();
+      let decoded;
+      try { decoded = await ctx.decodeAudioData(arrayBuf); } finally { ctx.close(); }
+      const frames = Math.ceil(Math.min(decoded.duration, 600) * VADD_RATE);     // the first 10 minutes
+      const off = new OfflineAudioContext(1, frames, VADD_RATE);                 // mono, 24 kHz
+      const src = off.createBufferSource();
+      src.buffer = decoded;
+      src.connect(off.destination);
+      src.start();
+      const x = (await off.startRendering()).getChannelData(0);
+      if (x.length < VADD_MIN * VADD_RATE) { toast(t('voice_add_too_short'), true); return; }
+      let peak = 0;
+      for (let i = 0; i < x.length; i++) { const v = Math.abs(x[i]); if (v > peak) peak = v; }
+      if (peak < 0.01) { toast(t('voice_add_silent'), true); return; }
+      _vaddStopPlay();
+      Object.assign(VADD, { buf: x, peak, edited: false });
+      [VADD.start, VADD.len] = _vaddAutoPick(x);
+      document.getElementById('voiceAddText').value = '';
+      document.getElementById('voiceAddEdit').hidden = false;
+      document.getElementById('voiceAddSaveBtn').hidden = false;
+      _vaddSync();
+      voiceAddHear(true);
+    }
+
+    // Where the speech starts, and a cut 3–10 s later in a pause (≥ 0.2 s
+    // quiet), so no word is cut in half; the latest such pause wins.
+    function _vaddAutoPick(x) {
+      const hop = VADD_RATE / VADD_FPS, n = Math.floor(x.length / hop), rms = new Float32Array(n);
+      for (let i = 0; i < n; i++) {
+        let s = 0;
+        for (let j = i * hop; j < (i + 1) * hop; j++) s += x[j] * x[j];
+        rms[i] = Math.sqrt(s / hop);
+      }
+      const loud = Array.from(rms).sort((a, b) => a - b)[Math.floor(n * 0.95)] || 0;
+      const thr = Math.max(loud * 0.12, 0.004);
+      let first = 0;
+      while (first < n && rms[first] <= thr) first++;
+      const total = x.length / VADD_RATE;
+      if (first >= n) return [0, Math.min(VADD_MAX, total)];
+      const a = Math.max(0, first - 8);                                // 0.16 s before the first word
+      const minF = a + VADD_MIN * VADD_FPS, maxF = Math.min(n, a + VADD_MAX * VADD_FPS);
+      let end = 0;
+      for (let i = minF, quiet = 0; i < Math.min(n, maxF + 10); i++) {
+        quiet = rms[i] > thr ? 0 : quiet + 1;
+        const cut = i - quiet + 1 + 6;                                 // 0.12 s into the pause
+        if (quiet === 10 && cut <= maxF) end = cut;
+      }
+      if (!end) end = maxF;
+      const start = a / VADD_FPS;
+      return [start, Math.max(VADD_MIN, Math.min(VADD_MAX, end / VADD_FPS - start, total - start))];
+    }
+
+    function _vaddSync() {
+      if (!VADD.buf) return;
+      const dur = VADD.buf.length / VADD_RATE;
+      const st = document.getElementById('voiceAddStart'), ln = document.getElementById('voiceAddLen');
+      ln.max = Math.min(VADD_MAX, dur).toFixed(1);
+      VADD.len = Math.max(VADD_MIN, Math.min(VADD.len, +ln.max));
+      st.max = Math.max(0, dur - VADD.len).toFixed(1);
+      VADD.start = Math.max(0, Math.min(VADD.start, +st.max));
+      st.value = VADD.start;
+      ln.value = VADD.len;
+      document.getElementById('voiceAddStartLbl').textContent = t('voice_seconds', { s: VADD.start.toFixed(1) });
+      document.getElementById('voiceAddLenLbl').textContent = t('voice_seconds', { s: VADD.len.toFixed(1) });
+      _vaddDraw();
+    }
+
+    function _vaddDraw() {
+      const cv = document.getElementById('voiceAddWave'), x = VADD.buf;
+      if (!cv || !x || !cv.clientWidth) return;
+      const dpr = window.devicePixelRatio || 1, w = cv.clientWidth, h = 64;
+      cv.width = Math.round(w * dpr);
+      cv.height = Math.round(h * dpr);
+      const g = cv.getContext('2d');
+      g.setTransform(dpr, 0, 0, dpr, 0, 0);
+      g.clearRect(0, 0, w, h);
+      const css = getComputedStyle(document.documentElement);
+      const tok = (n) => css.getPropertyValue(n).trim();
+      const dur = x.length / VADD_RATE, x0 = VADD.start / dur * w, x1 = (VADD.start + VADD.len) / dur * w;
+      g.fillStyle = tok('--accent-light');
+      g.fillRect(x0, 0, x1 - x0, h);
+      const per = Math.max(1, Math.floor(x.length / w)), k = (h / 2 - 2) / VADD.peak;
+      for (let px = 0; px < w; px++) {
+        let lo = 0, hi = 0;
+        const from = Math.floor(px / w * x.length), to = Math.min(x.length, from + per);
+        for (let j = from; j < to; j++) { const v = x[j]; if (v < lo) lo = v; else if (v > hi) hi = v; }
+        g.fillStyle = px >= x0 && px <= x1 ? tok('--accent') : tok('--text-muted');
+        g.fillRect(px, h / 2 - hi * k, 1, Math.max(1, (hi - lo) * k));
+      }
+    }
+
+    function voiceAddRange() {
+      VADD.start = +document.getElementById('voiceAddStart').value;
+      VADD.len = +document.getElementById('voiceAddLen').value;
+      _vaddSync();
+      _vaddHearSoon();
+    }
+
+    function voiceAddSeek(ev) {
+      if (!VADD.buf) return;
+      const r = ev.currentTarget.getBoundingClientRect();
+      VADD.start = Math.max(0, (ev.clientX - r.left) / r.width * (VADD.buf.length / VADD_RATE));
+      _vaddSync();
+      _vaddHearSoon();
+    }
+
+    function _vaddClip() {
+      const a = Math.round(VADD.start * VADD_RATE);
+      const seg = VADD.buf.slice(a, Math.min(VADD.buf.length, a + Math.round(VADD.len * VADD_RATE)));
+      const f = Math.min(240, seg.length >> 2);                        // 10 ms fades: no click at the cuts
+      for (let i = 0; i < f; i++) { seg[i] *= i / f; seg[seg.length - 1 - i] *= i / f; }
+      return seg;
+    }
+
+    function _vaddWav(seg) {
+      let peak = 0;
+      for (let i = 0; i < seg.length; i++) peak = Math.max(peak, Math.abs(seg[i]));
+      const gain = peak > 0 ? 0.8 / peak : 1;
+      const dv = new DataView(new ArrayBuffer(44 + seg.length * 2));
+      const str = (o, s) => { for (let i = 0; i < s.length; i++) dv.setUint8(o + i, s.charCodeAt(i)); };
+      str(0, 'RIFF'); dv.setUint32(4, 36 + seg.length * 2, true); str(8, 'WAVE');
+      str(12, 'fmt '); dv.setUint32(16, 16, true); dv.setUint16(20, 1, true); dv.setUint16(22, 1, true);
+      dv.setUint32(24, VADD_RATE, true); dv.setUint32(28, VADD_RATE * 2, true); dv.setUint16(32, 2, true); dv.setUint16(34, 16, true);
+      str(36, 'data'); dv.setUint32(40, seg.length * 2, true);
+      for (let i = 0; i < seg.length; i++) dv.setInt16(44 + i * 2, Math.round(Math.max(-1, Math.min(1, seg[i] * gain)) * 32767), true);
+      return new Blob([dv.buffer], { type: 'audio/wav' });
+    }
+
+    function _vaddStopPlay() {
+      if (VADD.play) { try { VADD.play.stop(); } catch {} VADD.play = null; }
+    }
+
+    async function voiceAddPlay() {
+      if (!VADD.buf) return;
+      if (VADD.play) { _vaddStopPlay(); return; }
+      const AC = window.AudioContext || window.webkitAudioContext;
+      VADD.ctx = VADD.ctx || new AC();
+      if (VADD.ctx.state === 'suspended') await VADD.ctx.resume();
+      const seg = _vaddClip(), b = VADD.ctx.createBuffer(1, seg.length, VADD_RATE);
+      b.copyToChannel(seg, 0);
+      const s = VADD.ctx.createBufferSource();
+      s.buffer = b;
+      s.connect(VADD.ctx.destination);
+      s.onended = () => { if (VADD.play === s) VADD.play = null; };
+      s.start();
+      VADD.play = s;
+    }
+
+    function _vaddHearSoon() {
+      clearTimeout(VADD.hearTimer);
+      if (VADD.edited) { document.getElementById('voiceAddTextNote').textContent = t('voice_add_text_check'); return; }
+      VADD.hearTimer = setTimeout(() => voiceAddHear(), 700);
+    }
+
+    async function voiceAddHear(force) {
+      if (!VADD.buf) return;
+      if (force) VADD.edited = false;
+      const seq = ++VADD.hearSeq, note = document.getElementById('voiceAddTextNote');
+      note.textContent = t('voice_add_hearing');
+      try {
+        const r = await fetch(`${API}/voice/transcribe`, { method: 'POST', headers: { 'Content-Type': 'audio/wav' },
+                                                          body: _vaddWav(_vaddClip()) });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.detail || r.statusText);
+        if (seq !== VADD.hearSeq || VADD.edited) return;
+        document.getElementById('voiceAddText').value = d.text || '';
+        note.textContent = t(d.text ? 'voice_add_text_hint' : 'voice_add_no_speech');
+      } catch (e) { if (seq === VADD.hearSeq) note.textContent = e.message; }
+    }
+
+    async function voiceAddSave() {
+      const nameEl = document.getElementById('voiceAddName'), textEl = document.getElementById('voiceAddText');
+      const name = nameEl.value.trim(), text = textEl.value.trim();
+      if (!VADD.buf) { toast(t('voice_add_need_rec'), true); return; }
+      if (!text) { toast(t('voice_add_need_text'), true); textEl.focus(); return; }
+      if (!/^[\p{L}\p{N}_-]{1,32}$/u.test(name)) { toast(t('voice_add_need_name'), true); nameEl.focus(); return; }
+      if (VLIB.voices.some(v => v.name === name)) { toast(t('voice_add_name_taken', { name }), true); nameEl.focus(); return; }
+      if (!document.getElementById('voiceAddConsent').checked) { toast(t('voice_add_need_consent'), true); return; }
+      const btn = document.getElementById('voiceAddSaveBtn');
+      btn.disabled = true;
+      btn.textContent = t('voice_add_saving');
+      const fd = new FormData();
+      fd.append('name', name);
+      fd.append('text', text);
+      fd.append('consent', 'true');
+      fd.append('file', _vaddWav(_vaddClip()), 'voice.wav');
+      try {
+        const r = await fetch(`${API}/voice/voices`, { method: 'POST', body: fd });
+        const d = await r.json();
+        if (!r.ok) throw new Error(typeof d.detail === 'string' ? d.detail : JSON.stringify(d.detail || r.statusText));
+        _vlApply(d);
+        closeVoiceAdd();
+        toast(t('voice_added', { name }));
+        const b = Array.from(document.querySelectorAll('#voiceList button[data-v]')).find(el => el.dataset.v === name);
+        previewVoice(name, b);                         // hear it right away
+      } catch (e) { toast(e.message, true); }
+      finally { btn.disabled = false; btn.textContent = t('voice_add_save'); }
     }
 
     async function saveVoiceServiceUrl() {

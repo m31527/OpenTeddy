@@ -7,7 +7,13 @@ OpenTeddy voice service — speech in, speech out, on a machine of its own.
                 no speech in it (fsmn-vad) → empty text and "speech": false
   POST /tts     {"text", "voice"} → raw PCM16 mono at the model's rate,
                 streamed as it is generated (Fun-CosyVoice3-0.5B by default)
-  GET  /voices  the reference voices in VOICES_DIR (name.wav + name.txt)
+  GET  /voices  the reference voices: VOICES_DIR's (name.wav + name.txt),
+                then the built-in "sample"; "details" has each one's
+                length and words
+  POST /voices  {"name", "text", "wav": base64 WAV} → a new voice from a
+                3–15 s recording and what is said in it, word for word;
+                saved in VOICES_DIR and usable at once
+  DELETE /voices/{name}   remove one of VOICES_DIR's voices
   GET  /health  models, device, sample rates; while it is still getting
                 ready, "stage" says what it is doing (downloading a model,
                 loading, warming up) — it answers from the first second
@@ -26,6 +32,8 @@ have the rights to. See README.md.
 """
 from __future__ import annotations
 
+import asyncio
+import base64
 import io
 import logging
 import os
@@ -78,7 +86,8 @@ _asr: Any = None
 _vad: Any = None
 _tts_lock = threading.Lock()
 _asr_lock = threading.Lock()
-_voices: Dict[str, str] = {}            # name → CosyVoice speaker id, prepared once
+_voices: Dict[str, str] = {}            # name → CosyVoice speaker id, in _voice_files' order
+_edit_lock = threading.Lock()           # one voice added or removed at a time
 _cc: Any = None
 # CosyVoice2/3 double their stream chunk after each chunk (25 → 50 → 100
 # speech tokens) and never set it back, so from the second sentence on the
@@ -268,14 +277,31 @@ def _voice_files() -> Dict[str, tuple]:
     return out
 
 
+def _add_voice(name: str, wav: str, text: str) -> bool:
+    prompt = text if text.startswith(CV3_PREFIX) or "CosyVoice3" not in TTS_MODEL else CV3_PREFIX + text
+    spk = f"ot_{name}"
+    with _tts_lock:
+        if _tts.add_zero_shot_spk(prompt, wav, spk):
+            _align_prompt(spk)
+            _voices[name] = spk
+            return True
+    return False
+
+
+def _in_file_order() -> None:
+    """Keep _voices in the order a restart gives (VOICES_DIR sorted, then
+    "sample"): with no voice set in OpenTeddy the first one speaks, and a
+    voice added while running mustn't become it only after a restart."""
+    order = [n for n in _voice_files() if n in _voices]
+    ordered = {n: _voices[n] for n in order}
+    ordered.update({n: s for n, s in _voices.items() if n not in ordered})
+    _voices.clear()
+    _voices.update(ordered)
+
+
 def _prepare_voices() -> None:
     for name, (wav, text) in _voice_files().items():
-        prompt = text if text.startswith(CV3_PREFIX) or "CosyVoice3" not in TTS_MODEL else CV3_PREFIX + text
-        spk = f"ot_{name}"
-        with _tts_lock:
-            if _tts.add_zero_shot_spk(prompt, wav, spk):
-                _align_prompt(spk)
-                _voices[name] = spk
+        _add_voice(name, wav, text)
     log.info("voices: %s", ", ".join(_voices) or "(none)")
 
 
@@ -378,8 +404,125 @@ async def tts(request: Request) -> StreamingResponse:
                              headers={"X-Sample-Rate": str(rate)})
 
 
+# ── Reference voices ─────────────────────────────────────────────────────────
+
+_NAME = re.compile(r"[\w-]{1,32}")    # letters (any script), digits, _ and -: a file name as is
+REF_MIN_S, REF_MAX_S = 3.0, 15.0        # CosyVoice wants 3–10 s or so; it refuses over 30 s
+
+
+def _uploaded(name: str) -> bool:
+    return os.path.isfile(os.path.join(VOICES_DIR, name + ".wav"))
+
+
 @app.get("/voices")
 async def voices() -> Dict[str, Any]:
+    import soundfile as sf
+    files, details = _voice_files(), []
+    for name in _voices:
+        wav, text = files.get(name, ("", ""))
+        try:
+            seconds = round(float(sf.info(wav).duration), 1)
+        except Exception:  # noqa: BLE001
+            seconds = 0.0
+        details.append({"name": name, "builtin": not _uploaded(name), "seconds": seconds,
+                        "text": text[len(CV3_PREFIX):] if text.startswith(CV3_PREFIX) else text})
+    return {"voices": list(_voices), "details": details}
+
+
+def _save_voice(name: str, audio: np.ndarray, rate: int, text: str) -> None:
+    """Write name.wav + name.txt and prepare the voice; nothing is left behind if it fails."""
+    import soundfile as sf
+    with _edit_lock:
+        if name in _voices or _uploaded(name):
+            raise HTTPException(409, f"there is already a voice named {name}")
+        os.makedirs(VOICES_DIR, exist_ok=True)
+        wav, txt = (os.path.join(VOICES_DIR, name + ext) for ext in (".wav", ".txt"))
+        try:
+            sf.write(wav + ".part", audio, rate, subtype="PCM_16", format="WAV")
+            with open(txt, "w", encoding="utf-8") as f:
+                f.write(text + "\n")
+            os.replace(wav + ".part", wav)
+            if not _add_voice(name, wav, text):
+                raise RuntimeError("CosyVoice did not take it")
+        except Exception as exc:
+            for f in (wav + ".part", wav, txt):
+                try:
+                    os.remove(f)
+                except OSError:
+                    pass
+            if isinstance(exc, HTTPException):
+                raise
+            log.exception("adding voice %s failed", name)
+            raise HTTPException(500, f"could not make a voice from this recording: {exc}")
+        _in_file_order()
+    log.info("voice added: %s (%.1f s): %s", name, len(audio) / rate, text[:40])
+
+
+@app.post("/voices")
+async def add_voice(request: Request) -> Dict[str, Any]:
+    """A new voice: a recording of one person speaking clearly, 3–15 s, and
+    exactly what they say in it. The person adding it must have the right to
+    use that voice (OpenTeddy asks them to confirm it)."""
+    _ready()
+    try:
+        body = await request.json()
+    except ValueError:
+        raise HTTPException(400, "the body must be JSON: name, text, wav")
+    name = str(body.get("name") or "").strip()
+    text = " ".join(str(body.get("text") or "").split())
+    if not _NAME.fullmatch(name):
+        raise HTTPException(400, "name: up to 32 letters, digits, _ or -")
+    if name in _voices or _uploaded(name):
+        raise HTTPException(409, f"there is already a voice named {name}")
+    if not text:
+        raise HTTPException(400, "text: what is said in the recording, word for word")
+    if len(text) > 300:
+        raise HTTPException(400, "text: over 300 characters — use a shorter recording")
+    import soundfile as sf
+    try:
+        raw = base64.b64decode(str(body.get("wav") or ""), validate=True)
+        data, sr = sf.read(io.BytesIO(raw), dtype="float32", always_2d=True)
+    except Exception:  # noqa: BLE001
+        raise HTTPException(400, "wav: a WAV recording, base64-encoded")
+    audio = data.mean(axis=1)
+    seconds = len(audio) / float(sr or 1)
+    if not REF_MIN_S - 0.1 <= seconds <= REF_MAX_S + 0.1:
+        raise HTTPException(400, f"the recording is {seconds:.1f} s; a voice needs {REF_MIN_S:.0f}–{REF_MAX_S:.0f} s")
+    peak = float(np.abs(audio).max()) if audio.size else 0.0
+    if peak < 0.01:
+        raise HTTPException(400, "the recording is silent")
+    rate = int(_tts.sample_rate)
+    if sr != rate:
+        import librosa
+        audio = librosa.resample(audio, orig_sr=sr, target_sr=rate)
+    audio = np.clip(audio * (0.8 / peak), -1.0, 1.0).astype(np.float32)
+    await asyncio.get_running_loop().run_in_executor(None, _save_voice, name, audio, rate, text)
+    return {"voice": name, "voices": list(_voices)}
+
+
+def _remove_voice(name: str) -> None:
+    with _edit_lock:
+        if name not in _voices:
+            raise HTTPException(404, f"no voice named {name}")
+        if not _uploaded(name):
+            raise HTTPException(400, f"{name} is built in and can't be removed")
+        with _tts_lock:                       # after any sentence it is speaking
+            spk = _voices.pop(name)
+            _tts.frontend.spk2info.pop(spk, None)
+        for ext in (".wav", ".txt"):
+            try:
+                os.remove(os.path.join(VOICES_DIR, name + ext))
+            except OSError:
+                pass
+    log.info("voice removed: %s", name)
+
+
+@app.delete("/voices/{name}")
+async def delete_voice(name: str) -> Dict[str, Any]:
+    _ready()
+    if not _NAME.fullmatch(name):
+        raise HTTPException(404, f"no voice named {name}")
+    await asyncio.get_running_loop().run_in_executor(None, _remove_voice, name)
     return {"voices": list(_voices)}
 
 

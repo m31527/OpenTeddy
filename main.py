@@ -4360,6 +4360,121 @@ async def voice_disable() -> dict:
     return {"ok": True, "stopped": stopped}
 
 
+# ── Settings → 🎙 the voices: pick one, hear it, add one from a recording ──
+
+MAX_VOICE_UPLOAD = 4 * 1024 * 1024        # the page sends ≤ 15 s of 24 kHz WAV (~0.7 MB)
+VOICE_PREVIEW_TEXT = "你好，我是 OpenTeddy。很高興認識你，有什麼我可以幫忙的嗎？"
+
+
+async def _voice_library_view() -> dict:
+    import voice_bridge
+    if not voice_bridge.configured():
+        raise HTTPException(status_code=400, detail="no voice service address")
+    try:
+        lib = await voice_bridge.library()
+    except voice_bridge.ServiceError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc))
+    names = [str(v) for v in lib.get("voices") or []]
+    details = lib.get("details")
+    return {"voices": details if isinstance(details, list) else [{"name": n, "builtin": True} for n in names],
+            "selected": getattr(config, "voice_name", "") or "",
+            "default": voice_bridge.default_voice(names),
+            "can_add": isinstance(details, list)}      # a voice service from before can't add voices
+
+
+@app.get("/voice/voices")
+async def voice_voices() -> dict:
+    """The voice service's voices; `selected` is Settings' choice (empty:
+    `default`, the first one, speaks)."""
+    return await _voice_library_view()
+
+
+@app.post("/voice/voices")
+async def voice_add(name: str = Form(...), text: str = Form(...), consent: str = Form(""),
+                    file: UploadFile = File(...)) -> dict:
+    """A new voice from a recording: the page cuts it to a few seconds of
+    speech and sends it as a WAV, with what is said in it. Only with the
+    person's word that the voice is theirs or theirs to use."""
+    import voice_bridge
+    if consent.strip().lower() not in {"1", "true", "yes", "on"}:
+        raise HTTPException(status_code=400, detail="consent: confirm the voice is yours, or that you may use it")
+    data = await file.read(MAX_VOICE_UPLOAD + 1)
+    if len(data) > MAX_VOICE_UPLOAD:
+        raise HTTPException(status_code=413, detail="the recording is too large")
+    before = await _voice_library_view()
+    try:
+        await voice_bridge.add_voice(name.strip(), text, data)
+    except voice_bridge.ServiceError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc))
+    # With no voice chosen, the first one speaks; a new one whose name sorts
+    # first would take over every call. The voice that spoke until now stays.
+    if not before["selected"] and before["default"]:
+        await settings_store.update_many({"voice_name": before["default"]})
+        await config.reload_from_store(settings_store)
+    return await _voice_library_view()
+
+
+@app.delete("/voice/voices/{name}")
+async def voice_remove(name: str) -> dict:
+    import voice_bridge
+    if not voice_bridge.configured():
+        raise HTTPException(status_code=400, detail="no voice service address")
+    try:
+        await voice_bridge.remove_voice(name)
+    except voice_bridge.ServiceError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc))
+    if (getattr(config, "voice_name", "") or "") == name:
+        await settings_store.update_many({"voice_name": ""})
+        await config.reload_from_store(settings_store)
+    return await _voice_library_view()
+
+
+@app.post("/voice/transcribe")
+async def voice_transcribe(request: Request) -> dict:
+    """The words in a recording (a WAV) — Settings fills in what a new voice says."""
+    import voice_bridge
+    body = await request.body()
+    if not body:
+        raise HTTPException(status_code=400, detail="no recording")
+    if len(body) > MAX_VOICE_UPLOAD:
+        raise HTTPException(status_code=413, detail="the recording is too large")
+    if not voice_bridge.configured():
+        raise HTTPException(status_code=400, detail="no voice service address")
+    try:
+        heard = await voice_bridge.transcribe_wav(body)
+    except voice_bridge.ServiceError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc))
+    return {"text": heard.get("text") or "", "language": heard.get("language") or "",
+            "speech": heard.get("speech", True) is not False}
+
+
+class _VoicePreviewBody(BaseModel):
+    voice: str
+    text: Optional[str] = None
+
+
+@app.post("/voice/preview")
+async def voice_preview(body: _VoicePreviewBody) -> Response:
+    """A sentence in one voice, as a WAV, for Settings' ▶."""
+    import voice_bridge
+    if not voice_bridge.configured():
+        raise HTTPException(status_code=400, detail="no voice service address")
+    try:
+        h = await voice_bridge.health()
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"the voice service didn't answer: {exc}")
+    if body.voice not in (h.get("voices") or []):
+        raise HTTPException(status_code=404, detail=f"no voice named {body.voice}")
+    text = " ".join((body.text or "").split())[:200] or VOICE_PREVIEW_TEXT
+    rate = int(h.get("tts_sample_rate") or 24000)
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=5.0)) as c:
+            pcm = b"".join([chunk async for chunk in voice_bridge.speak(text, c, voice=body.voice)])
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail=f"the voice service didn't answer: {exc}")
+    return Response(voice_bridge.wav(pcm, rate), media_type="audio/wav")
+
+
 @app.websocket("/voice/ws")
 async def voice_ws(ws: WebSocket) -> None:
     """The 🎙 voice mode's conversation (voice_bridge.py): utterances in,

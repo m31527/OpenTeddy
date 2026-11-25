@@ -28,7 +28,17 @@ plus the exact words said in it. **A voice belongs to a person.** Use your
 own, or one you have the right to use. The bundled `sample` (CosyVoice's
 demo prompt) is for trying it out only.
 
-Put each voice in `VOICES_DIR` as `name.wav` + `name.txt`:
+The easy way is OpenTeddy's Settings → 🎙 Voice conversation → **Add a
+voice**. Choose a recording (mp3, m4a, wav… whatever the browser plays) or
+record one there. The page picks 3–10 s of speech that ends in a pause, and
+you can move or shorten that part. Speech recognition fills in the words;
+correct them until they match the recording exactly. Tick that the voice is
+yours or yours to use. The voice can be used at once, with no restart. In
+the same list, ▶ plays a sentence in each voice, the round button picks the
+voice OpenTeddy speaks with, and 🗑 removes a voice you added.
+
+Or put each voice in `VOICES_DIR` yourself, as `name.wav` + `name.txt`, and
+restart the service:
 
 ```
 voices/
@@ -36,7 +46,14 @@ voices/
   me.txt      # 「大家好，我是…」 — exactly what is said in me.wav
 ```
 
-Then set `voice_name` in OpenTeddy (Settings) to `me`.
+Then pick `me` in Settings, which sets `voice_name`. Apps can also name a
+voice per call (`GET /v1/voices`, docs/api.md).
+
+The service's own endpoints for this are `GET /voices` (names, plus each
+voice's length and words), `POST /voices`
+`{"name", "text", "wav": base64 WAV of 3–15 s}`, and `DELETE /voices/{name}`.
+A name is up to 32 letters, digits, `_` or `-` in any script, so `王經理`
+works. The built-in `sample` can't be removed.
 
 ## Run it on a DGX Spark (aarch64, GB10)
 
