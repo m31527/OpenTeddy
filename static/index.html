@@ -11322,7 +11322,9 @@
     // (about 5 min of loading), to Ollama stops it and gives the executor
     // its old model back. Only the executor moves; the planner, vision and
     // the knowledge base stay on Ollama.
-    const ENGINE = { onVllm: false, stored: 'ollama' };
+    // noVllm: the OpenTeddy server itself isn't Linux. Asked of the server —
+    // the browser showing this page may be a Mac looking at a DGX Spark.
+    const ENGINE = { onVllm: false, stored: 'ollama', noVllm: false };
     const VLSETUP = { st: null, timer: null, running: false, pick: '', mode: '' };
     const VL_STEPS = ['vllm_step_pull', 'vllm_step_model', 'vllm_step_load'];
     const VL_PHASE = { check: 0, pull: 0, start: 1, download: 1, load: 2, done: 3 };
@@ -11335,7 +11337,6 @@
     }
 
     async function refreshVllmStatus() {
-      if (_isMacPlatform()) return;
       try { _vlUpdate(await _vllmStatusFetch()); } catch { /* the radio keeps what Settings said */ }
     }
 
@@ -11376,9 +11377,10 @@
       VLSETUP.st = st;
       VLSETUP.running = job.state === 'running';
       ENGINE.onVllm = !!st.on;
+      ENGINE.noVllm = st.setup?.reason === 'not_linux';
       const hidden = document.getElementById('vllmSetupOverlay').hidden;
       if (!hidden) _vlRender(st);
-      _engineRadioSync();
+      renderLocalEngineUI();
       if (was && !VLSETUP.running) {
         if (job.state === 'ready') {
           toast(t('vllm_ready_toast', { model: st.executor }));
@@ -13934,36 +13936,27 @@
     }
 
     // ── Local inference engine (Ollama vs vLLM) ──────────────────────────
-    // vLLM is Linux/CUDA only — no Metal build — so on macOS the radio is
-    // disabled and forced to Ollama. We detect Mac from the UA; the
-    // backend also hard-gates Darwin in local_engine.py, so a wrong UA
-    // sniff can't actually point a Mac at a non-existent vLLM server.
-    function _isMacPlatform() {
-      const p = (navigator.userAgentData?.platform || navigator.platform || '').toLowerCase();
-      return p.includes('mac');
-    }
+    // vLLM is Linux/CUDA only — no Metal build. Whether it can run is the
+    // SERVER's question (/vllm/status says not_linux), never the browser's:
+    // a Mac browser looking at a DGX Spark must still see and keep vLLM.
+    // The backend also gates Darwin in local_engine.py.
     function renderLocalEngineUI() {
-      const isMac    = _isMacPlatform();
       const vllmRadio = document.getElementById('engine_vllm');
       const vllmLabel = document.getElementById('engineVllmLabel');
       const vllmHint  = document.getElementById('engineVllmHint');
       const urlField  = document.getElementById('vllmUrlField');
       if (!vllmRadio) return;
-      if (isMac) {
-        // Force Ollama, disable + grey the vLLM option.
-        vllmRadio.checked  = false;
-        vllmRadio.disabled = true;
-        const ollama = document.getElementById('engine_ollama');
-        if (ollama) ollama.checked = true;
-        if (vllmLabel) vllmLabel.style.opacity = '0.45';
-        if (vllmHint)  vllmHint.textContent = ' (Linux/CUDA only)';
-        if (urlField)  urlField.hidden = true;
-        return;
-      }
-      vllmRadio.disabled = false;
-      if (vllmLabel) vllmLabel.style.opacity = '1';
       // The address of a vLLM server is asked for in the vLLM dialog now.
       if (urlField)  urlField.hidden = true;
+      vllmRadio.disabled = !!ENGINE.noVllm;
+      if (vllmLabel) vllmLabel.style.opacity = ENGINE.noVllm ? '0.45' : '1';
+      if (ENGINE.noVllm) {
+        vllmRadio.checked = false;
+        const ollama = document.getElementById('engine_ollama');
+        if (ollama) ollama.checked = true;
+        if (vllmHint) vllmHint.textContent = t('vllm_hint_linux_only');
+        return;
+      }
       _engineRadioSync();
     }
     // The radio follows where the executor really runs, not the click: a
@@ -14020,7 +14013,9 @@
         // Local inference engine: the radio is moved by the vLLM dialog
         // (/vllm/setup, /vllm/off), so Save keeps what is stored. On macOS
         // always "ollama" — the backend hard-gates Darwin too.
-        local_engine:              (_isMacPlatform() ? 'ollama' : (ENGINE.stored || 'ollama')),
+        // What the server has stored — the radio only opens the vLLM dialog,
+        // which saves its own changes. Never the browser's platform.
+        local_engine:              ENGINE.stored || 'ollama',
         vllm_base_url:             document.getElementById('inp_vllm_base_url')?.value.trim() || 'http://127.0.0.1:8001',
         escalation_threshold:      document.getElementById('rng_escalation_threshold').value,
         escalation_failure_limit:  document.getElementById('rng_escalation_failure_limit').value,
