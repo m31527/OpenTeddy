@@ -139,6 +139,22 @@ async def _nvidia_smi() -> str:
         return ""
 
 
+def _group_pending(name: str) -> bool:
+    """This user was added to group `name`, but this process started before
+    and doesn't have it yet. A login shell would; OpenTeddy as a service
+    keeps the groups its systemd user manager started with (until a reboot,
+    or until that manager is restarted)."""
+    try:
+        import grp
+        import pwd
+        g = grp.getgrnam(name)
+        user = pwd.getpwuid(os.getuid()).pw_name
+        listed = user in g.gr_mem or pwd.getpwuid(os.getuid()).pw_gid == g.gr_gid
+        return listed and g.gr_gid not in os.getgroups()
+    except (KeyError, ImportError, OSError):
+        return False
+
+
 def _meminfo() -> Dict[str, float]:
     out: Dict[str, float] = {}
     try:
@@ -247,7 +263,9 @@ async def check(reclaim_gb: float = 0.0) -> Dict[str, Any]:
         return out
     rc, txt = await _docker("version", "--format", "{{.Server.Version}}", timeout=10)
     if rc != 0:
-        out["reason"] = "docker_denied" if "permission denied" in txt.lower() else "docker_down"
+        denied = "permission denied" in txt.lower()
+        out["reason"] = ("docker_restart" if denied and _group_pending("docker")
+                         else "docker_denied" if denied else "docker_down")
         out["detail"] = txt.strip()[-400:]
         return out
     status, running_model = await container()

@@ -186,9 +186,17 @@ async def test_check() -> None:
     assert (await V.check())["reason"] == "no_gpu"
     V.shutil.which = lambda name: f"/usr/bin/{name}"
     V._docker = FakeDocker(denied=True)
+    real_pending = V._group_pending
+    V._group_pending = lambda name: False
     c = await V.check()
     assert c["reason"] == "docker_denied" and "permission denied" in c["detail"], c
-    print("  ✓ not Linux / no Docker / no GPU / no Docker permission: said, nothing offered")
+    # Added to the group after OpenTeddy's user manager started (demo, 11/26):
+    # a restart is what's missing, not the usermod.
+    V._group_pending = lambda name: name == "docker"
+    assert (await V.check())["reason"] == "docker_restart"
+    V._group_pending = real_pending
+    assert real_pending("no-such-group-here") is False
+    print("  ✓ not Linux / no Docker / no GPU / no Docker permission / group not active yet: said, nothing offered")
 
     V._docker = FakeDocker()
     c = await V.check()
