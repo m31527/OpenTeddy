@@ -235,6 +235,15 @@ SETTINGS_META: dict[str, dict[str, Any]] = {
                        "the others stay on Ollama. Empty = none.",
         "type":        "text",
     },
+    "vllm_managed": {
+        "label":       "vLLM turned on from Settings",
+        "description": "Kept by Settings → vLLM (vllm_setup.py), not typed: "
+                       "which model this machine's openteddy-vllm-executor "
+                       "serves, whether the executor uses it, and the "
+                       "executor model to give back when Ollama is chosen "
+                       "again. JSON; empty = never turned on.",
+        "type":        "text",
+    },
     "knowledge_enabled": {
         "label":       "Knowledge base",
         "description": "Answer from the datasets in the 知識庫 tab (FAQ, product notes, policies). "
@@ -635,6 +644,7 @@ def _defaults_from_config() -> dict[str, str]:
         "local_engine":             getattr(config, "local_engine", "ollama"),
         "vllm_base_url":            getattr(config, "vllm_base_url", "http://127.0.0.1:8001"),
         "vllm_models":              getattr(config, "vllm_models", ""),
+        "vllm_managed":             getattr(config, "vllm_managed", ""),
         "knowledge_enabled":        "true" if getattr(config, "knowledge_enabled", False) else "false",
         "knowledge_embed_model":    getattr(config, "knowledge_embed_model", ""),
         "voice_enabled":            "true" if getattr(config, "voice_enabled", False) else "false",
@@ -979,6 +989,8 @@ class SettingsStore:
             config.vllm_base_url = settings["vllm_base_url"].strip()
         if "vllm_models" in settings:
             config.vllm_models = (settings["vllm_models"] or "").strip()
+        if "vllm_managed" in settings:
+            config.vllm_managed = (settings["vllm_managed"] or "").strip()
         if "knowledge_enabled" in settings:
             config.knowledge_enabled = str(settings["knowledge_enabled"]).strip().lower() in {"1", "true", "yes", "on"}
         if "knowledge_embed_model" in settings:

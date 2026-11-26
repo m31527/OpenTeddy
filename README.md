@@ -276,6 +276,7 @@ OpenTeddy/
 ├── scheduler.py       # Cron schedules bound to sessions (APScheduler)
 ├── scheduling_intent.py # "每天早上 9 點…" → schedule instead of run
 ├── local_engine.py    # Ollama / vLLM request + response abstraction
+├── vllm_setup.py      # Settings → vLLM: runs the executor's model in a vLLM container, and back
 ├── voice_fastpath.py  # Spoken question → spoken answer, sub-second lanes
 ├── api_docs.py        # Condense pasted / uploaded / fetched API docs (OpenAPI → endpoint list)
 ├── db_schema.py       # Priority-ordered schema snapshot for agents' databases
@@ -1613,7 +1614,37 @@ hardware — so vLLM only earns its keep under concurrency.
 > macOS / non-CUDA: skip this. vLLM is Linux + NVIDIA only; OpenTeddy
 > hard-gates Darwin to Ollama, and the Settings toggle is disabled there.
 
-One script sets it up in a **dedicated venv** (never touches OpenTeddy's
+**From Settings (the easy way).** Settings → Local Inference Engine →
+**vLLM** opens a dialog. It checks the machine first: Linux, Docker with
+permission (`sudo usermod -aG docker $USER`), an NVIDIA GPU, disk space and
+free memory. Then pick the model:
+
+| | Download | GPU memory | On a DGX Spark (GB10), 11/26 |
+|---|---|---|---|
+| **Inkling 2 Mini** (recommended) | ~31 GB (engine image 11 GB + weights 20 GB) | ~36 GB | ~39 tokens/s; it thinks briefly before each answer; tools and pictures |
+| Qwen3.6 35B (NVFP4) | ~34 GB (11 + 23) | ~48 GB | ~87 tokens/s on Ollama, the same model |
+
+**下載並啟用** pulls the model's vLLM image, starts the container
+`openteddy-vllm-executor` on `127.0.0.1:8021`, and downloads the weights
+into `~/hf-cache`. Change the folder with `OPENTEDDY_VLLM_CACHE`. The dialog
+shows each step. When the model answers, the executor is pointed at it.
+
+- **Only the executor moves.** It gets its own route in `vllm_models`.
+  `local_engine` stays `ollama`, so the planner, vision and the knowledge
+  base keep using Ollama.
+- **The model Ollama held for the executor is unloaded first**, to make
+  room.
+- **Choosing Ollama again** stops the container and gives the executor its
+  old model back. The image and weights stay on disk, so switching to vLLM
+  later takes about 5 minutes of loading and no download.
+- **"Already have a vLLM server?"** in the same dialog points the executor
+  at one that already runs (started by hand, or on another machine). It is
+  only used, never stopped.
+
+Every image, model and vLLM flag is fixed in `vllm_setup.py` (`CHOICES`).
+Nothing in a request reaches a command except the id of a choice.
+
+**By hand.** One script sets it up in a **dedicated venv** (never touches OpenTeddy's
 own — vLLM pins conflicting deps that would otherwise break chromadb) and
 installs the JIT build toolchain (ninja / python3-dev) that vLLM needs:
 

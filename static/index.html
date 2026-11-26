@@ -2104,6 +2104,21 @@
     .vs-actions { display: flex; gap: 0.5rem; justify-content: flex-end; align-items: center; margin-top: 1rem; flex-wrap: wrap; }
     .vs-url { display: flex; gap: 0.5rem; margin-top: 0.5rem; }
     .vs-url input { flex: 1; min-width: 0; }
+    /* Settings → vLLM (vllm_setup.py): the model to run the executor on */
+    .vl-choices { display: flex; flex-direction: column; gap: 0.5rem; margin: 0 0 0.8rem; }
+    .vl-choice { display: flex; gap: 0.6rem; align-items: flex-start; padding: 0.65rem 0.8rem; border: 1px solid var(--border);
+                 border-radius: 10px; cursor: pointer; min-width: 0; }
+    .vl-choice input { margin-top: 0.2rem; flex-shrink: 0; }
+    .vl-choice:hover { border-color: var(--border-hover); }
+    .vl-choice.on { border-color: var(--accent-border); background: var(--accent-faint); }
+    .vl-choice.off { opacity: 0.55; cursor: default; }
+    .vl-choice-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+    .vl-choice-name { font-size: 0.88rem; font-weight: 600; color: var(--text-primary); margin-bottom: 0.2rem; }
+    .vl-badge { font-size: 0.68rem; font-weight: 500; padding: 0.05rem 0.45rem; border-radius: 999px; margin-left: 0.3rem;
+                background: var(--accent-light); color: var(--accent-text); border: 1px solid var(--accent-border); }
+    .vl-choice .vs-fine { margin: 0.1rem 0 0; }
+    .vl-choice .vs-warn { margin: 0.25rem 0 0; font-size: 0.74rem; }
+    .vl-manual { margin-top: 0.6rem; }
     .memory-item {
       background: var(--bg-primary);
       border: 1px solid var(--border);
@@ -5929,6 +5944,20 @@
       <div id="vsBody"></div>
       <div id="vsNote" class="kb-note err" hidden></div>
       <div class="vs-actions" id="vsActions"></div>
+    </div>
+  </div>
+
+  <!-- Settings → Local inference engine → vLLM (vllm_setup.py): asks before
+       anything is downloaded, lets the person pick the model, shows the
+       install's steps; and the way back to Ollama. -->
+  <div class="db-connect-overlay" id="vllmSetupOverlay" hidden onclick="if (event.target === this) closeVllmSetup()">
+    <div class="db-connect-dialog">
+      <button class="db-connect-dialog-close" type="button" onclick="closeVllmSetup()" aria-label="Close" title="Close">✕</button>
+      <div class="db-connect-dialog-icon">⚡</div>
+      <h2 class="db-connect-dialog-title" id="vlTitle"></h2>
+      <div id="vlBody"></div>
+      <div id="vlNote" class="kb-note err" hidden></div>
+      <div class="vs-actions" id="vlActions"></div>
     </div>
   </div>
 
@@ -11286,6 +11315,241 @@
       }
     }
 
+    // ── Settings → vLLM for the executor (vllm_setup.py, /vllm/*) ─────────
+    // The engine radio says where the executor runs; choosing the other one
+    // opens this. Nothing is downloaded until 下載並啟用. Once a model is on
+    // this machine, switching is one press either way: to vLLM starts it
+    // (about 5 min of loading), to Ollama stops it and gives the executor
+    // its old model back. Only the executor moves; the planner, vision and
+    // the knowledge base stay on Ollama.
+    const ENGINE = { onVllm: false, stored: 'ollama' };
+    const VLSETUP = { st: null, timer: null, running: false, pick: '', mode: '' };
+    const VL_STEPS = ['vllm_step_pull', 'vllm_step_model', 'vllm_step_load'];
+    const VL_PHASE = { check: 0, pull: 0, start: 1, download: 1, load: 2, done: 3 };
+    const VL_ABOUT = { 'inkling-2-mini': 'vllm_about_inkling', 'qwen3.6:35b': 'vllm_about_qwen' };
+
+    async function _vllmStatusFetch() {
+      const r = await fetch(`${API}/vllm/status`);
+      if (!r.ok) throw new Error(`vllm status: HTTP ${r.status}`);
+      return r.json();
+    }
+
+    async function refreshVllmStatus() {
+      if (_isMacPlatform()) return;
+      try { _vlUpdate(await _vllmStatusFetch()); } catch { /* the radio keeps what Settings said */ }
+    }
+
+    async function openVllmSetup(mode = '') {
+      VLSETUP.mode = mode;                 // 'off' = asking to go back to Ollama
+      document.getElementById('vllmSetupOverlay').hidden = false;
+      _vlNote('');
+      _vlRender(null);
+      try { _vlUpdate(await _vllmStatusFetch()); } catch (e) { _vlNote(e.message); }
+    }
+
+    function closeVllmSetup() {
+      document.getElementById('vllmSetupOverlay').hidden = true;
+      VLSETUP.mode = '';
+      _engineRadioSync();
+    }
+
+    function _vlNote(text) {
+      const n = document.getElementById('vlNote');
+      n.hidden = !text;
+      n.textContent = text || '';
+    }
+
+    function _engineRadioSync() {
+      const v = document.getElementById('engine_vllm');
+      const o = document.getElementById('engine_ollama');
+      if (!v || !o || v.disabled) return;
+      v.checked = !!ENGINE.onVllm;
+      o.checked = !ENGINE.onVllm;
+      const hint = document.getElementById('engineVllmHint');
+      if (hint) hint.textContent = VLSETUP.running ? ` · ${t('vllm_hint_installing')}`
+        : (ENGINE.onVllm && VLSETUP.st?.executor ? ` · ${VLSETUP.st.executor}` : '');
+    }
+
+    function _vlUpdate(st) {
+      const job = st.setup?.job || {};
+      const was = VLSETUP.running;
+      VLSETUP.st = st;
+      VLSETUP.running = job.state === 'running';
+      ENGINE.onVllm = !!st.on;
+      const hidden = document.getElementById('vllmSetupOverlay').hidden;
+      if (!hidden) _vlRender(st);
+      _engineRadioSync();
+      if (was && !VLSETUP.running) {
+        if (job.state === 'ready') {
+          toast(t('vllm_ready_toast', { model: st.executor }));
+          loadSettings(); refreshEngines();      // the executor dropdown now shows the vLLM model
+        } else if (job.state === 'error' && hidden) toast(t('vllm_setup_failed_toast'), true);
+      }
+      clearTimeout(VLSETUP.timer);
+      if (VLSETUP.running) VLSETUP.timer = setTimeout(_vllmPoll, 1500);
+    }
+
+    async function _vllmPoll() {
+      try { _vlUpdate(await _vllmStatusFetch()); }
+      catch { VLSETUP.timer = setTimeout(_vllmPoll, 3000); }
+    }
+
+    function _vlWhy(code, s, c) {
+      const vars = { need: c?.disk_needed_gb ?? '?', free: s.disk_free_gb ?? '?', mem: c?.mem_gb ?? '?',
+                     memfree: s.mem_free_gb ?? '?', total: s.mem_total_gb ?? '?' };
+      for (const k of ['vllm_reason_' + code, 'vllm_err_' + code]) if (t(k) !== k) return t(k, vars);
+      return t('vllm_err_unexpected');
+    }
+
+    function _vlManualForm(open) {
+      return `<details class="vl-manual"${open ? ' open' : ''}><summary class="vs-fine" style="cursor:pointer">${escHtml(t('vllm_manual_summary'))}</summary>
+        <p class="vs-fine">${escHtml(t('vllm_manual_hint'))}</p>
+        <div class="vs-url"><input type="text" id="vlUrlInput" placeholder="http://127.0.0.1:8001" autocomplete="off" spellcheck="false" />
+          <button class="btn-ghost btn-sm" type="button" onclick="vllmUse()">${escHtml(t('vllm_use_go'))}</button></div></details>`;
+    }
+
+    function _vlRender(st) {
+      const title = document.getElementById('vlTitle');
+      const body = document.getElementById('vlBody');
+      const act = document.getElementById('vlActions');
+      const btn = (label, fn, cls = 'btn-primary', off = false) =>
+        `<button class="${cls}" type="button" onclick="${fn}"${off ? ' disabled' : ''}>${escHtml(label)}</button>`;
+      const cancel = btn(t('btn_cancel'), 'closeVllmSetup()', 'btn-ghost');
+      const close = btn(t('btn_close'), 'closeVllmSetup()', 'btn-ghost');
+      const p = (text, cls = 'db-connect-dialog-body') => `<p class="${cls}">${escHtml(text)}</p>`;
+      if (!st) { title.textContent = t('vllm_setup_title'); body.innerHTML = p(t('vllm_checking')); act.innerHTML = ''; return; }
+      const s = st.setup || {};
+      const job = s.job || {};
+      const list = s.choices || [];
+      const byId = id => list.find(c => c.id === id) || null;
+
+      if (job.state === 'running') {
+        const c = byId(job.model) || {};
+        title.textContent = t('vllm_setup_working_title', { model: c.title || job.model });
+        const at = VL_PHASE[job.phase] ?? 0;
+        body.innerHTML = '<ol class="vs-steps">' + VL_STEPS.map((k, i) => {
+          let extra = '';
+          if (i === at) {
+            if (job.progress != null) extra += `<div class="vs-bar"><span style="width:${Math.round(job.progress * 100)}%"></span></div>`;
+            const amount = i === 1 && job.done_gb != null ? `${job.done_gb} / ${c.model_gb} GB` : '';
+            const detail = [amount, job.step].filter(Boolean).join(' · ');
+            if (detail) extra += `<div class="vs-detail">${escHtml(detail)}</div>`;
+          }
+          const cls = i < at ? 'done' : (i === at ? 'now' : '');
+          return `<li class="vs-step ${cls}"><span class="vs-dot">${i < at ? '✓' : (i === at ? '●' : '○')}</span><div style="flex:1;min-width:0">${escHtml(t(k))}${extra}</div></li>`;
+        }).join('') + '</ol>' + p(`${t('vllm_setup_bg_note')} · ${_vsElapsed(job.elapsed_s)}`, 'vs-fine');
+        act.innerHTML = btn(t('vllm_setup_stop'), 'vllmOff()', 'btn-ghost') + close;
+        return;
+      }
+      if (VLSETUP.mode === 'off' && st.on) {
+        title.textContent = t('vllm_off_title');
+        body.innerHTML = p(t(st.managed ? 'vllm_off_body' : 'vllm_off_body_elsewhere',
+                             { model: st.executor, prev: st.prev_executor || t('vllm_off_prev_same'), url: st.url }));
+        act.innerHTML = cancel + btn(t('vllm_off_go'), 'vllmOff()');
+        return;
+      }
+      if (st.on) {
+        title.textContent = t('vllm_on_title');
+        body.innerHTML = p(t(st.ready ? 'vllm_on_body' : 'vllm_on_body_loading', { model: st.executor, url: st.url }))
+          + p(t('vllm_fact_stays'), 'vs-fine');
+        act.innerHTML = close + btn(t('vllm_off_go'), "openVllmSetup('off')", 'btn-ghost');
+        return;
+      }
+      if (job.state === 'error' && job.error !== 'cancelled') {
+        title.textContent = t('vllm_setup_failed_title');
+        body.innerHTML = p(_vlWhy(job.error, s, byId(job.model)))
+          + (job.detail || (job.log && job.log.length)
+             ? `<details><summary class="vs-fine" style="cursor:pointer">${escHtml(t('voice_setup_details'))}</summary><pre class="vs-log">${escHtml(job.detail || job.log.join('\n'))}</pre></details>` : '');
+        VLSETUP.pick = VLSETUP.pick || job.model;
+        act.innerHTML = cancel + btn(t('vllm_setup_other'), 'vllmPickAgain()', 'btn-ghost')
+                      + (byId(job.model)?.ok ? btn(t('voice_setup_retry'), 'startVllmSetup()') : '');
+        return;
+      }
+      title.textContent = t('vllm_setup_title');
+      if (!list.length) {                  // this machine can't run it: say why, and offer one elsewhere
+        body.innerHTML = p(_vlWhy(s.reason, s)) + (s.detail ? `<pre class="vs-log">${escHtml(s.detail)}</pre>` : '')
+          + _vlManualForm(true);
+        act.innerHTML = cancel;
+        return;
+      }
+      const usable = list.filter(c => c.ok);
+      if (!byId(VLSETUP.pick)?.ok) {
+        VLSETUP.pick = (byId(st.last_model)?.ok && byId(st.last_model)?.have_model ? st.last_model : '')
+                       || (usable.find(c => c.recommended) || usable[0] || {}).id || '';
+      }
+      const chosen = byId(VLSETUP.pick);
+      const cards = list.map(c => {
+        const facts = [c.have_model && c.have_image ? t('vllm_fact_have')
+                        : t('vllm_fact_download', { gb: c.download_gb }), t('vllm_fact_mem', { gb: c.mem_gb })].join(' · ');
+        return `<label class="vl-choice${c.id === VLSETUP.pick ? ' on' : ''}${c.ok ? '' : ' off'}">
+          <input type="radio" name="vlPick" value="${escHtml(c.id)}"${c.id === VLSETUP.pick ? ' checked' : ''}${c.ok ? '' : ' disabled'} onchange="vllmPick(this.value)" />
+          <div class="vl-choice-text">
+            <div class="vl-choice-name">${escHtml(c.title)}${c.recommended ? `<span class="vl-badge">${escHtml(t('vllm_recommended'))}</span>` : ''}</div>
+            ${VL_ABOUT[c.id] ? `<p class="vs-fine">${escHtml(t(VL_ABOUT[c.id]))}</p>` : ''}
+            <p class="vs-fine">${escHtml(facts)}</p>
+            ${c.ok ? '' : `<p class="vs-warn">${escHtml(_vlWhy(c.reason, s, c))}</p>`}
+          </div></label>`;
+      }).join('');
+      const ready = chosen && chosen.have_model && chosen.have_image;
+      const facts = [
+        t('vllm_fact_machine', { disk: s.disk_free_gb ?? '?', mem: s.mem_free_gb ?? '?' }),
+        t('vllm_fact_stays'),
+        t(ready ? 'vllm_fact_time_have' : 'vllm_fact_time'),
+      ];
+      body.innerHTML = p(t('vllm_setup_intro')) + `<div class="vl-choices">${cards}</div>`
+        + `<ul class="vs-facts">${facts.map(f => `<li>${escHtml(f)}</li>`).join('')}</ul>`
+        + p(t('vllm_setup_licence'), 'vs-fine') + _vlManualForm(false);
+      act.innerHTML = cancel + btn(t(ready ? 'vllm_setup_turn_on' : 'vllm_setup_go'), 'startVllmSetup()', 'btn-primary', !chosen?.ok);
+    }
+
+    function vllmPick(id) { VLSETUP.pick = id; _vlRender(VLSETUP.st); }
+
+    function vllmPickAgain() {
+      // Back to the choice of models after a failed install.
+      if (VLSETUP.st?.setup?.job) VLSETUP.st.setup.job = { ...VLSETUP.st.setup.job, state: 'idle' };
+      _vlRender(VLSETUP.st);
+    }
+
+    async function startVllmSetup() {
+      _vlNote('');
+      const model = VLSETUP.pick || VLSETUP.st?.setup?.job?.model || 'inkling-2-mini';
+      try {
+        const r = await fetch(`${API}/vllm/setup`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                                     body: JSON.stringify({ model }) });
+        if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || `HTTP ${r.status}`);
+        VLSETUP.running = true;
+        _vlUpdate(await _vllmStatusFetch());
+      } catch (e) { _vlNote(e.message); }
+    }
+
+    async function vllmUse() {
+      _vlNote('');
+      const url = (document.getElementById('vlUrlInput')?.value || '').trim();
+      if (!url) { _vlNote(t('vllm_use_need_url')); return; }
+      try {
+        const r = await fetch(`${API}/vllm/use`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                                   body: JSON.stringify({ url }) });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok || !d.ok) throw new Error(d.error || d.detail || `HTTP ${r.status}`);
+        toast(t('vllm_ready_toast', { model: d.model }));
+        closeVllmSetup();
+        await loadSettings(); refreshEngines();
+      } catch (e) { _vlNote(e.message); }
+    }
+
+    async function vllmOff() {
+      _vlNote('');
+      try {
+        const r = await fetch(`${API}/vllm/off`, { method: 'POST' });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok || !d.ok) throw new Error(d.error || d.detail || `HTTP ${r.status}`);
+        toast(t(d.fallback ? 'vllm_off_toast_fallback' : 'vllm_off_toast', { model: d.executor }));
+        ENGINE.onVllm = false;
+        closeVllmSetup();
+        await loadSettings(); refreshEngines();
+      } catch (e) { _vlNote(e.message); }
+    }
+
     // ── Settings → 🎙 Voice conversation ──
     function _voiceSettingsRender(st) {
       const box = document.getElementById('voiceSettingsStatus');
@@ -11785,6 +12049,7 @@
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Escape' && !document.getElementById('voiceOverlay').hidden) closeVoiceMode();
       else if (e.key === 'Escape' && !document.getElementById('voiceSetupOverlay').hidden) closeVoiceSetup();
+      else if (e.key === 'Escape' && !document.getElementById('vllmSetupOverlay').hidden) closeVllmSetup();
     });
 
     // ── This session's knowledge base (PUT /sessions/{id}/knowledge) ─────
@@ -12595,16 +12860,13 @@
         }
         _setInput('inp_gemma_base_url', s.gemma_base_url?.value ?? '');
         _setInput('inp_qwen_base_url',  s.qwen_base_url?.value  ?? '');
-        // Local inference engine radio + vLLM URL.
+        // Local inference engine: the radio says where the executor runs (its
+        // own vLLM route, or local_engine=vllm); /vllm/status corrects it below.
         const _engine = String(s.local_engine?.value ?? 'ollama').toLowerCase();
-        const _engOllama = document.getElementById('engine_ollama');
-        const _engVllm   = document.getElementById('engine_vllm');
-        if (_engOllama && _engVllm) {
-          _engVllm.checked   = (_engine === 'vllm');
-          _engOllama.checked = (_engine !== 'vllm');
-        }
+        ENGINE.stored = _engine;
+        ENGINE.onVllm = _engine === 'vllm' || !!_parseVllmModels(s.vllm_models?.value)[s.executor_model?.value || ''];
         _setInput('inp_vllm_base_url', s.vllm_base_url?.value ?? 'http://127.0.0.1:8001');
-        renderLocalEngineUI();   // apply Mac gating + show/hide the vLLM URL field
+        renderLocalEngineUI();   // apply Mac gating, then the radio
         _setInput('inp_agent_workspace_dir', s.agent_workspace_dir?.value ?? './agent-workspace');
         _setInput('inp_telegram_bot_token',       s.telegram_bot_token?.value       ?? '');
         _setInput('inp_telegram_default_chat_id', s.telegram_default_chat_id?.value ?? '');
@@ -12671,6 +12933,7 @@
         _setSlider('qwen_temperature',          s.qwen_temperature?.value          ?? 0.2);
         _settingsLoaded = true;
         _vllmModels = _parseVllmModels(s.vllm_models?.value);
+        refreshVllmStatus();
         await refreshOllamaStatus();
         await loadOllamaModels(s.orchestrator_model?.value ?? '', s.executor_model?.value ?? '');
       } catch (e) { toast('Cannot load settings: ' + e.message, true); }
@@ -13699,13 +13962,17 @@
       }
       vllmRadio.disabled = false;
       if (vllmLabel) vllmLabel.style.opacity = '1';
-      if (vllmHint)  vllmHint.textContent = '';
-      if (urlField)  urlField.hidden = !vllmRadio.checked;
+      // The address of a vLLM server is asked for in the vLLM dialog now.
+      if (urlField)  urlField.hidden = true;
+      _engineRadioSync();
     }
+    // The radio follows where the executor really runs, not the click: a
+    // click opens the dialog that moves it (vllm_setup.py).
     function onLocalEngineChange() {
-      const urlField = document.getElementById('vllmUrlField');
-      const vllmRadio = document.getElementById('engine_vllm');
-      if (urlField && vllmRadio) urlField.hidden = !vllmRadio.checked;
+      const wantVllm = !!document.getElementById('engine_vllm')?.checked;
+      _engineRadioSync();
+      if (wantVllm && !ENGINE.onVllm) openVllmSetup();
+      else if (!wantVllm && ENGINE.onVllm) openVllmSetup('off');
     }
 
     async function saveSettings() {
@@ -13750,12 +14017,10 @@
         react_lane_enabled:          document.getElementById('chk_react_lane_enabled')?.checked ? 'true' : 'false',
         gemma_base_url:            document.getElementById('inp_gemma_base_url').value.trim(),
         qwen_base_url:             document.getElementById('inp_qwen_base_url').value.trim(),
-        // Local inference engine. On macOS we always persist "ollama"
-        // regardless of the radio (it should be disabled there anyway) —
-        // the backend hard-gates Darwin too, but sending the right value
-        // keeps the stored config honest.
-        local_engine:              (_isMacPlatform() ? 'ollama'
-                                     : (document.querySelector('input[name="local_engine"]:checked')?.value || 'ollama')),
+        // Local inference engine: the radio is moved by the vLLM dialog
+        // (/vllm/setup, /vllm/off), so Save keeps what is stored. On macOS
+        // always "ollama" — the backend hard-gates Darwin too.
+        local_engine:              (_isMacPlatform() ? 'ollama' : (ENGINE.stored || 'ollama')),
         vllm_base_url:             document.getElementById('inp_vllm_base_url')?.value.trim() || 'http://127.0.0.1:8001',
         escalation_threshold:      document.getElementById('rng_escalation_threshold').value,
         escalation_failure_limit:  document.getElementById('rng_escalation_failure_limit').value,

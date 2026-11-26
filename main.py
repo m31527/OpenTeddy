@@ -4216,6 +4216,229 @@ async def settings_engines() -> dict:
     return await engines.snapshot()
 
 
+# ── Settings → vLLM: the executor on vLLM, or back on Ollama (vllm_setup.py) ──
+# Only the executor moves: it gets a route of its own in vllm_models, so the
+# planner, vision and embeddings stay on Ollama. local_engine is left alone
+# (set to vllm it would send every model without a route to vLLM as well).
+# vllm_managed (JSON) remembers what to give back: the executor model it had,
+# and a route the new one replaced.
+
+def _vllm_state() -> dict:
+    try:
+        d = json.loads(getattr(config, "vllm_managed", "") or "{}")
+    except ValueError:
+        return {}
+    return d if isinstance(d, dict) else {}
+
+
+def _vllm_routes_text(routes: dict) -> str:
+    return ", ".join(f"{m}={u}" for m, u in routes.items())
+
+
+async def _vllm_save(updates: dict) -> None:
+    await settings_store.update_many(updates)
+    await config.reload_from_store(settings_store)
+
+
+async def _vllm_served(url: str) -> list:
+    """The models a vLLM server at `url` serves ([] when it doesn't answer)."""
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as c:
+            r = await c.get(f"{url.rstrip('/')}/v1/models")
+            if r.status_code == 200:
+                return [m.get("id") for m in (r.json().get("data") or []) if m.get("id")]
+    except Exception:  # noqa: BLE001
+        pass
+    return []
+
+
+async def _ollama_loaded_gb(model: str) -> float:
+    """The memory Ollama holds for `model` now; 0 when it isn't loaded."""
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as c:
+            r = await c.get(f"{config.qwen_base_url.rstrip('/')}/api/ps")
+            for m in (r.json().get("models") or []):
+                if model in (m.get("name"), m.get("model")):
+                    return float(m.get("size") or 0) / 1e9
+    except Exception:  # noqa: BLE001
+        pass
+    return 0.0
+
+
+async def _ollama_models() -> set:
+    """The models Ollama has ("name" and "name:latest" both); empty when it
+    doesn't answer."""
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as c:
+            r = await c.get(f"{config.qwen_base_url.rstrip('/')}/api/tags")
+            names = {m.get("name") or m.get("model") for m in (r.json().get("models") or [])}
+    except Exception:  # noqa: BLE001
+        return set()
+    names.discard(None)
+    return names | {n[:-7] for n in names if n.endswith(":latest")}
+
+
+def _executor_on_ollama() -> str:
+    """The executor model when Ollama serves it and nothing else uses it."""
+    import local_engine
+    model = (config.qwen_model or "").strip()
+    if not model or local_engine.is_vllm(model) or model in {config.gemma_model, config.vision_model}:
+        return ""
+    return model
+
+
+async def _vllm_free_executor() -> float:
+    """Before vLLM loads: Ollama lets go of the executor model, whose memory
+    is what vLLM needs. Returns the GB given back."""
+    model = _executor_on_ollama()
+    gb = await _ollama_loaded_gb(model) if model else 0.0
+    if gb <= 0:
+        return 0.0
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as c:
+            await c.post(f"{config.qwen_base_url.rstrip('/')}/api/generate", json={"model": model, "keep_alive": 0})
+    except Exception:  # noqa: BLE001
+        return 0.0
+    return gb
+
+
+async def _vllm_point_executor(model: str, url: str) -> None:
+    """The executor now runs `model` on the vLLM server at `url`."""
+    import local_engine
+    state = _vllm_state()
+    routes = local_engine.vllm_routes()
+    prev = config.qwen_model
+    if state.get("on") and prev == state.get("model"):
+        # Already on vLLM through here: what goes back later stays what it was.
+        prev = state.get("prev_executor") or prev
+        if routes.get(state["model"]) == state.get("url"):
+            routes.pop(state["model"], None)
+            if state.get("replaced_route"):
+                routes[state["model"]] = state["replaced_route"]
+    replaced = routes.get(model, "")
+    routes[model] = url
+    await _vllm_save({
+        "vllm_models": _vllm_routes_text(routes),
+        "executor_model": model,
+        "vllm_managed": json.dumps({"on": True, "model": model, "url": url, "prev_executor": prev,
+                                    "replaced_route": "" if replaced == url else replaced}, ensure_ascii=False),
+    })
+    logger.info("vLLM: executor %s → %s at %s", prev, model, url)
+
+
+@app.get("/vllm/status")
+async def vllm_status() -> dict:
+    """Is the executor on vLLM, and what 下載並啟用 would do on this
+    machine for each model (vllm_setup.CHOICES), and how far it is."""
+    import local_engine
+    import vllm_setup as V
+    state = _vllm_state()
+    executor = config.qwen_model
+    url = local_engine.vllm_routes().get(executor) or (
+        config.vllm_base_url if local_engine.active_engine() == "vllm" else "")
+    on = bool(url)
+    out: dict = {
+        "on": on, "url": url, "managed": on and url == V.URL, "executor": executor,
+        "prev_executor": (state.get("prev_executor") or "") if state.get("on") else "",
+        "last_model": state.get("model") or "", "ready": False,
+    }
+    if on:
+        out["ready"] = executor in await _vllm_served(url)
+    reclaim = 0.0 if on else (await _ollama_loaded_gb(_executor_on_ollama()) if _executor_on_ollama() else 0.0)
+    out["setup"] = {**await V.check(reclaim_gb=reclaim), "job": V.job()}
+    return out
+
+
+class _VllmSetupBody(BaseModel):
+    model: str = "inkling-2-mini"
+
+
+@app.post("/vllm/setup")
+async def vllm_setup_start(body: _VllmSetupBody) -> dict:
+    """下載並啟用: start vLLM with one of vllm_setup.CHOICES on this
+    machine (pulling and downloading what's missing), then run the executor
+    on it. In the background; GET /vllm/status shows how far it is. Only
+    ever started by the person pressing it."""
+    import vllm_setup as V
+    if body.model not in V.CHOICES:
+        raise HTTPException(status_code=400, detail=f"unknown model: {body.model}")
+
+    async def on_ready(choice) -> None:
+        await _vllm_point_executor(choice.id, V.URL)
+    return {"job": V.begin(body.model, on_ready, before=_vllm_free_executor)}
+
+
+class _VllmUseBody(BaseModel):
+    url: str
+
+
+@app.post("/vllm/use")
+async def vllm_use(body: _VllmUseBody) -> dict:
+    """Run the executor on a vLLM server that already runs (another
+    machine, or one started by hand): the model it serves."""
+    import vllm_setup as V
+    url = (body.url or "").strip().rstrip("/")
+    if not re.match(r"^https?://[^\s/]+", url):
+        raise HTTPException(status_code=400, detail="the address must start with http:// or https://")
+    if V.running():
+        return {"ok": False, "error": "vLLM is being set up on this machine; wait until it finishes"}
+    served = await _vllm_served(url)
+    if not served:
+        return {"ok": False, "error": f"no vLLM server answers at {url}"}
+    state = _vllm_state()
+    if url != V.URL and state.get("on") and state.get("url") == V.URL:
+        await V.stop()                    # this machine's own one: its memory back
+    await _vllm_point_executor(served[0], url)
+    return {"ok": True, "model": served[0]}
+
+
+@app.post("/vllm/off")
+async def vllm_off() -> dict:
+    """Back to Ollama: the executor gets the model it had before vLLM, and
+    this machine's vLLM container stops (memory back; image and weights stay,
+    so switching again is a start, not a download). A vLLM server this
+    machine doesn't run for it is only no longer used, never stopped."""
+    import local_engine
+    import vllm_setup as V
+    state = _vllm_state()
+    routes = local_engine.vllm_routes()
+    executor = config.qwen_model
+    updates: dict = {}
+    stopped = False
+    if state.get("on"):
+        if routes.get(state.get("model")) == state.get("url"):
+            routes.pop(state["model"], None)
+            if state.get("replaced_route"):
+                routes[state["model"]] = state["replaced_route"]
+        if state.get("prev_executor") and executor == state.get("model"):
+            updates["executor_model"] = state["prev_executor"]
+        updates["vllm_managed"] = json.dumps({**state, "on": False}, ensure_ascii=False)
+    else:
+        routes.pop(executor, None)        # set by hand: just stop using it
+    routes = {m: u for m, u in routes.items() if u != V.URL}
+    updates["vllm_models"] = _vllm_routes_text(routes)
+    if local_engine.active_engine() == "vllm":
+        updates["local_engine"] = "ollama"
+    # The executor must be a model Ollama has. A vLLM set up by hand left no
+    # record of the one before; then the planner's model stands in, and
+    # Settings says so.
+    after = updates.get("executor_model", executor)
+    fallback = False
+    if after not in routes:
+        have = await _ollama_models()
+        if have and after not in have and config.gemma_model in have:
+            updates["executor_model"], fallback = config.gemma_model, True
+    if state.get("url") == V.URL or V.running():
+        stopped = await V.stop()
+    else:
+        status, _ = await V.container()
+        if status == "running" and not any(u == V.URL for u in routes.values()):
+            stopped = await V.stop()
+    await _vllm_save(updates)
+    logger.info("vLLM off: executor %s → %s (container stopped: %s)", executor, config.qwen_model, stopped)
+    return {"ok": True, "stopped": stopped, "executor": config.qwen_model, "fallback": fallback}
+
+
 # ── Scheduled tasks (cron-driven recurring runs) ──────────────────────────────
 # See scheduler.py for the runtime; these are just the thin HTTP wrappers
 # around the public surface. Request / response shapes are deliberately

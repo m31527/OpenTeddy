@@ -300,6 +300,10 @@ class Config:
     # rest stay where they are. One vLLM server serves one model, so this
     # is how a planner and an executor split across engines or servers.
     vllm_models: str = field(default_factory=lambda: os.getenv("VLLM_MODELS", ""))
+    # Settings → vLLM (vllm_setup.py) keeps here, as JSON, the model this
+    # machine's openteddy-vllm-executor serves, whether the executor is on it, and the
+    # executor model to give back when Ollama is chosen again.
+    vllm_managed: str = ""
 
     # Knowledge base (knowledge.py): off until the owner turns it on. The
     # embedding model (an Ollama one, e.g. bge-m3) adds meaning search;
@@ -874,6 +878,8 @@ class Config:
             self.vllm_base_url = settings["vllm_base_url"]
         if "vllm_models" in settings:     # empty is a value: everything back on Ollama
             self.vllm_models = (settings["vllm_models"] or "").strip()
+        if "vllm_managed" in settings:
+            self.vllm_managed = (settings["vllm_managed"] or "").strip()
         if "knowledge_enabled" in settings:
             self.knowledge_enabled = str(settings["knowledge_enabled"]).strip().lower() in {"1", "true", "yes", "on"}
         if "knowledge_embed_model" in settings:
